@@ -346,3 +346,22 @@ In alto p, aggiungere DART mi dà un O(p) in ogni ciclo di MCMC. Asintoticamente
 ..........
 
 Pensare a come fare a partizionare i dati sia lungo p che lungo n. Pratola (2014) partiziona lungo n, dice che hanno un software online ma non lo trovo più, forse si sono accorti che in realtà era inutile?
+
+2024-02-16
+==========
+
+Una volta che ho qualcosa che gira, mettere su dei benchmark con un po' di scaffolding. Posso riciclare quelli che ho usato per le time series.
+
+2024-02-18
+==========
+
+Voglio scrivere il codice. Piano:
+- copiare la struttura di bartz
+    - togliere tutta la roba specifica
+    - commentare le parti per pypi
+    - cambiare i nomi nelle configurazioni
+- caricare la repo su github
+- scrivere il codice di base
+    - struttura iniziale
+        - __init__.py vuoto
+        - file bartz.py con tutto dentro

@@ -1,1 +1,7 @@
+# Editor
 *.sublime-workspace
+*.sublime-project
+
+# Python
+__pycache__
+pyenv
