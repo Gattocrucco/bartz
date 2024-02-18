@@ -1,0 +1,156 @@
+# bartz/workflows/tests.yml
+#
+# Copyright (c) 2024, Giacomo Petrillo
+#
+# This file is part of bartz.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+name: tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  
+  tests:
+
+    if: github.repository == 'Gattocrucco/bartz'
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+            experimental: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[test-tools]'
+          python -m pip install '.[test-deps]'
+      - name: Run unit tests
+        run: make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
+      - name: Save coverage information
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage
+          path: .coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
+
+  docs:
+
+    runs-on: ubuntu-latest
+    needs: tests
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install package and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[docs]'
+      - name: Run examples
+        run: make COVERAGE_SUFFIX=-macos-latest-py3.11 examples
+      - name: Run documentation code
+        run: make COVERAGE_SUFFIX=-macos-latest-py3.11 docscode
+      - name: Generate documentation
+        run: make docs
+      - name: Copy documentation to github pages
+        if: github.event_name == 'push'
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
+        with:
+          branch: gh-pages
+          folder: docs/_build/html
+          target-folder: docs
+      - name: Get version number
+        run: echo bartz_version=`python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` >> $GITHUB_ENV
+      - name: Copy documentation to github pages (versioned directory)
+        if: github.event_name == 'push'
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
+        with:
+          branch: gh-pages
+          folder: docs/_build/html
+          target-folder: docs-${{ env.bartz_version }}
+      - name: Save coverage from examples
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage
+          path: .coverage.examples-macos-latest-py3.11
+      - name: Save coverage from tutorials
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage
+          path: .coverage.docs-macos-latest-py3.11
+
+  postcov:
+
+    runs-on: ubuntu-latest
+    needs: [tests, docs]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install coverage
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install coverage
+      - name: Get coverage files
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage
+      - name: List files
+        run: |
+          pwd
+          ls -a
+          ls src/bartz
+      - name: Print coverage debug
+        run: |
+          coverage debug config
+          coverage debug sys
+          coverage debug data
+      - name: Generate coverage report
+        run: make covreport
+      - name: Remove gitignore file
+        run: rm htmlcov/.gitignore
+      - name: Copy report to github pages
+        if: github.event_name == 'push'
+        uses: JamesIves/github-pages-deploy-action@v4.4.1
+        with:
+          branch: gh-pages
+          folder: htmlcov
+          target-folder: htmlcov
