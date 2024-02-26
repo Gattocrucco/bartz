@@ -36,7 +36,7 @@ def make_tree(depth, dtype):
 def tree_depth(tree):
     return int(round(math.log2(tree.shape[-1])))
 
-def evaluate_tree(*, X, depth, leaf_trees, var_trees, split_trees, out_dtype):
+def evaluate_tree(X, depth, leaf_trees, var_trees, split_trees, out_dtype):
 
     is_forest = leaf_trees.ndim == 2
     
@@ -77,7 +77,7 @@ def evaluate_tree(*, X, depth, leaf_trees, var_trees, split_trees, out_dtype):
         carry = leaf_found, out, node_index
         return carry, _
 
-    (_, out, _), _ = lax.scan(loop, init, None, depth)
+    (_, out, _), _ = lax.scan(loop, carry, None, depth)
     return out
 
 def minimal_unsigned_dtype(max_value):
@@ -128,29 +128,29 @@ def mcmc_step(bart, key):
     return bart
 
 def mcmc_sample_trees(bart, key):
-    init = 0, bart, key
+    carry = 0, bart, key
     def loop(carry, _):
         i, bart, key = carry
         key, subkey = random.split(key)
         bart = mcmc_sample_tree(bart, subkey, i)
         return (i + 1, bart, key), None
-    (_, bart, _), _ = lax.scan(loop, init, None, len(bart['leaf_trees']))
+    (_, bart, _), _ = lax.scan(loop, carry, None, len(bart['leaf_trees']))
     return bart
 
 @functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
-def evaluate_tree_all_examples(*, X, leaf_tree, var_tree, split_tree, out_dtype):
+def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
     depth = tree_depth(leaf_trees)
-    return evaluate_tree(X=X, depth=depth, leaf_trees=leaf_tree, var_trees=var_tree, split_trees=split_tree, out_dtype=out_dtype)
+    return evaluate_tree(X, depth, leaf_tree, var_tree, split_tree, out_dtype)
 
 def mcmc_sample_tree(bart, key, i_tree):
     bart = bart.copy()
     
-    y_tree = evaluate_tree_all_examples(
-        X=bart['X'],
-        leaf_tree=bart['leaf_trees'][i_tree],
-        var_tree=bart['var_trees'][i_tree],
-        split_tree=bart['split_trees'][i_tree],
-        out_dtype=bart['y_trees'].dtype,
+    y_tree = evaluate_tree_vmap_x(
+        bart['X'],
+        bart['leaf_trees'][i_tree],
+        bart['var_trees'][i_tree],
+        bart['split_trees'][i_tree],
+        bart['y_trees'].dtype,
     )
     bart['y_trees'] -= y_tree
     
@@ -159,16 +159,76 @@ def mcmc_sample_tree(bart, key, i_tree):
     key, subkey = random.split(key)
     bart = mcmc_sample_tree_leaves(bart, subkey, i_tree)
     
-    y_tree = evaluate_tree_all_examples(
-        X=bart['X'],
-        leaf_tree=bart['leaf_trees'][i_tree],
-        var_tree=bart['var_trees'][i_tree],
-        split_tree=bart['split_trees'][i_tree],
-        out_dtype=bart['y_trees'].dtype,
+    y_tree = evaluate_tree_vmap_x(
+        bart['X'],
+        bart['leaf_trees'][i_tree],
+        bart['var_trees'][i_tree],
+        bart['split_trees'][i_tree],
+        bart['y_trees'].dtype,
     )
     bart['y_trees'] += y_tree
     
     return bart
+
+def mcmc_sample_tree_leaves(bart, key, i_tree):
+    bart = bart.copy()
+
+    resid = bart['y'] - bart['y_trees']
+    resid_tree, count_tree = agg_resid(
+        bart['X'],
+        bart['var_trees'][i_tree],
+        bart['split_trees'][i_tree],
+        resid,
+    )
+
+    mean_lk = resid_tree / count_tree
+    prec_lk = count_tree / bart['sigma2']
+    prec_prior = len(bart['leaf_trees'])
+    var_post = 1 / (prec_lk + prec_prior)
+    mean_post = mean_lk * prec_lk * var_post
+
+    key, subkey = random.split(key)
+    z = random.normal(subkey, mean_post.size, mean_post.dtype)
+    leaf_tree = mean_post + z * jnp.sqrt(var_post)
+    leaf_tree = leaf_trees.at[0].set(0)
+    bart['leaf_trees'] = bart['leaf_trees'].at(i_tree).set(leaf_tree)
+
+    return bart
+
+def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d', resid: 'array n'):
+
+    depth = tree_depth(var_trees)
+    carry = (
+        jnp.zeros(resid.size, bool),
+        jnp.ones(resid.size, minimal_unsigned_dtype(var_tree.size - 1))
+        make_tree(depth, resid.dtype),
+        make_tree(depth, minimal_unsigned_dtype(resid.size - 1)),
+    )
+    unit_index = jnp.arange(resid.size, minimal_unsigned_dtype(resid.size - 1))
+
+    def loop(carry, _)
+        leaf_found, node_index, resid_tree, count_tree = carry
+
+        is_leaf = split_tree[node_index] == 0
+        leaf_count = is_leaf & ~leaf_found
+        leaf_resid = jnp.where(leaf_count, resid, 0)
+        resid_tree = resid_tree.at[node_index].add(leaf_resid)
+        count_tree = count_tree.at[node_index].add(leaf_count)
+        leaf_found |= is_leaf
+        
+        split = split_tree[node_index]
+        var = var_tree[node_index]
+        x = X[var, unit_index]
+        
+        node_index <<= 1
+        node_index += x >= split
+        node_index = jnp.where(leaf_found, 0, node_index)
+
+        carry = leaf_found, node_index, resid_tree, count_tree
+        return carry, None
+
+    (_, _, resid_tree, count_tree), _ = lax.scan(loop, carry, None, depth)
+    return resid_tree, count_tree
 
 def mcmc_sample_sigma(bart, key):
     bart = bart.copy()
