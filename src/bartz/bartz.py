@@ -137,8 +137,38 @@ def mcmc_sample_trees(bart, key):
     (_, bart, _), _ = lax.scan(loop, init, None, len(bart['leaf_trees']))
     return bart
 
+@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
+def evaluate_tree_all_examples(*, X, leaf_tree, var_tree, split_tree, out_dtype):
+    depth = tree_depth(leaf_trees)
+    return evaluate_tree(X=X, depth=depth, leaf_trees=leaf_tree, var_trees=var_tree, split_trees=split_tree, out_dtype=out_dtype)
+
 def mcmc_sample_tree(bart, key, i_tree):
-    pass
+    bart = bart.copy()
+    
+    y_tree = evaluate_tree_all_examples(
+        X=bart['X'],
+        leaf_tree=bart['leaf_trees'][i_tree],
+        var_tree=bart['var_trees'][i_tree],
+        split_tree=bart['split_trees'][i_tree],
+        out_dtype=bart['y_trees'].dtype,
+    )
+    bart['y_trees'] -= y_tree
+    
+    key, subkey = random.split(key)
+    bart = mcmc_sample_tree_structure(bart, subkey, i_tree)
+    key, subkey = random.split(key)
+    bart = mcmc_sample_tree_leaves(bart, subkey, i_tree)
+    
+    y_tree = evaluate_tree_all_examples(
+        X=bart['X'],
+        leaf_tree=bart['leaf_trees'][i_tree],
+        var_tree=bart['var_trees'][i_tree],
+        split_tree=bart['split_trees'][i_tree],
+        out_dtype=bart['y_trees'].dtype,
+    )
+    bart['y_trees'] += y_tree
+    
+    return bart
 
 def mcmc_sample_sigma(bart, key):
     bart = bart.copy()
