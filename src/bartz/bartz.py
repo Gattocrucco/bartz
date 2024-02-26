@@ -34,31 +34,40 @@ def make_tree(depth, dtype):
     return jnp.zeros(2 ** depth, dtype)
 
 def tree_depth(tree):
-    return int(math.log2(tree.shape[-1]))
+    return int(round(math.log2(tree.shape[-1])))
 
-@functools.partial(jnp.vectorize, excluded=(1, 5), signature='(p),(n,t),(n,t),(n,t)->()')
-def evaluate_forest(*, X, depth, leaf_trees, var_trees, split_trees, out_dtype):
+def evaluate_tree(*, X, depth, leaf_trees, var_trees, split_trees, out_dtype):
+
+    is_forest = leaf_trees.ndim == 2
     
-    n, _ = leaf_trees.shape
-    carry = (
-        jnp.zeros(n, bool),
-        jnp.zeros((), out_dtype),
-        jnp.ones(n, int),
-    )
+    if is_forest:
+        n, _ = leaf_trees.shape
+        forest_shape = n,
+        tree_index = jnp.arange(n),
+    else:
+        forest_shape = ()
+        tree_index = ()
 
-    tree_index = jnp.arange(n)
+    carry = (
+        jnp.zeros(forest_shape, bool),
+        jnp.zeros((), out_dtype),
+        jnp.ones(forest_shape, int),
+    )
 
     def loop(carry, _)
         leaf_found, out, node_index = carry
 
-        is_leaf = split_trees[tree_index, node_index] == 0
-        leaf_value = leaf_trees[tree_index, node_index]
-        leaf_sum = jnp.dot(is_leaf, leaf_value) # TODO how should I set preferred_element_dtype?
+        is_leaf = split_trees[tree_index + (node_index,)] == 0
+        leaf_value = leaf_trees[tree_index + (node_index,)]
+        if is_forest:
+            leaf_sum = jnp.dot(is_leaf, leaf_value) # TODO how should I set preferred_element_dtype?
+        else:
+            leaf_sum = jnp.where(is_leaf, leaf_value, 0)
         out += leaf_sum
         leaf_found |= is_leaf
         
-        split = split_trees[tree_index, node_index]
-        var = var_trees[tree_index, node_index]
+        split = split_trees[tree_index + (node_index,)]
+        var = var_trees[tree_index + (node_index,)]
         x = X[var]
         
         node_index <<= 1
@@ -68,7 +77,7 @@ def evaluate_forest(*, X, depth, leaf_trees, var_trees, split_trees, out_dtype):
         carry = leaf_found, out, node_index
         return carry, _
 
-    leaf_found, out, node_index = lax.scan(loop, init, None, depth)
+    (_, out, _), _ = lax.scan(loop, init, None, depth)
     return out
 
 def minimal_unsigned_dtype(max_value):
@@ -80,8 +89,8 @@ def minimal_unsigned_dtype(max_value):
         return jnp.uint32
     return jnp.uint64
 
-def make_bart_mcmc(*,
-    X: 'Array (n,p) int',
+def make_bart(*,
+    X: 'Array (p, n) int',
     y: 'Array (n,) float',
     max_split: 'Array (p,) int',
     num_trees: int,
@@ -97,55 +106,50 @@ def make_bart_mcmc(*,
         return make_tree(max_depth, dtype)
 
     return dict(
-        state=dict(
-            leaf_trees=make_forest(small_float_dtype),
-            var_trees=make_forest(minimal_unsigned_dtype(X.shape[1] - 1)),
-            split_trees=make_forest(max_split.dtype),
-            sigma2=jnp.ones((), large_float_dtype),
-            p_accept_grow=jnp.zeros((), long_float_dtype),
-            p_accept_prune=jnp.zeros((), long_float_dtype),
-        ),
-        conf=dict(
-            sigma2_alpha=jnp.asarray(sigma2_alpha, large_float_dtype),
-            sigma2_beta=jnp.asarray(sigma2_beta, large_float_dtype),
-            max_split=max_split,
-            y=jnp.asarray(y, small_float_dtype),
-            X=X,
-        ),
+        leaf_trees=make_forest(small_float_dtype),
+        var_trees=make_forest(minimal_unsigned_dtype(X.shape[1] - 1)),
+        split_trees=make_forest(max_split.dtype),
+        y_trees=jnp.zeros(y.size, large_float_dtype), # large float to avoid roundoff
+        sigma2=jnp.ones((), large_float_dtype),
+        p_accept_grow=jnp.zeros((), large_float_dtype),
+        p_accept_prune=jnp.zeros((), large_float_dtype),
+        sigma2_alpha=jnp.asarray(sigma2_alpha, large_float_dtype),
+        sigma2_beta=jnp.asarray(sigma2_beta, large_float_dtype),
+        max_split=max_split,
+        y=jnp.asarray(y, small_float_dtype),
+        X=X,
     )
 
 def mcmc_step(bart, key):
-    bart = mcmc_sample_forest(bart, key)
-    bart = mcmc_sample_sigma(bart, key)
+    key, subkey = random.split(key)
+    bart = mcmc_sample_trees(bart, subkey)
+    key, subkey = random.split(key)
+    bart = mcmc_sample_sigma(bart, subkey)
     return bart
 
-def recursive_dict_copy(d):
-    if isinstance(d, dict):
-        return {k: recursive_dict_copy(v) for k, v in d.items()}
-    return d
+def mcmc_sample_trees(bart, key):
+    init = 0, bart, key
+    def loop(carry, _):
+        i, bart, key = carry
+        key, subkey = random.split(key)
+        bart = mcmc_sample_tree(bart, subkey, i)
+        return (i + 1, bart, key), None
+    (_, bart, _), _ = lax.scan(loop, init, None, len(bart['leaf_trees']))
+    return bart
+
+def mcmc_sample_tree(bart, key, i_tree):
+    pass
 
 def mcmc_sample_sigma(bart, key):
-    bart = recursive_dict_copy(bart)
+    bart = bart.copy()
 
-    conf = bart['conf']
-    state = bart['state']
-    
-    y = conf['y']
-    n = y.size
-    alpha = conf['sigma2_alpha'] + n / 2
-    mean = evaluate_forest(
-        X=conf['X'],
-        depth=tree_depth(state['leaf_trees']),
-        leaf_trees=state['leaf_trees'],
-        var_trees=state['var_trees'],
-        split_trees=state['split_trees'],
-        out_dtype=y.dtype,
-    )
-    resid = y - mean
-    norm = jnp.dot(resid, resid, preferred_element_type=conf['sigma2_beta'].dtype)
-    beta = conf['sigma2_beta'] + norm / 2
+    alpha = bart['sigma2_alpha'] + bart['y'].size / 2
+    resid = bart['y'] - bart['y_trees']
+    norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
+    beta = bart['sigma2_beta'] + norm / 2
 
-    sample = random.gamma(key, alpha)
-    state['sigma2'] = beta / sample
+    key, subkey = random.split(key)
+    sample = random.gamma(subkey, alpha)
+    bart['sigma2'] = beta / sample
 
     return bart
