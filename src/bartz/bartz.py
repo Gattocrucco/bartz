@@ -94,12 +94,15 @@ def make_bart(*,
     y: 'Array (n,) float',
     max_split: 'Array (p,) int',
     num_trees: int,
-    max_depth: int,
+    p_nonterminal: 'Array (d - 1,) float',
     sigma2_alpha: float,
     sigma2_beta: float,
     small_float_dtype: 'dtype',
     large_float_dtype: 'dtype',
     ):
+
+    p_nonterminal = jnp.asarray(p_nonterminal, large_float_dtype)
+    max_depth = p_nonterminal.size + 1
 
     @functools.partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
     def make_forest(dtype):
@@ -113,6 +116,7 @@ def make_bart(*,
         sigma2=jnp.ones((), large_float_dtype),
         p_accept_grow=jnp.zeros((), large_float_dtype),
         p_accept_prune=jnp.zeros((), large_float_dtype),
+        p_nonterminal=p_nonterminal,
         sigma2_alpha=jnp.asarray(sigma2_alpha, large_float_dtype),
         sigma2_beta=jnp.asarray(sigma2_beta, large_float_dtype),
         max_split=max_split,
