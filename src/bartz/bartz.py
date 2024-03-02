@@ -184,12 +184,12 @@ def mcmc_sample_tree(bart, key, i_tree):
 def mcmc_sample_tree_structure(bart, key, i_tree):
     bart = bart.copy()
     
-    resid = bart['y'] - bart['y_trees']
     var_tree = bart['var_trees'][i_tree]
     split_tree = bart['split_trees'][i_tree]
+    resid = bart['y'] - bart['y_trees']
     
     key, subkey = random.split(key)
-    grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(
+    args = [
         bart['X'],
         var_tree,
         split_tree,
@@ -198,19 +198,11 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['sigma2'],
         resid,
         subkey,
-    )
+    ]
+    grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(*args)
 
-    key, subkey = random.split(key)
-    prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(
-        bart['X'],
-        var_tree,
-        split_tree,
-        bart['max_split'],
-        bart['p_nonterminal'],
-        bart['sigma2'],
-        resid,
-        subkey,
-    )
+    key, args[-1] = random.split(key)
+    prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(*args)
 
     key, subkey = random.split(key)
     u0, u1 = random.uniform(subkey, 2)
@@ -236,6 +228,24 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     bart['prune_acc_count'] += do_prune
 
     return bart
+
+def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, key):
+    is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
+    key, subkey = random.split(key)
+    leaf_to_grow = randint_masked(subkey, is_growable)
+    allowed = leaf_to_grow < is_growable.size
+
+def is_actual_leaf(split_tree):
+    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
+    parent_index = index >> 1
+    parent_nonleaf = split_tree[parent_index].astype(bool)
+    parent_nonleaf = parent_nonleaf.at[1].set(True)
+    return (split_tree == 0) & parent_nonleaf
+
+def randint_masked(key, mask):
+    ecdf = jnp.cumsum(mask)
+    u = random.randint(key, (), 0, ecdf[-1])
+    return jnp.searchsorted(ecdf, u, 'right')
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
