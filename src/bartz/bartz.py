@@ -114,8 +114,10 @@ def make_bart(*,
         split_trees=make_forest(max_split.dtype),
         y_trees=jnp.zeros(y.size, large_float_dtype), # large float to avoid roundoff
         sigma2=jnp.ones((), large_float_dtype),
-        p_accept_grow=jnp.zeros((), large_float_dtype),
-        p_accept_prune=jnp.zeros((), large_float_dtype),
+        grow_prop_count=jnp.zeros((), int),
+        grow_acc_count=jnp.zeros((), int),
+        prune_prop_count=jnp.zeros((), int),
+        prune_acc_count=jnp.zeros((), int),
         p_nonterminal=p_nonterminal,
         sigma2_alpha=jnp.asarray(sigma2_alpha, large_float_dtype),
         sigma2_beta=jnp.asarray(sigma2_beta, large_float_dtype),
@@ -132,12 +134,17 @@ def mcmc_step(bart, key):
     return bart
 
 def mcmc_sample_trees(bart, key):
+    bart = bart.copy()
+    for count_var in ['grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count']:
+        bart[count_var] = bart[count_var].at[:].set(0)
+    
     carry = 0, bart, key
     def loop(carry, _):
         i, bart, key = carry
         key, subkey = random.split(key)
         bart = mcmc_sample_tree(bart, subkey, i)
         return (i + 1, bart, key), None
+    
     (_, bart, _), _ = lax.scan(loop, carry, None, len(bart['leaf_trees']))
     return bart
 
@@ -172,6 +179,62 @@ def mcmc_sample_tree(bart, key, i_tree):
     )
     bart['y_trees'] += y_tree
     
+    return bart
+
+def mcmc_sample_tree_structure(bart, key, i_tree):
+    bart = bart.copy()
+    
+    resid = bart['y'] - bart['y_trees']
+    var_tree = bart['var_trees'][i_tree]
+    split_tree = bart['split_trees'][i_tree]
+    
+    key, subkey = random.split(key)
+    grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(
+        bart['X'],
+        var_tree,
+        split_tree,
+        bart['max_split'],
+        bart['p_nonterminal'],
+        bart['sigma2'],
+        resid,
+        subkey,
+    )
+
+    key, subkey = random.split(key)
+    prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(
+        bart['X'],
+        var_tree,
+        split_tree,
+        bart['max_split'],
+        bart['p_nonterminal'],
+        bart['sigma2'],
+        resid,
+        subkey,
+    )
+
+    key, subkey = random.split(key)
+    u0, u1 = random.uniform(subkey, 2)
+
+    p_grow = jnp.where(grow_allowed & prune_allowed, 0.5, grow_allowed)
+    try_grow = u0 <= p_grow
+    try_prune = prune_allowed & ~do_grow
+
+    do_grow = try_grow & (u1 <= grow_ratio)
+    do_prune = try_prune & (u1 <= prune_ratio)
+
+    var_tree = jnp.where(do_grow, grow_var_tree, var_tree)
+    split_tree = jnp.where(do_grow, grow_split_tree, split_tree)
+    var_tree = jnp.where(do_prune, prune_var_tree, var_tree)
+    split_tree = jnp.where(do_prune, prune_split_tree, split_tree)
+
+    bart['var_trees'] = bart['var_trees'].at[i_tree].set(var_tree)
+    bart['split_trees'] = bart['split_trees'].at[i_tree].set(split_tree)
+
+    bart['grow_prop_count'] += try_grow
+    bart['grow_acc_count'] += do_grow
+    bart['prune_prop_count'] += try_prune
+    bart['prune_acc_count'] += do_prune
+
     return bart
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
