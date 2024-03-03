@@ -127,10 +127,9 @@ def make_bart(*,
     )
 
 def mcmc_step(bart, key):
-    key, subkey = random.split(key)
-    bart = mcmc_sample_trees(bart, subkey)
-    key, subkey = random.split(key)
-    bart = mcmc_sample_sigma(bart, subkey)
+    key1, key2 = random.split(key, 2)
+    bart = mcmc_sample_trees(bart, key1)
+    bart = mcmc_sample_sigma(bart, key2)
     return bart
 
 def mcmc_sample_trees(bart, key):
@@ -148,11 +147,6 @@ def mcmc_sample_trees(bart, key):
     (_, bart, _), _ = lax.scan(loop, carry, None, len(bart['leaf_trees']))
     return bart
 
-@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
-def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
-    depth = tree_depth(leaf_trees)
-    return evaluate_tree(X, depth, leaf_tree, var_tree, split_tree, out_dtype)
-
 def mcmc_sample_tree(bart, key, i_tree):
     bart = bart.copy()
     
@@ -165,10 +159,9 @@ def mcmc_sample_tree(bart, key, i_tree):
     )
     bart['y_trees'] -= y_tree
     
-    key, subkey = random.split(key)
-    bart = mcmc_sample_tree_structure(bart, subkey, i_tree)
-    key, subkey = random.split(key)
-    bart = mcmc_sample_tree_leaves(bart, subkey, i_tree)
+    key1, key2 = random.split(key, 2)
+    bart = mcmc_sample_tree_structure(bart, key1, i_tree)
+    bart = mcmc_sample_tree_leaves(bart, key2, i_tree)
     
     y_tree = evaluate_tree_vmap_x(
         bart['X'],
@@ -180,6 +173,11 @@ def mcmc_sample_tree(bart, key, i_tree):
     bart['y_trees'] += y_tree
     
     return bart
+
+@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
+def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
+    depth = tree_depth(leaf_trees)
+    return evaluate_tree(X, depth, leaf_tree, var_tree, split_tree, out_dtype)
 
 def mcmc_sample_tree_structure(bart, key, i_tree):
     bart = bart.copy()
@@ -230,18 +228,25 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
 
 def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, key):
     key1, key2, key3 = random.split(key, 3)
-    is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
-    leaf_to_grow = randint_masked(key1, is_growable)
-    var = choose_variable(var_tree, max_split, leaf_to_grow, key2)
+    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, key1)
+    var, num_available_var = choose_variable(var_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var)
-    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
+    split, num_available_split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
     split_tree = split_tree.at[leaf_to_grow].set(split)
 
-    num_growable = jnp.count_nonzero(is_growable)
     allowed = num_growable > 0
     can_grow_again = num_growable + jnp.where(leaf_to_grow < split_tree.size // 4, 1, -1) > 0
 
-    # continue here <-----------
+    trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
+    likelihood_ratio = compute_likelihood_ratio(...) # continue here <-------
+
+def choose_leaf(split_tree, key):
+    is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
+    leaf_to_grow = randint_masked(key, is_growable)
+    num_growable = jnp.count_nonzero(is_growable)
+    is_parent = is_leaf_parent(split_tree[:split_tree.size // 2].at[leaf_to_grow].set(1))
+    num_prunable = jnp.count_nonzero(is_parent)
+    return leaf_to_grow, num_growable, num_prunable
 
 def is_actual_leaf(split_tree):
     index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
@@ -254,6 +259,13 @@ def randint_masked(key, mask):
     ecdf = jnp.cumsum(mask)
     u = random.randint(key, (), 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right')
+
+def is_leaf_parent(split_tree):
+    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * (split_tree.size - 1)))
+    child_index = index << 1 # left child
+    child_leaf = split_tree.at[child_index].get(mode='fill', fill_value=0) == 0
+    return split_tree.astype(bool) & child_leaf
+        # the 0-th item has split == 0, so it's not counted
 
 def choose_variable(var_tree, max_split, leaf_index, key):
     var_to_ignore = fully_used_variables(var_tree, max_split, leaf_index)
@@ -292,12 +304,12 @@ def randint_exclude(key, sup, exclude):
     def loop(u, i):
         return jnp.where(i <= u, u + 1, u), None
     u, _ = lax.scan(loop, u, exclude)
-    return u
+    return u, actual_sup
 
 def choose_split(var_tree, split_tree, max_split, leaf_index, key):
+    nparents = tree_depth(var_tree) - 1
     var = var_tree[leaf_index]
     carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
-    nparents = tree_depth(var_tree) - 1
     def loop(carry, _):
         l, r, index = carry
         right_child = (index & 1).astype(bool)
@@ -308,7 +320,17 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
         r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
         return (l, r, index), None
     (l, r, _), _ = lax.scan(loop, carry, None, nparents)
-    return random.uniform(key, (), l, r)
+    
+    split = random.uniform(key, (), l, r)
+    num_available_split = r - l
+    return split, num_available_split
+
+def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, tree_size):
+    p_grow = jnp.where(num_growable > 1, 0.5, 1)
+        # if num_growable == 1, then the starting tree is a root, and can not be pruned
+    p_prune = jnp.where(num_prunable < tree_size // 4, 0.5, 1)
+        # if num_prunable == 2^(depth - 2), then all leaf parents are at level depth - 2, which means that all leaves are at level depth - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
+    return p_grow / p_prune * num_growable / num_prunable * num_available_var * num_available_split
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
