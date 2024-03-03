@@ -188,7 +188,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     split_tree = bart['split_trees'][i_tree]
     resid = bart['y'] - bart['y_trees']
     
-    key, subkey = random.split(key)
+    key1, key2, key3 = random.split(key, 3)
     args = [
         bart['X'],
         var_tree,
@@ -197,15 +197,14 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['p_nonterminal'],
         bart['sigma2'],
         resid,
-        subkey,
+        key1,
     ]
     grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(*args)
 
-    key, args[-1] = random.split(key)
+    args[-1] = key2
     prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(*args)
 
-    key, subkey = random.split(key)
-    u0, u1 = random.uniform(subkey, 2)
+    u0, u1 = random.uniform(key3, 2)
 
     p_grow = jnp.where(grow_allowed & prune_allowed, 0.5, grow_allowed)
     try_grow = u0 <= p_grow
@@ -230,10 +229,19 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     return bart
 
 def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, key):
+    key1, key2, key3 = random.split(key, 3)
     is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
-    key, subkey = random.split(key)
-    leaf_to_grow = randint_masked(subkey, is_growable)
-    allowed = leaf_to_grow < is_growable.size
+    leaf_to_grow = randint_masked(key1, is_growable)
+    var = choose_variable(var_tree, max_split, leaf_to_grow, key2)
+    var_tree = var_tree.at[leaf_to_grow].set(var)
+    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
+    split_tree = split_tree.at[leaf_to_grow].set(split)
+
+    num_growable = jnp.count_nonzero(is_growable)
+    allowed = num_growable > 0
+    can_grow_again = num_growable + jnp.where(leaf_to_grow < split_tree.size // 4, 1, -1) > 0
+
+    # continue here <-----------
 
 def is_actual_leaf(split_tree):
     index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
@@ -246,6 +254,61 @@ def randint_masked(key, mask):
     ecdf = jnp.cumsum(mask)
     u = random.randint(key, (), 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right')
+
+def choose_variable(var_tree, max_split, leaf_index, key):
+    var_to_ignore = fully_used_variables(var_tree, max_split, leaf_index)
+    return randint_exclude(key, max_split.size, var_to_ignore)
+
+def fully_used_variables(var_tree, max_split, leaf_index):
+    novar_fill = max_split.size
+    nparents = tree_depth(var_tree) - 1
+    var = jnp.full(nparents, novar_fill, minimal_unsigned_dtype(novar_fill))
+    count = jnp.zeros(nparents, minimal_unsigned_dtype(nparents))
+
+    carry = leaf_index, var, count
+    def loop(carry, _):
+        index, var, count = carry
+        index >>= 1
+        parent_var = var_tree[index]
+        notfound = var.size
+        var_index, = jnp.nonzero(var == parent_var, size=1, fill_value=notfound)
+        vacant_index, = jnp.nonzero(var == novar_fill, size=1, fill_value=notfound)
+        var_index = jnp.where(var_index == notfound, vacant_index, var_index)
+        var = var.at[var_index].set(parent_var, mode='drop')
+        count = count.at[var_index].add(index.astype(bool), mode='drop')
+        return (index, var, count), None
+    (_, var, count), _ = lax.scan(loop, carry, None, nparents)
+
+    max_count = max_split.at[var].get(mode='fill', fill_value=1)
+    still_usable = count < max_count
+    var = jnp.where(still_usable, novar_fill, var)
+
+    return var
+
+def randint_exclude(key, sup, exclude):
+    exclude = jnp.sort(exclude)
+    actual_sup = sup - jnp.count_nonzero(exclude < sup)
+    u = random.randint(key, (), 0, actual_sup)
+    def loop(u, i):
+        return jnp.where(i <= u, u + 1, u), None
+    u, _ = lax.scan(loop, u, exclude)
+    return u
+
+def choose_split(var_tree, split_tree, max_split, leaf_index, key):
+    var = var_tree[leaf_index]
+    carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
+    nparents = tree_depth(var_tree) - 1
+    def loop(carry, _):
+        l, r, index = carry
+        right_child = (index & 1).astype(bool)
+        index >>= 1
+        split = split_tree[index]
+        cond = (var_tree[index] == var) & index.astype(bool)
+        l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
+        r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
+        return (l, r, index), None
+    (l, r, _), _ = lax.scan(loop, carry, None, nparents)
+    return random.uniform(key, (), l, r)
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
