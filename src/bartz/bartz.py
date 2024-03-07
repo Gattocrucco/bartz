@@ -195,6 +195,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['p_nonterminal'],
         bart['sigma2'],
         resid,
+        len(bart['var_trees']),
         key1,
     ]
     grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(*args)
@@ -226,19 +227,23 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
 
     return bart
 
-def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, key):
+def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, key):
     key1, key2, key3 = random.split(key, 3)
+    
     leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, key1)
+    
     var, num_available_var = choose_variable(var_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var)
+    
     split, num_available_split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
     split_tree = split_tree.at[leaf_to_grow].set(split)
 
     allowed = num_growable > 0
-    can_grow_again = num_growable + jnp.where(leaf_to_grow < split_tree.size // 4, 1, -1) > 0
+    # can_grow_again = num_growable + jnp.where(leaf_to_grow < split_tree.size // 4, 1, -1) > 0
 
     trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
-    likelihood_ratio = compute_likelihood_ratio(...) # continue here <-------
+    log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
+    tree_ratio = compute_tree_ratio() # <----- continue here
 
 def choose_leaf(split_tree, key):
     is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
@@ -332,6 +337,41 @@ def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_avail
         # if num_prunable == 2^(depth - 2), then all leaf parents are at level depth - 2, which means that all leaves are at level depth - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
     return p_grow / p_prune * num_growable / num_prunable * num_available_var * num_available_split
 
+def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree):
+    resid2_tree, count_tree = agg_resid(
+        X,
+        var_tree,
+        split_tree,
+        resid ** 2,
+        sigma2.dtype,
+    )
+
+    left_child = leaf_to_grow << 1
+    right_child = left_child + 1
+
+    left_resid2 = resid2_tree[left_child]
+    right_resid2 = resid2_tree[right_child]
+    total_resid2 = left_resid2 + right_resid2
+
+    left_count = count_tree[left_child]
+    right_count = count_tree[right_child]
+    total_count = left_count + right_count
+
+    sigma_mu2 = 1 / n_tree
+    sigma2_left = sigma2 + left_count * sigma_mu2
+    sigma2_right = sigma2 + right_count * sigma_mu2
+    sigma2_total = sigma2 + total_count * sigma_mu2
+
+    sqrt_term = sigma2 * sigma2_total / (sigma2_left * sigma2_right)
+
+    exp_term = sigma_mu2 / (2 * sigma2) * (
+        left_resid2 / sigma2_left +
+        right_resid2 / sigma2_right -
+        total_resid2 / sigma2_total
+    )
+
+    return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
 
@@ -341,6 +381,7 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
         bart['var_trees'][i_tree],
         bart['split_trees'][i_tree],
         resid,
+        bart['sigma2'].dtype,
     )
 
     mean_lk = resid_tree / count_tree
@@ -357,13 +398,13 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
 
     return bart
 
-def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d', resid: 'array n'):
+def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d', resid: 'array n', long_float_dtype):
 
     depth = tree_depth(var_trees)
     carry = (
         jnp.zeros(resid.size, bool),
         jnp.ones(resid.size, minimal_unsigned_dtype(var_tree.size - 1))
-        make_tree(depth, resid.dtype),
+        make_tree(depth, long_float_dtype),
         make_tree(depth, minimal_unsigned_dtype(resid.size - 1)),
     )
     unit_index = jnp.arange(resid.size, minimal_unsigned_dtype(resid.size - 1))
