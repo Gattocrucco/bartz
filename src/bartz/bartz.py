@@ -318,7 +318,7 @@ def randint_exclude(key, sup, exclude):
 def split_range(var_tree, split_tree, max_split, leaf_index):
     nparents = tree_depth(var_tree) - 1
     var = var_tree[leaf_index]
-    carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
+    carry = 1, max_split[var].astype(jnp.int32) + 1, leaf_index
     def loop(carry, _):
         l, r, index = carry
         right_child = (index & 1).astype(bool)
