@@ -110,9 +110,9 @@ def make_bart(*,
 
     return dict(
         leaf_trees=make_forest(small_float_dtype),
-        var_trees=make_forest(minimal_unsigned_dtype(X.shape[1] - 1)),
+        var_trees=make_forest(minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_split.dtype),
-        y_trees=jnp.zeros(y.size, large_float_dtype), # large float to avoid roundoff
+        resid=jnp.asarray(y, large_float_dtype), # large float to avoid roundoff
         sigma2=jnp.ones((), large_float_dtype),
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
@@ -135,7 +135,7 @@ def mcmc_step(bart, key):
 def mcmc_sample_trees(bart, key):
     bart = bart.copy()
     for count_var in ['grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count']:
-        bart[count_var] = bart[count_var].at[:].set(0)
+        bart[count_var] = jnp.zeros_like(bart[count_var])
     
     carry = 0, bart, key
     def loop(carry, _):
@@ -155,9 +155,9 @@ def mcmc_sample_tree(bart, key, i_tree):
         bart['leaf_trees'][i_tree],
         bart['var_trees'][i_tree],
         bart['split_trees'][i_tree],
-        bart['y_trees'].dtype,
+        bart['resid'].dtype,
     )
-    bart['y_trees'] -= y_tree
+    bart['resid'] += y_tree
     
     key1, key2 = random.split(key, 2)
     bart = mcmc_sample_tree_structure(bart, key1, i_tree)
@@ -168,9 +168,9 @@ def mcmc_sample_tree(bart, key, i_tree):
         bart['leaf_trees'][i_tree],
         bart['var_trees'][i_tree],
         bart['split_trees'][i_tree],
-        bart['y_trees'].dtype,
+        bart['resid'].dtype,
     )
-    bart['y_trees'] += y_tree
+    bart['resid'] -= y_tree
     
     return bart
 
@@ -184,7 +184,6 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     
     var_tree = bart['var_trees'][i_tree]
     split_tree = bart['split_trees'][i_tree]
-    resid = bart['y'] - bart['y_trees']
     
     key1, key2, key3 = random.split(key, 3)
     args = [
@@ -194,7 +193,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['max_split'],
         bart['p_nonterminal'],
         bart['sigma2'],
-        resid,
+        bart['resid'],
         len(bart['var_trees']),
         key1,
     ]
@@ -239,7 +238,6 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     split_tree = split_tree.at[leaf_to_grow].set(split)
 
     allowed = num_growable > 0
-    # can_grow_again = num_growable + jnp.where(leaf_to_grow < split_tree.size // 4, 1, -1) > 0
 
     trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
     log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
@@ -432,12 +430,11 @@ def count_available_split(var_tree, split_tree, max_split, node_to_prune):
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
 
-    resid = bart['y'] - bart['y_trees']
     resid_tree, count_tree = agg_resid(
         bart['X'],
         bart['var_trees'][i_tree],
         bart['split_trees'][i_tree],
-        resid,
+        bart['resid'],
         bart['sigma2'].dtype,
     )
 
@@ -494,7 +491,7 @@ def mcmc_sample_sigma(bart, key):
     bart = bart.copy()
 
     alpha = bart['sigma2_alpha'] + bart['y'].size / 2
-    resid = bart['y'] - bart['y_trees']
+    resid = bart['resid']
     norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
     beta = bart['sigma2_beta'] + norm / 2
 
