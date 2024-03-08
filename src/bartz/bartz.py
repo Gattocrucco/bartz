@@ -243,7 +243,11 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
 
     trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
     log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
-    tree_ratio = compute_tree_ratio() # <----- continue here
+    tree_ratio = compute_tree_ratio(p_nonterminal, leaf_to_grow, var_tree.size, num_available_var, num_available_split)
+
+    ratio = trans_ratio * log_likelihood_ratio * tree_ratio
+
+    return var_tree, split_tree, allowed, ratio
 
 def choose_leaf(split_tree, key):
     is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
@@ -311,7 +315,7 @@ def randint_exclude(key, sup, exclude):
     u, _ = lax.scan(loop, u, exclude)
     return u, actual_sup
 
-def choose_split(var_tree, split_tree, max_split, leaf_index, key):
+def split_range(var_tree, split_tree, max_split, leaf_index):
     nparents = tree_depth(var_tree) - 1
     var = var_tree[leaf_index]
     carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
@@ -325,7 +329,10 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
         r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
         return (l, r, index), None
     (l, r, _), _ = lax.scan(loop, carry, None, nparents)
-    
+    return l, r
+
+def choose_split(var_tree, split_tree, max_split, leaf_index, key):
+    l, r = split_range(var_tree, split_tree, max_split, leaf_index)
     split = random.uniform(key, (), l, r)
     num_available_split = r - l
     return split, num_available_split
@@ -371,6 +378,56 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_gro
     )
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+
+def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_length, num_available_var, num_available_split):
+    depth = index_depth(leaf_to_grow, tree_length)
+    p_parent = p_nonterminal[depth]
+    cp_children = 1 - p_nonterminal[depth + 1]
+    return cp_children * cp_children * p_parent / (1 - p_parent) / num_available_var / num_available_split
+
+def index_depth(index, tree_length):
+    depths = []
+    depth = 0
+    for i in range(tree_length):
+        if i == 2 ** depth:
+            depth += 1
+        depths.append(depth - 1)
+    depth = jnp.array(depths)
+    return depth[index]
+
+def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, key):    
+    node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, key)
+    num_available_var = count_available_var(var_tree, max_split, node_to_prune)
+    num_available_split = count_available_split(var_tree, split_tree, max_split, node_to_prune)
+
+    allowed = split_tree[1].astype(bool)
+
+    trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
+    log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree)
+    tree_ratio = compute_tree_ratio(p_nonterminal, node_to_prune, var_tree.size, num_available_var, num_available_split)
+
+    ratio = trans_ratio * log_likelihood_ratio * tree_ratio
+    ratio = 1 / ratio
+
+    split_tree = split_tree.at[node_to_prune].set(0)
+
+    return var_tree, split_tree, allowed, ratio
+
+def choose_leaf_parent(split_tree, key):
+    is_prunable = is_leaf_parent(split_tree[:split_tree.size // 2])
+    node_to_prune = randint_masked(key, is_prunable)
+    num_prunable = jnp.count_nonzero(is_prunable)
+    is_growable_leaf = is_actual_leaf(split_tree[:split_tree.size // 2].at[node_to_prune].set(0))
+    num_growable = jnp.count_nonzero(is_growable_leaf)
+    return node_to_prune, num_prunable, num_growable
+
+def count_available_var(var_tree, max_split, node_to_prune):
+    forbidden_var = fully_used_variables(var_tree, max_split, node_to_prune)
+    return max_split.size - jnp.count_nonzero(forbidden_var < max_split.size)
+
+def count_available_split(var_tree, split_tree, max_split, node_to_prune):
+    l, r = split_range(var_tree, split_tree, max_split, node_to_prune)
+    return r - l
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart = bart.copy()
