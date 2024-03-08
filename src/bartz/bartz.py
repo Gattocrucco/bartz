@@ -36,9 +36,10 @@ def make_tree(depth, dtype):
 def tree_depth(tree):
     return int(round(math.log2(tree.shape[-1])))
 
-def evaluate_tree(X, depth, leaf_trees, var_trees, split_trees, out_dtype):
+def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
 
     is_forest = leaf_trees.ndim == 2
+    depth = tree_depth(leaf_trees)
     
     if is_forest:
         n, _ = leaf_trees.shape
@@ -51,13 +52,13 @@ def evaluate_tree(X, depth, leaf_trees, var_trees, split_trees, out_dtype):
     carry = (
         jnp.zeros(forest_shape, bool),
         jnp.zeros((), out_dtype),
-        jnp.ones(forest_shape, int),
+        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_tree.size - 1))
     )
 
     def loop(carry, _)
         leaf_found, out, node_index = carry
 
-        is_leaf = split_trees[tree_index + (node_index,)] == 0
+        is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
         leaf_value = leaf_trees[tree_index + (node_index,)]
         if is_forest:
             leaf_sum = jnp.dot(is_leaf, leaf_value) # TODO how should I set preferred_element_dtype?
@@ -66,8 +67,8 @@ def evaluate_tree(X, depth, leaf_trees, var_trees, split_trees, out_dtype):
         out += leaf_sum
         leaf_found |= is_leaf
         
-        split = split_trees[tree_index + (node_index,)]
-        var = var_trees[tree_index + (node_index,)]
+        split = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
+        var = var_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
         x = X[var]
         
         node_index <<= 1
@@ -105,13 +106,13 @@ def make_bart(*,
     max_depth = p_nonterminal.size + 1
 
     @functools.partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
-    def make_forest(dtype):
+    def make_forest(max_depth, dtype):
         return make_tree(max_depth, dtype)
 
     return dict(
-        leaf_trees=make_forest(small_float_dtype),
-        var_trees=make_forest(minimal_unsigned_dtype(X.shape[0] - 1)),
-        split_trees=make_forest(max_split.dtype),
+        leaf_trees=make_forest(max_depth, small_float_dtype),
+        var_trees=make_forest(max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)),
+        split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float_dtype), # large float to avoid roundoff
         sigma2=jnp.ones((), large_float_dtype),
         grow_prop_count=jnp.zeros((), int),
@@ -177,7 +178,7 @@ def mcmc_sample_tree(bart, key, i_tree):
 @functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
 def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
     depth = tree_depth(leaf_trees)
-    return evaluate_tree(X, depth, leaf_tree, var_tree, split_tree, out_dtype)
+    return evaluate_tree(X, leaf_tree, var_tree, split_tree, out_dtype)
 
 def mcmc_sample_tree_structure(bart, key, i_tree):
     bart = bart.copy()
@@ -248,10 +249,10 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     return var_tree, split_tree, allowed, ratio
 
 def choose_leaf(split_tree, key):
-    is_growable = is_actual_leaf(split_tree[:split_tree.size // 2])
+    is_growable = is_actual_leaf(split_tree)
     leaf_to_grow = randint_masked(key, is_growable)
     num_growable = jnp.count_nonzero(is_growable)
-    is_parent = is_leaf_parent(split_tree[:split_tree.size // 2].at[leaf_to_grow].set(1))
+    is_parent = is_leaf_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, num_prunable
 
@@ -314,7 +315,7 @@ def randint_exclude(key, sup, exclude):
     return u, actual_sup
 
 def split_range(var_tree, split_tree, max_split, leaf_index):
-    nparents = tree_depth(var_tree) - 1
+    nparents = tree_depth(var_tree)
     var = var_tree[leaf_index]
     carry = 1, max_split[var].astype(jnp.int32) + 1, leaf_index
     def loop(carry, _):
@@ -335,10 +336,10 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     num_available_split = r - l
     return split, num_available_split
 
-def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, tree_size):
+def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, tree_halfsize):
     p_grow = jnp.where(num_growable > 1, 0.5, 1)
         # if num_growable == 1, then the starting tree is a root, and can not be pruned
-    p_prune = jnp.where(num_prunable < tree_size // 4, 0.5, 1)
+    p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
         # if num_prunable == 2^(depth - 2), then all leaf parents are at level depth - 2, which means that all leaves are at level depth - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
     return p_grow / p_prune * num_growable / num_prunable * num_available_var * num_available_split
 
@@ -377,8 +378,8 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_gro
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
 
-def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_length, num_available_var, num_available_split):
-    depth = index_depth(leaf_to_grow, tree_length)
+def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_halfsize, num_available_var, num_available_split):
+    depth = index_depth(leaf_to_grow, tree_halfsize)
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal[depth + 1]
     return cp_children * cp_children * p_parent / (1 - p_parent) / num_available_var / num_available_split
@@ -398,7 +399,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
     num_available_var = count_available_var(var_tree, max_split, node_to_prune)
     num_available_split = count_available_split(var_tree, split_tree, max_split, node_to_prune)
 
-    allowed = split_tree[1].astype(bool)
+    allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
     trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
     log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree)
@@ -412,10 +413,10 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
     return var_tree, split_tree, allowed, ratio
 
 def choose_leaf_parent(split_tree, key):
-    is_prunable = is_leaf_parent(split_tree[:split_tree.size // 2])
+    is_prunable = is_leaf_parent(split_tree)
     node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
-    is_growable_leaf = is_actual_leaf(split_tree[:split_tree.size // 2].at[node_to_prune].set(0))
+    is_growable_leaf = is_actual_leaf(split_tree.at[node_to_prune].set(0))
     num_growable = jnp.count_nonzero(is_growable_leaf)
     return node_to_prune, num_prunable, num_growable
 
@@ -454,10 +455,10 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
 
 def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d', resid: 'array n', long_float_dtype):
 
-    depth = tree_depth(var_trees)
+    depth = tree_depth(var_trees) + 1
     carry = (
         jnp.zeros(resid.size, bool),
-        jnp.ones(resid.size, minimal_unsigned_dtype(var_tree.size - 1))
+        jnp.ones(resid.size, minimal_unsigned_dtype(2 * var_tree.size - 1))
         make_tree(depth, long_float_dtype),
         make_tree(depth, minimal_unsigned_dtype(resid.size - 1)),
     )
@@ -466,7 +467,7 @@ def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d',
     def loop(carry, _)
         leaf_found, node_index, resid_tree, count_tree = carry
 
-        is_leaf = split_tree[node_index] == 0
+        is_leaf = split_tree.at[node_index].get(mode='fill', fill_value=0) == 0
         leaf_count = is_leaf & ~leaf_found
         leaf_resid = jnp.where(leaf_count, resid, 0)
         resid_tree = resid_tree.at[node_index].add(leaf_resid)
@@ -474,7 +475,7 @@ def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d',
         leaf_found |= is_leaf
         
         split = split_tree[node_index]
-        var = var_tree[node_index]
+        var = var_tree.at[node_index].get(mode='fill', fill_value=0)
         x = X[var, unit_index]
         
         node_index <<= 1
@@ -490,7 +491,7 @@ def agg_resid(X: 'array (p, n)', var_tree: 'array 2^d', split_tree: 'array 2^d',
 def mcmc_sample_sigma(bart, key):
     bart = bart.copy()
 
-    alpha = bart['sigma2_alpha'] + bart['y'].size / 2
+    alpha = bart['sigma2_alpha'] + bart['resid'].size / 2
     resid = bart['resid']
     norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
     beta = bart['sigma2_beta'] + norm / 2
