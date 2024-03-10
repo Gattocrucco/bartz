@@ -30,6 +30,7 @@ import functools
 
 import jax
 from jax import random
+from jax import debug
 
 from . import mcmcstep
 
@@ -39,11 +40,13 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     tracelist_main = tracelist_burnin + ('leaf_trees', 'var_trees', 'split_trees')
 
+    callback_kw = dict(n_burn=n_burn, n_save=n_save, n_skip=n_skip)
+
     def inner_loop(carry, _, tracelist, burnin):
         bart, i_total, i_skip, key = carry
         key, subkey = random.split(key)
         bart = mcmcstep.mcmc_step(bart, subkey)
-        callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip)
+        callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw)
         output = {key: bart[key] for key in tracelist}
         return (bart, i_total + 1, i_skip + 1, key), output
 
@@ -65,3 +68,19 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     (bart, _, _), main_trace = lax.scan(outer_loop, carry, None, n_save)
 
     return bart, burnin_trace, main_trace
+
+def simple_print_callback(*, bart, burnin, i_total, i_skip, n_burn, n_save, n_skip, printevery):
+    prop_total = len(bart['leaf_trees'])
+    grow_prop = bart['grow_prop_count'] / prop_total
+    prune_prop = bart['prune_prop_count'] / prop_total
+    grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
+    prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
+    n_total = n_burn + n_save
+    debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
+
+def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
+    if i_total % printevery == 0:
+        burnin_flag = ' (burnin)' if burnin else ''
+        print(f'Iteration {i_total + 1:4d}/{n_total:d}{burnin_flag} '
+            f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
+            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}')
