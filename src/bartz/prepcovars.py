@@ -27,20 +27,88 @@ import functools
 import jax
 from jax import numpy as jnp
 
+from . import mcmcstep
+
 def quantilized_splits_from_matrix(X, max_bins):
+    """
+    Determine bins that make the distribution of each covariate uniform.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        A matrix with p covariates and n observations.
+    max_bins : int
+        The maximum number of bins to produce.
+
+    Returns
+    -------
+    splits : array (p, m)
+        A matrix containing, for each covariate, the boundaries between bins.
+        `m` is ``min(max_bins, n) - 1``, which is an upper bound on the number
+        of splits. Each covariate may have a different number of splits; unused
+        values at the end of each row are filled with the maximum value
+        representable in the type of `X`.
+    max_split : array (p,)
+        The number of actually used values in each row of `splits`.
+    """
     out_length = min(max_bins, X.shape[1]) - 1
     return quantilized_splits_from_matrix_impl(X, out_length)
 
 @functools.partial(jax.vmap, in_axes=(0, None))
 def quantilized_splits_from_matrix_impl(x, out_length):
-    if jnp.issubdtype(x.dtype, jnp.integer):
-        huge_value = jnp.iinfo(x.dtype).max
-    else:
-        huge_value = jnp.inf
-    u = jnp.unique(x, size=x.size, fill_value=huge_value)
-    actual_length = jnp.count_nonzero(u < huge_value) - 1
+    huge = huge_value(x)
+    u = jnp.unique(x, size=x.size, fill_value=huge)
+    actual_length = jnp.count_nonzero(u < huge) - 1
     midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.arange(out_length) * (actual_length - 1) // (out_length - 1) # <-- potential integer overflow with int32!
     decimated_midpoints = midpoints[indices]
     truncated_midpoints = midpoints[:out_length]
-    return jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
+    splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
+    max_split = jnp.minimum(actual_length, out_length)
+    return splits, max_split
+
+def huge_value(x):
+    """
+    Return the maximum value that can be stored in `x`.
+
+    Parameters
+    ----------
+    x : array
+        A numerical numpy or jax array.
+
+    Returns
+    -------
+    maxval : scalar
+        The maximum value allowed by `x`'s type (+inf for floats).
+    """
+    if jnp.issubdtype(x.dtype, jnp.integer):
+        return jnp.iinfo(x.dtype).max
+    else:
+        return jnp.inf
+
+def bin_covariates(X, splits):
+    """
+    Bin the covariates according to the given splits.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        A matrix with p covariates and n observations.
+    splits : array (p, m)
+        A matrix containing, for each covariate, the boundaries between bins.
+        `m` is the maximum number of splits; each row may have shorter
+        actual length, marked by padding unused locations at the end of the
+        row with the maximum value allowed by the type.
+
+    Returns
+    -------
+    X_binned : int array (p, n)
+        A matrix with p covariates and n observations, where each covariate has
+        been replaced by the index of the bin it falls into.
+    """
+    return bin_covariates_impl(X, splits)
+
+@functools.partial(jax.vmap, in_axes=(0, None))
+def bin_covariates_impl(x, splits):
+    dtype = mcmcstep.minimal_unsigned_dtype(splits.size)
+    return jnp.digitize(x, splits).astype(dtype)

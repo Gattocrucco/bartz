@@ -31,10 +31,62 @@ import functools
 import jax
 from jax import random
 from jax import debug
+from jax import numpy as jnp
 
 from . import mcmcstep
 
 def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
+    """
+    Run the MCMC for the BART posterior.
+
+    Parameters
+    ----------
+    bart : dict
+        The initial MCMC state, as created and updated by the functions in
+        `mcmcstep`.
+    n_burn : int
+        The number of initial iterations which are not saved.
+    n_save : int
+        The number of iterations to save.
+    n_skip : int
+        The number of iterations to skip between each saved iteration.
+    callback : callable
+        An arbitrary function run at each iteration, called with the following
+        arguments, passed by keyword:
+
+        bart : dict
+            The current MCMC state.
+        burnin : bool
+            Whether the current iteration is in the burn-in phase.
+        i_total : int
+            The index of the last iteration (0-based).
+        i_skip : int
+            The index of the last iteration, starting from the last saved
+            iteration.
+        n_burn, n_save, n_skip : int
+            The corresponding arguments as-is.
+
+        Since this function is called under jax jit, the values are not
+        available at the time the Python code is executed. Use the utilities in
+        `jax.debug` to access the values at actual runtime.
+    key : jax.random.PRNGKey
+        The key for random number generation.
+
+    Returns
+    -------
+    bart : dict
+        The final MCMC state.
+    burnin_trace : dict
+        The trace of the burn-in phase, containing the following subset of
+        fields from the `bart` dictionary, with an additional head index that
+        runs over MCMC iterations: 'sigma2', 'grow_prop_count',
+        'grow_acc_count', 'prune_prop_count', 'prune_acc_count'.
+    main_trace : dict
+        The trace of the main phase, containing the following subset of fields
+        from the `bart` dictionary, with an additional head index that runs
+        over MCMC iterations: 'leaf_trees', 'var_trees', 'split_trees', plus
+        the fields in `burnin_trace`.
+    """
 
     tracelist_burnin = 'sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count'
 
@@ -69,14 +121,29 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     return bart, burnin_trace, main_trace
 
-def simple_print_callback(*, bart, burnin, i_total, i_skip, n_burn, n_save, n_skip, printevery):
-    prop_total = len(bart['leaf_trees'])
-    grow_prop = bart['grow_prop_count'] / prop_total
-    prune_prop = bart['prune_prop_count'] / prop_total
-    grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
-    prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
-    n_total = n_burn + n_save
-    debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
+def make_simple_print_callback(printevery):
+    """
+    Create a logging callback function for MCMC iterations.
+
+    Parameters
+    ----------
+    printevery : int
+        The number of iterations between each log.
+
+    Returns
+    -------
+    callback : callable
+        A function in the format required by `run_mcmc`.
+    """
+    def callback(*, bart, burnin, i_total, i_skip, n_burn, n_save, n_skip):
+        prop_total = len(bart['leaf_trees'])
+        grow_prop = bart['grow_prop_count'] / prop_total
+        prune_prop = bart['prune_prop_count'] / prop_total
+        grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
+        prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
+        n_total = n_burn + n_save
+        debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
+    return callback
 
 def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
     if i_total % printevery == 0:
@@ -84,3 +151,25 @@ def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, pr
         print(f'Iteration {i_total + 1:4d}/{n_total:d}{burnin_flag} '
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
             f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}')
+
+def evaluate_trace(trace, X):
+    """
+    Compute predictions for all iterations of the BART MCMC.
+
+    Parameters
+    ----------
+    trace : dict
+        A trace of the BART MCMC, as returned by `run_mcmc`.
+    X : array (p, n)
+        The covariate matrix, with p covariates and n observations.
+
+    Returns
+    -------
+    y : array (n_trace, n)
+        The predictions for each iteration of the MCMC.
+    """
+    return evaluate_trace_impl(trace, X)
+
+@functools.partial(jax.vmap, in_axes=(0, None))
+def evaluate_trace_impl(trace, X):
+    return mcmcstep.evaluate_tree_vmap_x(X, trace['leaf_trees'], trace['var_trees'], trace['split_trees'], jnp.float32)
