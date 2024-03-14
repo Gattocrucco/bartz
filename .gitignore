@@ -5,6 +5,8 @@
 # Python
 __pycache__
 pyenv
+poetry.toml
+dist/
 
 # Personal
 note.txt

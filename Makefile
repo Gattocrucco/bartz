@@ -35,10 +35,6 @@ all:
 	@echo "available targets: $(TARGETS)"
 	@echo "release = $(RELEASE_TARGETS) (in order)"
 	@echo
-	@echo "Setup instructions:"
-	@echo " 1) $$ make resetenv"
-	@echo " 2) $$ . pyenv/bin/activate"
-	@echo
 	@echo "Release instructions:"
 	@echo " 1) remove .devN suffix from version in src/bartz/__init__.py"
 	@echo " 2) describe release in docs/changelog.md"
@@ -51,11 +47,11 @@ all:
 	@echo " 9) bump version number and add .dev0 suffix"
 
 upload:
-	python3 -m twine upload dist/*
+	poetry publish
 
 release: $(RELEASE_TARGETS)
 	test ! -d dist || rm -r dist
-	python3 -m build
+	poetry build
 
 PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
@@ -76,7 +72,7 @@ examples: $(EXAMPLES)
 docscode:
 	$(DOCSPY) docs/runcode.py docs/*.rst
 
-docs: gendocs
+docs:
 	make -C docs html
 	@echo
 	@echo "Now open docs/_build/html/index.html"
@@ -86,11 +82,3 @@ covreport:
 	coverage html
 	@echo
 	@echo "Now open htmlcov/index.html"
-
-resetenv:
-	test ! -d pyenv || rm -fr pyenv
-	python3 -m venv pyenv
-	pyenv/bin/python3 -m pip install --upgrade pip
-	pyenv/bin/python3 -m pip install --editable '.[dev]'
-	@echo
-	@echo 'Now type ". pyenv/bin/activate"'

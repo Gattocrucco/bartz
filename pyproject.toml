@@ -22,13 +22,24 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
 [tool.poetry]
 name = "bartz"
 version = "0.0.dev0"
-description = "A jax implementation of BART"
+description = "A JAX implementation of BART"
 authors = ["Giacomo Petrillo <info@giacomopetrillo.com>"]
-license = "LICENSE"
+license = "MIT"
 readme = "README.md"
+repository = "https://github.com/Gattocrucco/bartz"
+packages = [
+    { include = "bartz", from = "src" },
+]
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/Gattocrucco/bartz/issues"
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -38,20 +49,17 @@ numpy = "^1.26.4"
 scipy = "^1.12.0"
 
 [tool.poetry.group.dev.dependencies]
+ipython = "^8.22.2"
+matplotlib = "^3.8.3"
+
+[tool.poetry.group.test.dependencies]
+coverage = "^7.4.3"
 pytest = "^8.1.1"
+
+[tool.poetry.group.docs.dependencies]
 Sphinx = "^7.2.6"
 numpydoc = "^1.6.0"
-coverage = "^7.4.3"
 myst-parser = "^2.0.0"
-ipython = "^8.22.2"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
-[project.urls]
-"Homepage" = "https://github.com/Gattocrucco/bartz"
-"Bug Tracker" = "https://github.com/Gattocrucco/bartz/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

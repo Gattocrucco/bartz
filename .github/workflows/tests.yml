@@ -41,25 +41,37 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.11"]
+        python-version: ["3.12"]
         include:
           - os: windows-latest
-            python-version: "3.11"
+            python-version: "3.12"
             experimental: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      - name: Set up Python ${{ matrix.python-version }}
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install package and dependencies
+
+      - name: Install poetry
         run: |
+          python -m venv poetry-venv
+          poetry-venv/bin/python -m pip install --upgrade pip
+          poetry-venv/bin/python -m pip install poetry
+          poetry-venv/bin/poetry config virtualenvs.create false
+
+      - name: Install package
+        run: |
+          python -m venv package-venv
+          source package-venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install '.[test-tools]'
-          python -m pip install '.[test-deps]'
+          poetry-venv/bin/poetry install
+
       - name: Run unit tests
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
+
       - name: Save coverage information
         uses: actions/upload-artifact@v3
         with:
@@ -76,7 +88,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install package and dependencies
         run: |
           python -m pip install --upgrade pip
