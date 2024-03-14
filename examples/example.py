@@ -1,7 +1,11 @@
+import warnings
+
 from jax import numpy as jnp
 from jax import random
 from matplotlib import pyplot as plt
 import bartz
+
+warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
 n = 100 # number of datapoints
