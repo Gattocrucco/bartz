@@ -142,7 +142,7 @@ class BART:
         yhat_train = self._predict(main_trace, x_train)
 
         yhat_train = self._transform_output(yhat_train, offset, scale)
-        yhat_train_mean = yhat_train.mean(axis=-1)
+        yhat_train_mean = yhat_train.mean(axis=0)
 
         sigma = self._extract_sigma(main_trace)
         first_sigma = self._extract_sigma(burnin_trace)
@@ -161,7 +161,7 @@ class BART:
         if x_test is not None:
             yhat_test = self.predict(x_test)
             self.yhat_test = yhat_test
-            self.yhat_test_mean = yhat_test.mean(axis=-1)
+            self.yhat_test_mean = yhat_test.mean(axis=0)
 
     def predict(self, x_test):
         """
@@ -263,7 +263,7 @@ class BART:
     def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
         key = jax.random.PRNGKey(seed)
         callback = mcmcloop.make_simple_print_callback(printevery)
-        _, burnin_trace, main_trace = mcmcloop.run_mcmc(mcmc_state, ndpost, keepevery, nskip, callback, key)
+        _, burnin_trace, main_trace = mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
         return burnin_trace, main_trace
 
     def _predict(self, trace, x):

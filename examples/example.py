@@ -29,7 +29,7 @@ bart = bartz.BART(X_train, y_train, x_test=X_test)
 # compute RMSE
 resid = y_test - bart.yhat_test_mean
 rmse = jnp.sqrt(resid @ resid)
-print(f'sigma: {bart.sigma.item():#.2g} (true: {sigma:#.2g})')
+print(f'sigma: {bart.sigma.mean():#.2g} (true: {sigma:#.2g})')
 print(f'RMSE: {rmse.item():#.2g}')
 
 # plot true vs. predicted

@@ -36,6 +36,7 @@ from jax import lax
 
 from . import mcmcstep
 
+@functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     """
     Run the MCMC for the BART posterior.
@@ -122,6 +123,9 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     return bart, burnin_trace, main_trace
 
+@functools.lru_cache
+    # cache to make the callback function object unique, such that the jit
+    # of run_mcmc recognizes it
 def make_simple_print_callback(printevery):
     """
     Create a logging callback function for MCMC iterations.
