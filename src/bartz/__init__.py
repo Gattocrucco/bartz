@@ -29,3 +29,5 @@ See the manual at https://gattocrucco.github.io/bartz/docs
 """
 
 __version__ = '0.0.dev0'
+
+from .interface import BART
