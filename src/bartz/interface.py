@@ -137,7 +137,7 @@ class BART:
         lamda = lamda / scale
 
         mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree)
-        burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
+        final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         yhat_train = self._predict(main_trace, x_train)
 
@@ -157,6 +157,7 @@ class BART:
         self._x_train_fmt = x_train_fmt
         self._splits = splits
         self._main_trace = main_trace
+        self._mcmc_state = final_state
 
         if x_test is not None:
             yhat_test = self.predict(x_test)
@@ -263,8 +264,8 @@ class BART:
     def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
         key = jax.random.PRNGKey(seed)
         callback = mcmcloop.make_simple_print_callback(printevery)
-        _, burnin_trace, main_trace = mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
-        return burnin_trace, main_trace
+        final_state, burnin_trace, main_trace = mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
+        return final_state, burnin_trace, main_trace
 
     def _predict(self, trace, x):
         return mcmcloop.evaluate_trace(trace, x)
