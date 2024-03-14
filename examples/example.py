@@ -8,7 +8,7 @@ import bartz
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 2 # number of datapoints (train + test)
+n = 4 # number of datapoints (train + test)
 p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean

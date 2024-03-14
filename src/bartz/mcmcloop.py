@@ -104,6 +104,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         output = {key: bart[key] for key in tracelist}
         return (bart, i_total + 1, i_skip + 1, key), output
 
+    # TODO avoid invoking this altogether if burnin is 0 to shorten compilation time & size
     key, subkey = random.split(key)
     carry = bart, 0, 0, subkey
     burnin_loop = functools.partial(inner_loop, tracelist=tracelist_burnin, burnin=True)

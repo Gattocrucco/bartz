@@ -68,7 +68,7 @@ class BART:
         The maximum depth of the trees. This is 1-based, so with the default
         ``maxdepth=6``, the depths of the levels range from 0 to 5.
     lamda : float, optional
-        The scale of the prior on the noise variance. If ``lambda==1``, the
+        The scale of the prior on the noise variance. If ``lamda==1``, the
         prior is an inverse chi-squared scaled to have harmonic mean 1. If
         not specified, it is set based on `sigest` and `sigquant`.
     offset : float, optional
@@ -233,6 +233,8 @@ class BART:
         return offset
 
     def _process_scale_settings(self, y_train, k):
+        if y_train.size == 1:
+            raise ValueError('y_train must have at least two elements to determine the scale')
         return (y_train.max() - y_train.min()) / (2 * k)
 
     def _determine_splits(self, x_train, numcut):
