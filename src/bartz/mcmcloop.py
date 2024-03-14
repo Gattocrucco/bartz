@@ -151,11 +151,11 @@ def make_simple_print_callback(printevery):
     return callback
 
 def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
-    if i_total % printevery == 0:
+    if (i_total + 1) % printevery == 0:
         burnin_flag = ' (burnin)' if burnin else ''
-        print(f'Iteration {i_total + 1:4d}/{n_total:d}{burnin_flag} '
+        print(f'Iteration {i_total + 1:4d}/{n_total:d} '
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
-            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}')
+            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}{burnin_flag}')
 
 @jax.jit
 def evaluate_trace(trace, X):
