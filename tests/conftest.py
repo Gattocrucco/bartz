@@ -27,10 +27,14 @@ import numpy as np
 import jax
 
 @pytest.fixture
-def prngkey(request):
-    """ A deterministic per-test jax random key """
+def rng(request):
+    """ A deterministic per-test numpy random number generator """
     nodeid = request.node.nodeid
     seed = np.array([nodeid], np.bytes_).view(np.uint8)
-    rng = np.random.default_rng(seed)
+    return np.random.default_rng(seed)
+
+@pytest.fixture
+def key(rng):
+    """ A deterministic per-test jax random key """
     seed = np.array(rng.bytes(8)).view(np.uint64)
     return jax.random.PRNGKey(seed)

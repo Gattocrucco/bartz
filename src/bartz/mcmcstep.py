@@ -117,10 +117,10 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
     carry = (
         jnp.zeros(forest_shape, bool),
         jnp.zeros((), out_dtype),
-        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_tree.size - 1))
+        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_trees.shape[-1] - 1))
     )
 
-    def loop(carry, _)
+    def loop(carry, _):
         leaf_found, out, node_index = carry
 
         is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
@@ -366,7 +366,7 @@ def mcmc_sample_tree(bart, key, i_tree):
     return bart
 
 @functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
-def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
+def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
     """
     Evaluate a decision tree or forest over multiple points.
 
@@ -392,8 +392,7 @@ def evaluate_tree_vmap_x(X, leaf_tree, var_tree, split_tree, out_dtype):
     out : (n,)
         The value of the tree or forest at each point.
     """
-    depth = tree_depth(leaf_trees)
-    return evaluate_tree(X, leaf_tree, var_tree, split_tree, out_dtype)
+    return evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype)
 
 def mcmc_sample_tree_structure(bart, key, i_tree):
     """
@@ -436,11 +435,11 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     args[-1] = key2
     prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(*args)
 
-    u0, u1 = random.uniform(key3, 2)
+    u0, u1 = random.uniform(key3, (2,))
 
     p_grow = jnp.where(grow_allowed & prune_allowed, 0.5, grow_allowed)
     try_grow = u0 <= p_grow
-    try_prune = prune_allowed & ~do_grow
+    try_prune = prune_allowed & ~try_grow
 
     do_grow = try_grow & (u1 <= grow_ratio)
     do_prune = try_prune & (u1 <= prune_ratio)
@@ -783,7 +782,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
         The number of available split points.
     """
     l, r = split_range(var_tree, split_tree, max_split, leaf_index)
-    split = random.uniform(key, (), l, r)
+    split = random.randint(key, (), l, r)
     num_available_split = r - l
     return split, num_available_split
 
@@ -1099,10 +1098,10 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
     mean_post = mean_lk * prec_lk * var_post
 
     key, subkey = random.split(key)
-    z = random.normal(subkey, mean_post.size, mean_post.dtype)
+    z = random.normal(subkey, mean_post.shape, mean_post.dtype)
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
-    leaf_tree = leaf_trees.at[0].set(0)
-    bart['leaf_trees'] = bart['leaf_trees'].at(i_tree).set(leaf_tree)
+    leaf_tree = leaf_tree.at[0].set(0)
+    bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
 
     return bart
 
@@ -1133,16 +1132,16 @@ def agg_values(X, var_tree, split_tree, values, acc_dtype):
         Tree leaves containing the count of such values.
     """
 
-    depth = tree_depth(var_trees) + 1
+    depth = tree_depth(var_tree) + 1
     carry = (
         jnp.zeros(values.size, bool),
-        jnp.ones(values.size, minimal_unsigned_dtype(2 * var_tree.size - 1))
+        jnp.ones(values.size, minimal_unsigned_dtype(2 * var_tree.size - 1)),
         make_tree(depth, acc_dtype),
         make_tree(depth, minimal_unsigned_dtype(values.size - 1)),
     )
-    unit_index = jnp.arange(values.size, minimal_unsigned_dtype(values.size - 1))
+    unit_index = jnp.arange(values.size, dtype=minimal_unsigned_dtype(values.size - 1))
 
-    def loop(carry, _)
+    def loop(carry, _):
         leaf_found, node_index, acc_tree, count_tree = carry
 
         is_leaf = split_tree.at[node_index].get(mode='fill', fill_value=0) == 0

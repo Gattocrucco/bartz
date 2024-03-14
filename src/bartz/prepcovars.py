@@ -108,7 +108,7 @@ def bin_covariates(X, splits):
     """
     return bin_covariates_impl(X, splits)
 
-@functools.partial(jax.vmap, in_axes=(0, None))
+@jax.vmap
 def bin_covariates_impl(x, splits):
     dtype = mcmcstep.minimal_unsigned_dtype(splits.size)
     return jnp.digitize(x, splits).astype(dtype)

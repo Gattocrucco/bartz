@@ -47,10 +47,9 @@ for file in sys.argv[1:]:
     gc.collect()
     
     # save figures
-    nums = plt.get_fignums()
     directory = file.parent / 'plot'
     directory.mkdir(exist_ok=True)
-    for num in nums:
+    for num in plt.get_fignums():
         fig = plt.figure(num)
         suffix = f'-{num}' if num > 1 else ''
         out = directory / f'{file.stem}{suffix}.png'

@@ -22,6 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import jax
 import jax.numpy as jnp
 
 from . import jaxext
@@ -39,11 +40,11 @@ class BART:
 
     Parameters
     ----------
-    x_train : array (n, p) or DataFrame
+    x_train : array (p, n) or DataFrame
         The training predictors.
-    y_train : array (n,), Series, DataFrame with one column
+    y_train : array (n,) or Series
         The training responses.
-    x_test : array (m, p) or DataFrame, optional
+    x_test : array (p, m) or DataFrame, optional
         The test predictors.
     sigest : float, optional
         An estimate of the residual standard deviation on `y_train`, used to
@@ -121,9 +122,6 @@ class BART:
     def __init__(self, x_train, y_train, *, x_test=None, sigest=None, sigdf=3, sigquant=0.9, k=2, power=2, base=0.95, maxdepth=6, lamda=None, offset=None, ntree=200, numcut=255, ndpost=1000, nskip=100, keepevery=1, printevery=100, seed=0):
 
         x_train, x_train_fmt = self._process_covariate_input(x_train)
-        if x_test is not None:
-            x_test, x_test_fmt = self._process_covariate_input(x_test)
-            self._check_compatible_formats(x_train_fmt, x_test_fmt)
         
         y_train, y_train_fmt = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
@@ -134,8 +132,6 @@ class BART:
 
         splits, max_split = self._determine_splits(x_train, numcut)
         x_train = self._bin_covariates(x_train, splits)
-        if x_test is not None:
-            x_test = self._bin_covariates(x_test, splits)
 
         y_train = self._transform_input(y_train, offset, scale)
         lamda = lamda / scale
@@ -144,14 +140,9 @@ class BART:
         burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         yhat_train = self._predict(main_trace, x_train)
-        if x_test is not None:
-            yhat_test = self._predict(main_trace, x_test)
 
         yhat_train = self._transform_output(yhat_train, offset, scale)
         yhat_train_mean = yhat_train.mean(axis=-1)
-        if x_test is not None:
-            yhat_test = self._transform_output(yhat_test, offset, scale)
-            yhat_test_mean = yhat_test.mean(axis=-1)
 
         sigma = self._extract_sigma(main_trace)
         first_sigma = self._extract_sigma(burnin_trace)
@@ -160,14 +151,17 @@ class BART:
         self.scale = scale
         self.yhat_train = yhat_train
         self.yhat_train_mean = yhat_train_mean
-        self.yhat_test = yhat_test
-        self.yhat_test_mean = yhat_test_mean
         self.sigma = sigma
         self.first_sigma = first_sigma
 
         self._x_train_fmt = x_train_fmt
         self._splits = splits
         self._main_trace = main_trace
+
+        if x_test is not None:
+            yhat_test = self.predict(x_test)
+            self.yhat_test = yhat_test
+            self.yhat_test_mean = yhat_test.mean(axis=-1)
 
     def predict(self, x_test):
         """
@@ -195,8 +189,8 @@ class BART:
             fmt = dict(kind='dataframe', columns=x.columns)
             x = x.to_numpy()
         else:
-            fmt = dict(kind='array', num_covar=x.shape[1])
-        x = jnp.asarray(x.T)
+            fmt = dict(kind='array', num_covar=x.shape[0])
+        x = jnp.asarray(x)
         assert x.ndim == 2
         return x, fmt
 
@@ -204,11 +198,7 @@ class BART:
         assert fmt1 == fmt2
 
     def _process_response_input(self, y):
-        if hasattr(y, 'columns'):
-            fmt = dict(kind='dataframe', columns=y.columns)
-            assert len(y.columns) == 1
-            y = y.to_numpy().squeeze(0)
-        elif hasattr(y, 'to_numpy'):
+        if hasattr(y, 'to_numpy'):
             fmt = dict(kind='series', name=y.name)
             y = y.to_numpy()
         else:
@@ -230,7 +220,7 @@ class BART:
                 sigest2 = chisq / dof
             else:
                 sigest2 = sigest ** 2
-            alpha = sidgf / 2
+            alpha = sigdf / 2
             invchi2 = jaxext.scipy.stats.invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
             lamda = sigest2 / invchi2rid
@@ -258,7 +248,17 @@ class BART:
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
         sigma2_beta = lamda * sigma2_alpha
-        return mcmcstep.make_bart(x_train, y_train, max_split, ntree, p_nonterminal, sigma2_alpha, sigma2_beta, jnp.float32, jnp.float32)
+        return mcmcstep.make_bart(
+            X=x_train,
+            y=y_train,
+            max_split=max_split,
+            num_trees=ntree,
+            p_nonterminal=p_nonterminal,
+            sigma2_alpha=sigma2_alpha,
+            sigma2_beta=sigma2_beta,
+            small_float_dtype=jnp.float32,
+            large_float_dtype=jnp.float32,
+        )
 
     def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
         key = jax.random.PRNGKey(seed)

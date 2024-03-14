@@ -32,6 +32,7 @@ import jax
 from jax import random
 from jax import debug
 from jax import numpy as jnp
+from jax import lax
 
 from . import mcmcstep
 
@@ -152,6 +153,7 @@ def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, pr
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
             f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}')
 
+@jax.jit
 def evaluate_trace(trace, X):
     """
     Compute predictions for all iterations of the BART MCMC.
