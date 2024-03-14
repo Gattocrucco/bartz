@@ -48,3 +48,55 @@ ipython = "^8.22.2"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[project.urls]
+"Homepage" = "https://github.com/Gattocrucco/bartz"
+"Bug Tracker" = "https://github.com/Gattocrucco/bartz/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+]
+addopts = [
+    "-r xXfE",
+    "--pdbcls=IPython.terminal.debugger:TerminalPdb",
+    "--durations=3",
+]
+
+# I wanted to use `--import-mode=importlib`, but it breaks importing submodules,
+# in particular `from . import util`.
+
+[tool.coverage.run]
+branch = true
+source = ["bartz"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.html]
+show_contexts = true
+
+[tool.coverage.paths]
+# the first path in each list must be the source directory in the machine that's
+# generating the coverage report
+
+github = [
+    '/home/runner/work/bartz/bartz/src/bartz/',
+    '/Users/runner/work/bartz/bartz/src/bartz/',
+    'D:\a\bartz\bartz\src\bartz\',
+    '/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/bartz/',
+    '/Users/runner/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
+    '/opt/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
+    'C:\hostedtoolcache\windows\Python\*\*\Lib\site-packages\bartz\',
+]
+
+local = [
+    'src/bartz/',
+    '/home/runner/work/bartz/bartz/src/bartz/',
+    '/Users/runner/work/bartz/bartz/src/bartz/',
+    'D:\a\bartz\bartz\src\bartz\',
+    '/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/bartz/',
+    '/Users/runner/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
+    '/opt/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
+    'C:\hostedtoolcache\windows\Python\*\*\Lib\site-packages\bartz\',
+]
