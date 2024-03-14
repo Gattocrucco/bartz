@@ -22,123 +22,29 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
-
-[project]
+[tool.poetry]
 name = "bartz"
-authors = [
-  { name="Giacomo Petrillo", email="info@giacomopetrillo.com" },
-]
+version = "0.0.dev0"
 description = "A jax implementation of BART"
+authors = ["Giacomo Petrillo <info@giacomopetrillo.com>"]
+license = "LICENSE"
 readme = "README.md"
-requires-python = ">=3.11"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-    "Development Status :: 3 - Alpha",
-    "Operating System :: MacOS",
-    "Operating System :: POSIX :: Linux",
-]
-dependencies = [
-    'jax>=0.4.23',
-    'jaxlib>=0.4.23',
-]
-dynamic = ["version"]
 
-[tool.setuptools.dynamic]
-version = {attr = "bartz.__version__"}
+[tool.poetry.dependencies]
+python = "^3.12"
+jax = "^0.4.25"
+jaxlib = "^0.4.25"
+numpy = "^1.26.4"
+scipy = "^1.12.0"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-namespaces = false
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.1.1"
+Sphinx = "^7.2.6"
+numpydoc = "^1.6.0"
+coverage = "^7.4.3"
+myst-parser = "^2.0.0"
+ipython = "^8.22.2"
 
-[project.urls]
-"Homepage" = "https://github.com/Gattocrucco/bartz"
-"Bug Tracker" = "https://github.com/Gattocrucco/bartz/issues"
-
-[project.optional-dependencies]
-
-dev = [ # to work locally on bartz
-    "jax",
-    "jaxlib",
-    "sphinx",
-    "myst-parser",
-    "numpydoc",
-    "pytest",
-    "coverage[toml]",
-    "twine",
-    "ipython",
-    "build",
-]
-
-test-tools = [ # tools to run the unit tests on CI
-    "pytest",
-    "coverage[toml]",
-]
-
-test-deps = [ # dependencies to install to run the unit tests on CI
-    "jax",
-    "jaxlib",
-]
-
-test-deps-old = [ # to run the unit tests on CI, with minimum supported dependencies
-    "jax==0.4.23",
-    "jaxlib==0.4.23",
-]
-
-docs = [ # to run examples, documentation code, and build documentation on CI
-    "jax",
-    "jaxlib",
-    "numpydoc",
-    "coverage[toml]",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-filterwarnings = [
-]
-addopts = [
-    "-r xXfE",
-    "--pdbcls=IPython.terminal.debugger:TerminalPdb",
-    "--durations=3",
-]
-
-# I wanted to use `--import-mode=importlib`, but it breaks importing submodules,
-# in particular `from . import util`.
-
-[tool.coverage.run]
-branch = true
-source = ["bartz"]
-
-[tool.coverage.report]
-show_missing = true
-
-[tool.coverage.html]
-show_contexts = true
-
-[tool.coverage.paths]
-# the first path in each list must be the source directory in the machine that's
-# generating the coverage report
-
-github = [
-    '/home/runner/work/bartz/bartz/src/bartz/',
-    '/Users/runner/work/bartz/bartz/src/bartz/',
-    'D:\a\bartz\bartz\src\bartz\',
-    '/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/bartz/',
-    '/Users/runner/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
-    '/opt/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
-    'C:\hostedtoolcache\windows\Python\*\*\Lib\site-packages\bartz\',
-]
-
-local = [
-    'src/bartz/',
-    '/home/runner/work/bartz/bartz/src/bartz/',
-    '/Users/runner/work/bartz/bartz/src/bartz/',
-    'D:\a\bartz\bartz\src\bartz\',
-    '/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages/bartz/',
-    '/Users/runner/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
-    '/opt/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
-    'C:\hostedtoolcache\windows\Python\*\*\Lib\site-packages\bartz\',
-]
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
