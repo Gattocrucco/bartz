@@ -145,8 +145,8 @@ class BART:
         yhat_train = self._transform_output(yhat_train, offset, scale)
         yhat_train_mean = yhat_train.mean(axis=0)
 
-        sigma = self._extract_sigma(main_trace)
-        first_sigma = self._extract_sigma(burnin_trace)
+        sigma = self._extract_sigma(main_trace, scale)
+        first_sigma = self._extract_sigma(burnin_trace, scale)
 
         self.offset = offset
         self.scale = scale
@@ -284,5 +284,5 @@ class BART:
     def _transform_output(self, y, offset, scale):
         return offset + scale * y
 
-    def _extract_sigma(self, trace):
-        return jnp.sqrt(trace['sigma2'])
+    def _extract_sigma(self, trace, scale):
+        return scale * jnp.sqrt(trace['sigma2'])
