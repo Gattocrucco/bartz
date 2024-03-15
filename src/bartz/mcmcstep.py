@@ -107,9 +107,9 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
     depth = tree_depth(leaf_trees)
     
     if is_forest:
-        n, _ = leaf_trees.shape
-        forest_shape = n,
-        tree_index = jnp.arange(n),
+        m, _ = leaf_trees.shape
+        forest_shape = m,
+        tree_index = jnp.arange(m),
     else:
         forest_shape = ()
         tree_index = ()
@@ -126,7 +126,11 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
         is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
         leaf_value = leaf_trees[tree_index + (node_index,)]
         if is_forest:
-            leaf_sum = jnp.dot(is_leaf, leaf_value) # TODO how should I set preferred_element_dtype?
+            leaf_sum = jnp.sum(leaf_value, where=is_leaf) # TODO set dtype to large float
+                # alternative: dot(is_leaf, leaf_value):
+                # - maybe faster
+                # - maybe less accurate
+                # - fucked by nans
         else:
             leaf_sum = jnp.where(is_leaf, leaf_value, 0)
         out += leaf_sum

@@ -49,7 +49,8 @@ class BART:
     sigest : float, optional
         An estimate of the residual standard deviation on `y_train`, used to
         set `lamda`. If not specified, it is estimated by linear regression.
-        Ignored if `lamda` is specified.
+        If `y_train` has less than two elements, it is set to 1. If n <= p, it
+        is set to the variance of `y_train`. Ignored if `lamda` is specified.
     sigdf : int, default 3
         The degrees of freedom of the scaled inverse-chisquared prior on the
         noise variance.
@@ -58,7 +59,8 @@ class BART:
         `sigest` to set the scale of the prior. Ignored if `lamda` is specified.
     k : float, default 2
         The inverse scale of the prior standard deviation on the latent mean
-        function, relative to half the observed range of `y_train`.
+        function, relative to half the observed range of `y_train`. If `y_train`
+        has less than two elements, `k` is ignored and the scale is set to 1.
     power : float, default 2
     base : float, default 0.95
         Parameters of the prior on tree node generation. The probability that a
@@ -73,7 +75,7 @@ class BART:
         not specified, it is set based on `sigest` and `sigquant`.
     offset : float, optional
         The prior mean of the latent mean function. If not specified, it is set
-        to the mean of `y_train`.
+        to the mean of `y_train`. If `y_train` is empty, it is set to 0.
     ntree : int, default 200
         The number of trees used to represent the latent mean function.
     numcut : int, default 255
@@ -140,7 +142,6 @@ class BART:
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         yhat_train = self._predict(main_trace, x_train)
-
         yhat_train = self._transform_output(yhat_train, offset, scale)
         yhat_train_mean = yhat_train.mean(axis=0)
 
@@ -188,7 +189,7 @@ class BART:
     def _process_covariate_input(self, x):
         if hasattr(x, 'columns'):
             fmt = dict(kind='dataframe', columns=x.columns)
-            x = x.to_numpy()
+            x = x.to_numpy().T
         else:
             fmt = dict(kind='array', num_covar=x.shape[0])
         x = jnp.asarray(x)
@@ -213,29 +214,38 @@ class BART:
         assert get_length(x1) == get_length(x2)
 
     def _process_noise_variance_settings(self, x_train, y_train, sigest, sigdf, sigquant, lamda):
-        if lamda is None:
-            if sigest is None:
+        if lamda is not None:
+            return lamda
+        else:
+            if sigest is not None:
+                sigest2 = sigest * sigest
+            elif y_train.size < 2:
+                sigest2 = 1
+            elif y_train.size <= x_train.shape[0]:
+                sigest2 = jnp.var(y_train)
+            else:
                 _, chisq, rank, _ = jnp.linalg.lstsq(x_train.T, y_train)
                 chisq = chisq.squeeze(0)
                 dof = len(y_train) - rank
                 sigest2 = chisq / dof
-            else:
-                sigest2 = sigest ** 2
             alpha = sigdf / 2
             invchi2 = jaxext.scipy.stats.invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
-            lamda = sigest2 / invchi2rid
-        return lamda
+            return sigest2 / invchi2rid
 
     def _process_offset_settings(self, y_train, offset):
-        if offset is None:
-            offset = y_train.mean()
-        return offset
+        if offset is not None:
+            return offset
+        elif y_train.size < 1:
+            return 0
+        else:
+            return y_train.mean()
 
     def _process_scale_settings(self, y_train, k):
-        if y_train.size == 1:
-            raise ValueError('y_train must have at least two elements to determine the scale')
-        return (y_train.max() - y_train.min()) / (2 * k)
+        if y_train.size < 2:
+            return 1
+        else:
+            return (y_train.max() - y_train.min()) / (2 * k)
 
     def _determine_splits(self, x_train, numcut):
         return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
@@ -266,14 +276,13 @@ class BART:
     def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
         key = jax.random.PRNGKey(seed)
         callback = mcmcloop.make_simple_print_callback(printevery)
-        final_state, burnin_trace, main_trace = mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
-        return final_state, burnin_trace, main_trace
+        return mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
 
     def _predict(self, trace, x):
         return mcmcloop.evaluate_trace(trace, x)
 
     def _transform_output(self, y, offset, scale):
-        return y * scale + offset
+        return offset + scale * y
 
     def _extract_sigma(self, trace):
         return jnp.sqrt(trace['sigma2'])

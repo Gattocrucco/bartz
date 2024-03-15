@@ -27,8 +27,12 @@ n_train = n // 2
 X_train, X_test = X[:, :n_train], X[:, n_train:]
 y_train, y_test = y[:n_train], y[n_train:]
 
+# set test = train for debugging
+X_test = X_train
+y_test = y_train
+
 # fit with bartz
-bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=1, nskip=0, ndpost=1)
+bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=2, nskip=0, ndpost=1)
 
 # compute RMSE
 resid = y_test - bart.yhat_test_mean
@@ -39,5 +43,6 @@ print(f'RMSE: {rmse.item():#.2g}')
 # plot true vs. predicted
 fig, ax = plt.subplots(num='example', clear=True)
 ax.plot(bart.yhat_test_mean, y_test, '.')
+ax.set(xlabel='predicted (post mean)', ylabel='true', title='true vs. predicted on test set')
 
 fig.show()
