@@ -8,8 +8,8 @@ import bartz
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 4 # number of datapoints (train + test)
-p = 1 # number of covariates
+n = 200 # number of datapoints (train + test)
+p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     R = 0.5
@@ -32,7 +32,7 @@ X_test = X_train
 y_test = y_train
 
 # fit with bartz
-bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=2, nskip=0, ndpost=100)
+bart = bartz.BART(X_train, y_train, x_test=X_test)
 
 # compute RMSE
 resid = y_test - bart.yhat_test_mean

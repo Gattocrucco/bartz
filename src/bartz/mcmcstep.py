@@ -853,7 +853,7 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
         X,
         var_tree,
         split_tree,
-        resid ** 2,
+        resid * resid,
         sigma2.dtype,
     )
 
@@ -1095,16 +1095,16 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
         bart['sigma2'].dtype,
     )
 
-    mean_lk = resid_tree / count_tree
     prec_lk = count_tree / bart['sigma2']
     prec_prior = len(bart['leaf_trees'])
     var_post = 1 / (prec_lk + prec_prior)
-    mean_post = mean_lk * prec_lk * var_post
+    mean_post = resid_tree / bart['sigma2'] * var_post # = mean_lk * prec_lk * var_post
+    mean_post = jnp.where(count_tree, mean_post, jnp.nan)
+        # TODO do this only in a debugging mode
 
-    key, subkey = random.split(key)
-    z = random.normal(subkey, mean_post.shape, mean_post.dtype)
+    z = random.normal(key, mean_post.shape, mean_post.dtype)
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
-    leaf_tree = leaf_tree.at[0].set(0)
+    leaf_tree = leaf_tree.at[0].set(0) # this 0 is used by evaluate_tree
     bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
 
     return bart
@@ -1192,8 +1192,7 @@ def mcmc_sample_sigma(bart, key):
     norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
     beta = bart['sigma2_beta'] + norm / 2
 
-    key, subkey = random.split(key)
-    sample = random.gamma(subkey, alpha)
+    sample = random.gamma(key, alpha)
     bart['sigma2'] = beta / sample
 
     return bart
