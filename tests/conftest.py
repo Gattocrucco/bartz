@@ -37,4 +37,4 @@ def rng(request):
 def key(rng):
     """ A deterministic per-test jax random key """
     seed = np.array(rng.bytes(8)).view(np.uint64)
-    return jax.random.PRNGKey(seed)
+    return jax.random.key(seed)

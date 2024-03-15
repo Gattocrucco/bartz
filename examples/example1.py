@@ -8,7 +8,7 @@ import bartz
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 200 # number of datapoints (train + test)
+n = 2000 # number of datapoints (train + test)
 p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
@@ -17,7 +17,7 @@ def f(x): # conditional mean
     return jnp.cos(2 * jnp.pi / R * jnp.sqrt(r2))
 
 # generate data
-key = random.PRNGKey(202403132205)
+key = random.key(202403132205)
 key, key1, key2 = random.split(key, 3)
 X = random.normal(key1, (p, n))
 y = f(X) + sigma * random.normal(key2, (n,))
@@ -28,8 +28,8 @@ X_train, X_test = X[:, :n_train], X[:, n_train:]
 y_train, y_test = y[:n_train], y[n_train:]
 
 # set test = train for debugging
-X_test = X_train
-y_test = y_train
+# X_test = X_train
+# y_test = y_train
 
 # fit with bartz
 bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=200, nskip=500, ndpost=500, seed=91287346)
@@ -42,7 +42,7 @@ print(f'sigma: {bart.sigma.mean():#.2g} (true: {sigma:#.2g})')
 print(f'RMSE: {rmse.item():#.2g}')
 
 # plot true vs. predicted
-fig, axs = plt.subplots(1, 2, num='example', clear=True, figsize=[10, 5])
+fig, axs = plt.subplots(1, 2, num='example1', clear=True, figsize=[10, 5])
 
 ax = axs[0]
 l = min(bart.yhat_test_mean.min(), y_test.min())

@@ -94,7 +94,7 @@ class BART:
         The thinning factor for the MCMC samples, after burn-in.
     printevery : int, default 100
         The number of iterations (including skipped ones) between each log.
-    seed : int, default 0
+    seed : int or jax random key, default 0
         The seed for the random number generator.
 
     Attributes
@@ -274,7 +274,10 @@ class BART:
         )
 
     def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
-        key = jax.random.PRNGKey(seed)
+        if isinstance(seed, jax.Array) and jnp.issubdtype(seed.dtype, jax.dtypes.prng_key):
+            key = seed
+        else:
+            key = jax.random.key(seed)
         callback = mcmcloop.make_simple_print_callback(printevery)
         return mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
 

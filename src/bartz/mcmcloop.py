@@ -71,7 +71,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         Since this function is called under jax jit, the values are not
         available at the time the Python code is executed. Use the utilities in
         `jax.debug` to access the values at actual runtime.
-    key : jax.random.PRNGKey
+    key : jax.dtypes.prng_key array
         The key for random number generation.
 
     Returns
