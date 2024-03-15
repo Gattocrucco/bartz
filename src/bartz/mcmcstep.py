@@ -511,7 +511,7 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     
     leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, key1)
     
-    var, num_available_var = choose_variable(var_tree, max_split, leaf_to_grow, key2)
+    var, num_available_var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
     split, num_available_split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
@@ -619,7 +619,7 @@ def is_leaf_parent(split_tree):
     return split_tree.astype(bool) & child_leaf
         # the 0-th item has split == 0, so it's not counted
 
-def choose_variable(var_tree, max_split, leaf_index, key):
+def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
     """
     Choose a variable to split on for a new non-terminal node.
 
@@ -627,6 +627,8 @@ def choose_variable(var_tree, max_split, leaf_index, key):
     ----------
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
     max_split : int array (p,)
         The maximum split index for each variable.
     leaf_index : int
@@ -644,10 +646,10 @@ def choose_variable(var_tree, max_split, leaf_index, key):
     The variable is chosen among the variables that have a non-empty range of
     allowed splits. If no variable has a non-empty range, return `p`.
     """
-    var_to_ignore = fully_used_variables(var_tree, max_split, leaf_index)
+    var_to_ignore = fully_used_variables(var_tree, split_tree, max_split, leaf_index)
     return randint_exclude(key, max_split.size, var_to_ignore)
 
-def fully_used_variables(var_tree, max_split, leaf_index):
+def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
     """
     Return a list of variables that have an empty split range at a given node.
 
@@ -655,6 +657,8 @@ def fully_used_variables(var_tree, max_split, leaf_index):
     ----------
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
     max_split : int array (p,)
         The maximum split index for each variable.
     leaf_index : int
@@ -994,7 +998,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
         The Metropolis-Hastings ratio.
     """
     node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, key)
-    num_available_var = count_available_var(var_tree, max_split, node_to_prune)
+    num_available_var = count_available_var(var_tree, split_tree, max_split, node_to_prune)
     num_available_split = count_available_split(var_tree, split_tree, max_split, node_to_prune)
 
     allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
@@ -1039,7 +1043,7 @@ def choose_leaf_parent(split_tree, key):
     num_growable = jnp.count_nonzero(is_growable_leaf)
     return node_to_prune, num_prunable, num_growable
 
-def count_available_var(var_tree, max_split, node_to_prune):
+def count_available_var(var_tree, split_tree, max_split, node_to_prune):
     """
     Count the variables that have a non-empty split range at a given node.
 
@@ -1047,6 +1051,8 @@ def count_available_var(var_tree, max_split, node_to_prune):
     ----------
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
     max_split : int array (p,)
         The maximum split index for each variable.
     node_to_prune : int
@@ -1057,7 +1063,7 @@ def count_available_var(var_tree, max_split, node_to_prune):
     num_available_var : int
         The number of variables that have a non-empty split range.
     """
-    forbidden_var = fully_used_variables(var_tree, max_split, node_to_prune)
+    forbidden_var = fully_used_variables(var_tree, split_tree, max_split, node_to_prune)
     return max_split.size - jnp.count_nonzero(forbidden_var < max_split.size)
 
 def count_available_split(var_tree, split_tree, max_split, node_to_prune):
