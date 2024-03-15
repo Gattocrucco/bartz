@@ -666,33 +666,83 @@ def fully_used_variables(var_tree, max_split, leaf_index):
         The indices of the variables that have an empty split range. Since the
         number of such variables is not fixed, unused values in the array are
         filled with `p`. The fill values are not guaranteed to be placed in any
-        particular order.
+        particular order. Variables may appear more than once.
     """
     
-    novar_fill = max_split.size
-    max_nparents = tree_depth(var_tree) - 1
-    var = jnp.full(max_nparents, novar_fill, minimal_unsigned_dtype(novar_fill))
-    count = jnp.zeros(max_nparents, minimal_unsigned_dtype(max_nparents))
+    var_to_ignore = parent_variables(var_tree, max_split, leaf_index)
+    split_range_vec = jax.vmap(split_range, in_axes=(None, None, None, None, 0))
+    l, r = split_range_vec(var_tree, split_tree, max_split, leaf_index, var_to_ignore)
+    num_split = r - l
+    return jnp.where(num_split == 0, var_to_ignore, max_split.size)
 
-    carry = leaf_index, var, count
+def parent_variables(var_tree, max_split, node_index):
+    """
+    Return the list of variables in the ancestors of a node.
+
+    Parameters
+    ----------
+    var_tree : int array (2 ** (d - 1),)
+        The variable indices of the tree.
+    max_split : int array (p,)
+        The maximum split index for each variable. Used only to get `p`.
+    node_index : int
+        The index of the node, assumed to be valid for `var_tree`.
+
+    Returns
+    -------
+    ancestor_vars : int array (d - 2,)
+        The variable indices of the ancestors of the node, from the root to
+        the parent. Unused spots are filled with `p`.
+    """
+    max_num_ancestors = tree_depth(var_tree) - 1
+    ancestor_vars = jnp.zeros(max_num_ancestors, minimal_unsigned_dtype(max_split.size))
+    carry = ancestor_vars.size - 1, node_index, ancestor_vars
     def loop(carry, _):
-        index, var, count = carry
+        i, index, ancestor_vars = carry
         index >>= 1
-        parent_var = var_tree[index]
-        notfound = var.size
-        var_index, = jnp.nonzero(var == parent_var, size=1, fill_value=notfound)
-        vacant_index, = jnp.nonzero(var == novar_fill, size=1, fill_value=notfound)
-        var_index = jnp.where(var_index == notfound, vacant_index, var_index)
-        var = var.at[var_index].set(parent_var, mode='drop')
-        count = count.at[var_index].add(index.astype(bool), mode='drop')
-        return (index, var, count), None
-    (_, var, count), _ = lax.scan(loop, carry, None, max_nparents)
+        var = var_tree[index]
+        var = jnp.where(index, var, max_split.size)
+        ancestor_vars = ancestor_vars.at[i].set(var)
+        return (i - 1, index, ancestor_vars), None
+    (_, _, ancestor_vars), _ = lax.scan(loop, carry, None, ancestor_vars.size)
+    return ancestor_vars
 
-    max_count = max_split.at[var].get(mode='fill', fill_value=1)
-    still_usable = count < max_count
-    var = jnp.where(still_usable, novar_fill, var)
+def split_range(var_tree, split_tree, max_split, node_index, ref_var):
+    """
+    Return the range of allowed splits for a variable at a given node.
 
-    return var
+    Parameters
+    ----------
+    var_tree : int array (2 ** (d - 1),)
+        The variable indices of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
+    max_split : int array (p,)
+        The maximum split index for each variable.
+    node_index : int
+        The index of the node, assumed to be valid for `var_tree`.
+    ref_var : int
+        The variable for which to measure the split range.
+
+    Returns
+    -------
+    l, r : int
+        The range of allowed splits is [l, r).
+    """
+    max_num_ancestors = tree_depth(var_tree) - 1
+    initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(jnp.int32)
+    carry = 0, initial_r, node_index
+    def loop(carry, _):
+        l, r, index = carry
+        right_child = (index & 1).astype(bool)
+        index >>= 1
+        split = split_tree[index]
+        cond = (var_tree[index] == ref_var) & index.astype(bool)
+        l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
+        r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
+        return (l, r, index), None
+    (l, r, _), _ = lax.scan(loop, carry, None, max_num_ancestors)
+    return l + 1, r
 
 def randint_exclude(key, sup, exclude):
     """
@@ -705,8 +755,8 @@ def randint_exclude(key, sup, exclude):
     sup : int
         The exclusive upper bound of the range.
     exclude : int array (n,)
-        The values to exclude from the range. Each value must not appear more
-        than once. Values greater than or equal to `sup` are ignored.
+        The values to exclude from the range. Values greater than or equal to
+        `sup` are ignored. Values can appear more than once.
 
     Returns
     -------
@@ -718,48 +768,13 @@ def randint_exclude(key, sup, exclude):
         The number of allowed values in the range, after excluding the values in
         `exclude`.
     """
-    exclude = jnp.sort(exclude)
+    exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
     num_allowed = sup - jnp.count_nonzero(exclude < sup)
     u = random.randint(key, (), 0, num_allowed)
     def loop(u, i):
         return jnp.where(i <= u, u + 1, u), None
     u, _ = lax.scan(loop, u, exclude)
     return u, num_allowed
-
-def split_range(var_tree, split_tree, max_split, leaf_index):
-    """
-    Return the range of allowed splits for a variable at a given node.
-
-    Parameters
-    ----------
-    var_tree : int array (2 ** (d - 1),)
-        The variable indices of the tree.
-    split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
-    max_split : int array (p,)
-        The maximum split index for each variable.
-    leaf_index : int
-        The index of the node.
-
-    Returns
-    -------
-    l, r : int
-        The range of allowed splits is [l, r).
-    """
-    max_nparents = tree_depth(var_tree) - 1
-    var = var_tree[leaf_index]
-    carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
-    def loop(carry, _):
-        l, r, index = carry
-        right_child = (index & 1).astype(bool)
-        index >>= 1
-        split = split_tree[index]
-        cond = (var_tree[index] == var) & index.astype(bool)
-        l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
-        r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
-        return (l, r, index), None
-    (l, r, _), _ = lax.scan(loop, carry, None, max_nparents)
-    return l + 1, r
 
 def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -774,7 +789,8 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     max_split : int array (p,)
         The maximum split index for each variable.
     leaf_index : int
-        The index of the leaf to grow.
+        The index of the leaf to grow. It is assumed that `var_tree` already
+        contains the target variable at this index.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -785,7 +801,8 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     num_available_split : int
         The number of available split points.
     """
-    l, r = split_range(var_tree, split_tree, max_split, leaf_index)
+    var = var_tree[leaf_index]
+    l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     split = random.randint(key, (), l, r)
     num_available_split = r - l
     return split, num_available_split
@@ -1045,7 +1062,7 @@ def count_available_var(var_tree, max_split, node_to_prune):
 
 def count_available_split(var_tree, split_tree, max_split, node_to_prune):
     """
-    Count the available split points at a given node.
+    Count the available split points at a given non-terminal node.
 
     Parameters
     ----------
@@ -1063,7 +1080,8 @@ def count_available_split(var_tree, split_tree, max_split, node_to_prune):
     num_available_split : int
         The number of available split points.
     """
-    l, r = split_range(var_tree, split_tree, max_split, node_to_prune)
+    var = var_tree[node_to_prune]
+    l, r = split_range(var_tree, split_tree, max_split, node_to_prune, var)
     return r - l
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
