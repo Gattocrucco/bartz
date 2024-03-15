@@ -9,7 +9,7 @@ warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', Fu
 
 # DGP config
 n = 2000 # number of datapoints (train + test)
-p = 1 # number of covariates
+p = 2 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     R = 2
@@ -17,8 +17,8 @@ def f(x): # conditional mean
     return jnp.cos(2 * jnp.pi / R * jnp.sqrt(r2))
 
 # generate data
-key = random.key(202403132205)
-key, key1, key2 = random.split(key, 3)
+key = random.key(202403142235)
+key, key1, key2, key3 = random.split(key, 4)
 X = random.normal(key1, (p, n))
 y = f(X) + sigma * random.normal(key2, (n,))
 
@@ -32,7 +32,7 @@ y_train, y_test = y[:n_train], y[n_train:]
 # y_test = y_train
 
 # fit with bartz
-bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=200, nskip=500, ndpost=500, seed=91287346)
+bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=200, nskip=500, ndpost=500, seed=key3)
 
 # compute RMSE
 resid = y_test - bart.yhat_test_mean
@@ -45,8 +45,8 @@ print(f'RMSE: {rmse.item():#.2g}')
 fig, axs = plt.subplots(1, 2, num='example1', clear=True, figsize=[10, 5])
 
 ax = axs[0]
-l = min(bart.yhat_test_mean.min(), y_test.min())
-h = max(bart.yhat_test_mean.max(), y_test.max())
+l = min(jnp.nanmin(bart.yhat_test_mean), y_test.min())
+h = max(jnp.nanmax(bart.yhat_test_mean), y_test.max())
 ax.plot([l, h], [l, h], color='lightgray')
 ax.plot(bart.yhat_test_mean, y_test, '.')
 ax.set(xlabel='predicted (post mean)', ylabel='true', title='true vs. predicted on test set')
