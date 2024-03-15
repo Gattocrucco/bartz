@@ -289,3 +289,17 @@ class BART:
 
     def _extract_sigma(self, trace, scale):
         return scale * jnp.sqrt(trace['sigma2'])
+
+    def _predict_debug(self, x_test):
+        from . import debug
+        x_test, x_test_fmt = self._process_covariate_input(x_test)
+        self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
+        x_test = self._bin_covariates(x_test, self._splits)
+        return debug.trace_evaluate_trees(self._main_trace, x_test)
+
+    def _show_tree(self, trace, i_sample, i_tree):
+        from . import debug
+        leaf_tree = trace['leaf_trees'][i_sample, i_tree]
+        var_tree = trace['var_trees'][i_sample, i_tree]
+        split_tree = trace['split_trees'][i_sample, i_tree]
+        debug.print_tree(leaf_tree, var_tree, split_tree)

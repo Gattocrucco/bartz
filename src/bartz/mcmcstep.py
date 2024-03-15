@@ -278,7 +278,7 @@ def mcmc_step(bart, key):
     ----------
     bart : dict
         A BART mcmc state, as created by `make_bart`.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -299,7 +299,7 @@ def mcmc_sample_trees(bart, key):
     ----------
     bart : dict
         A BART mcmc state, as created by `make_bart`.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -333,7 +333,7 @@ def mcmc_sample_tree(bart, key, i_tree):
     ----------
     bart : dict
         A BART mcmc state, as created by `make_bart`.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
     i_tree : int
         The index of the tree to sample.
@@ -407,7 +407,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     bart : dict
         A BART mcmc state, as created by `make_bart`. The ``'resid'`` field
         shall contain only the residuals w.r.t. the other trees.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
     i_tree : int
         The index of the tree to sample.
@@ -486,7 +486,7 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
         the tree under consideration.
     n_tree : int
         The number of trees in the forest.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -535,7 +535,7 @@ def choose_leaf(split_tree, key):
     ----------
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -584,7 +584,7 @@ def randint_masked(key, mask):
 
     Parameters
     ----------
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
     mask : bool array (n,)
         The mask indicating the allowed values.
@@ -631,7 +631,7 @@ def choose_variable(var_tree, max_split, leaf_index, key):
         The maximum split index for each variable.
     leaf_index : int
         The index of the leaf to grow.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -658,7 +658,7 @@ def fully_used_variables(var_tree, max_split, leaf_index):
     max_split : int array (p,)
         The maximum split index for each variable.
     leaf_index : int
-        The index of the node.
+        The index of the node, assumed to be valid for `var_tree`.
 
     Returns
     -------
@@ -670,9 +670,9 @@ def fully_used_variables(var_tree, max_split, leaf_index):
     """
     
     novar_fill = max_split.size
-    nparents = tree_depth(var_tree) - 1
-    var = jnp.full(nparents, novar_fill, minimal_unsigned_dtype(novar_fill))
-    count = jnp.zeros(nparents, minimal_unsigned_dtype(nparents))
+    max_nparents = tree_depth(var_tree) - 1
+    var = jnp.full(max_nparents, novar_fill, minimal_unsigned_dtype(novar_fill))
+    count = jnp.zeros(max_nparents, minimal_unsigned_dtype(max_nparents))
 
     carry = leaf_index, var, count
     def loop(carry, _):
@@ -686,7 +686,7 @@ def fully_used_variables(var_tree, max_split, leaf_index):
         var = var.at[var_index].set(parent_var, mode='drop')
         count = count.at[var_index].add(index.astype(bool), mode='drop')
         return (index, var, count), None
-    (_, var, count), _ = lax.scan(loop, carry, None, nparents)
+    (_, var, count), _ = lax.scan(loop, carry, None, max_nparents)
 
     max_count = max_split.at[var].get(mode='fill', fill_value=1)
     still_usable = count < max_count
@@ -700,7 +700,7 @@ def randint_exclude(key, sup, exclude):
 
     Parameters
     ----------
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
     sup : int
         The exclusive upper bound of the range.
@@ -746,9 +746,9 @@ def split_range(var_tree, split_tree, max_split, leaf_index):
     l, r : int
         The range of allowed splits is [l, r).
     """
-    nparents = tree_depth(var_tree) - 1
+    max_nparents = tree_depth(var_tree) - 1
     var = var_tree[leaf_index]
-    carry = 1, max_split[var].astype(jnp.int32) + 1, leaf_index
+    carry = 0, max_split[var].astype(jnp.int32) + 1, leaf_index
     def loop(carry, _):
         l, r, index = carry
         right_child = (index & 1).astype(bool)
@@ -758,8 +758,8 @@ def split_range(var_tree, split_tree, max_split, leaf_index):
         l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
         r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
         return (l, r, index), None
-    (l, r, _), _ = lax.scan(loop, carry, None, nparents)
-    return l, r
+    (l, r, _), _ = lax.scan(loop, carry, None, max_nparents)
+    return l + 1, r
 
 def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -775,7 +775,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
         The maximum split index for each variable.
     leaf_index : int
         The index of the leaf to grow.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -962,7 +962,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
         the tree under consideration.
     n_tree : int
         The number of trees in the forest.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -1001,7 +1001,7 @@ def choose_leaf_parent(split_tree, key):
     ----------
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
@@ -1075,7 +1075,7 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
     bart : dict
         A BART mcmc state, as created by `make_bart`. The ``'resid'`` field
         shall contain the residuals only w.r.t. the other trees.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
     i_tree : int
         The index of the tree to sample.
@@ -1099,10 +1099,9 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
     prec_prior = len(bart['leaf_trees'])
     var_post = 1 / (prec_lk + prec_prior)
     mean_post = resid_tree / bart['sigma2'] * var_post # = mean_lk * prec_lk * var_post
-    mean_post = jnp.where(count_tree, mean_post, jnp.nan)
-        # TODO do this only in a debugging mode
 
     z = random.normal(key, mean_post.shape, mean_post.dtype)
+        # TODO maybe use long float here, I guess this part is not a bottleneck
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
     leaf_tree = leaf_tree.at[0].set(0) # this 0 is used by evaluate_tree
     bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
@@ -1177,7 +1176,7 @@ def mcmc_sample_sigma(bart, key):
     ----------
     bart : dict
         A BART mcmc state, as created by `make_bart`.
-    key : PRNGKey
+    key : jax.dtypes.prng_key array
         A jax random key.
 
     Returns
