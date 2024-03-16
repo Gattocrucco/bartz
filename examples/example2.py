@@ -12,8 +12,8 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 32000 # number of datapoints (train + test)
-p = 2 # number of covariates
+n = 1000 # number of datapoints (train + test)
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -35,7 +35,7 @@ X_test = X_train
 y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=50, nskip=100, ndpost=100, numcut=255, printevery=20)
+kw = dict(ntree=1, nskip=20, ndpost=20, numcut=255, printevery=20)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key3)
 
 # fit with BART

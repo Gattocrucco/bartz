@@ -298,13 +298,13 @@ class BART:
         x_test = self._bin_covariates(x_test, self._splits)
         return debug.trace_evaluate_trees(self._main_trace, x_test)
 
-    def _show_tree(self, i_sample, i_tree):
+    def _show_tree(self, i_sample, i_tree, print_all=False):
         from . import debug
         trace = self._main_trace
         leaf_tree = trace['leaf_trees'][i_sample, i_tree]
         var_tree = trace['var_trees'][i_sample, i_tree]
         split_tree = trace['split_trees'][i_sample, i_tree]
-        debug.print_tree(leaf_tree, var_tree, split_tree)
+        debug.print_tree(leaf_tree, var_tree, split_tree, print_all)
 
     def _sigma_harmonic_mean(self, prior=False):
         bart = self._mcmc_state

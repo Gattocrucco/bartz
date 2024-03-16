@@ -26,12 +26,15 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
     join = '│  '
     space = '   '
     down = '┐'
+    bottom = '╢' # '┨' # 
 
     def traverse_tree(index, depth, indent, first_indent, next_indent, unused):
         if index >= len(leaf_tree):
             return
 
         is_leaf = split_tree[index] == 0
+        left_child = 2 * index
+        right_child = 2 * index + 1
 
         if print_all:
             if unused:
@@ -48,14 +51,13 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
             else:
                 node_str = f'{var_tree[index]}: {split_tree[index]}'
 
-        if is_leaf:
-            link = ' '
-        else:
+        if not is_leaf:
             link = down
+        elif not print_all and left_child >= len(leaf_tree):
+            link = bottom
+        else:
+            link = ' '
         print(f'{indent}{first_indent}{link}{node_str}')
-
-        left_child = 2 * index
-        right_child = 2 * index + 1
 
         indent += next_indent
         unused = unused or is_leaf
