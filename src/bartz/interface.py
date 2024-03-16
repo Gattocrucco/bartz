@@ -103,6 +103,8 @@ class BART:
         The prior mean of the latent mean function.
     scale : float
         The prior standard deviation of the latent mean function.
+    lamda : float
+        The prior harmonic mean of the error variance.
     yhat_train : array (ndpost, n)
         The conditional posterior mean at `x_train` for each MCMC iteration.
     yhat_train_mean : array (n,)
@@ -119,9 +121,40 @@ class BART:
     Methods
     -------
     predict
+
+    Notes
+    -----
+    This interface imitates the function `wbart` from the R package `BART`, but
+    with these differences:
+
+    - If `x_train` and `x_test` are matrices, they have covariates as rows
+      instead of columns.
+    - The error variance parameter is called `lamda` instead of `lambda`.
+    - `usequants` is always `True`.
+    - `rm_const` is always `False`.
+    - The default `numcut` is 255 instead of 100.
+    - There are some additional attributes, and some missing.
     """
 
-    def __init__(self, x_train, y_train, *, x_test=None, sigest=None, sigdf=3, sigquant=0.9, k=2, power=2, base=0.95, maxdepth=6, lamda=None, offset=None, ntree=200, numcut=255, ndpost=1000, nskip=100, keepevery=1, printevery=100, seed=0):
+    def __init__(self, x_train, y_train, *,
+        x_test=None,
+        sigest=None,
+        sigdf=3,
+        sigquant=0.9,
+        k=2,
+        power=2,
+        base=0.95,
+        maxdepth=6,
+        lamda=None,
+        offset=None,
+        ntree=200,
+        numcut=255,
+        ndpost=1000,
+        nskip=100,
+        keepevery=1,
+        printevery=100,
+        seed=0,
+        ):
 
         x_train, x_train_fmt = self._process_covariate_input(x_train)
         
@@ -150,6 +183,7 @@ class BART:
 
         self.offset = offset
         self.scale = scale
+        self.lamda = lamda * scale
         self.yhat_train = yhat_train
         self.yhat_train_mean = yhat_train_mean
         self.sigma = sigma
@@ -186,7 +220,8 @@ class BART:
         yhat_test = self._transform_output(yhat_test, self.offset, self.scale)
         return yhat_test
 
-    def _process_covariate_input(self, x):
+    @staticmethod
+    def _process_covariate_input(x):
         if hasattr(x, 'columns'):
             fmt = dict(kind='dataframe', columns=x.columns)
             x = x.to_numpy().T
@@ -196,10 +231,12 @@ class BART:
         assert x.ndim == 2
         return x, fmt
 
-    def _check_compatible_formats(self, fmt1, fmt2):
+    @staticmethod
+    def _check_compatible_formats(fmt1, fmt2):
         assert fmt1 == fmt2
 
-    def _process_response_input(self, y):
+    @staticmethod
+    def _process_response_input(y):
         if hasattr(y, 'to_numpy'):
             fmt = dict(kind='series', name=y.name)
             y = y.to_numpy()
@@ -209,11 +246,13 @@ class BART:
         assert y.ndim == 1
         return y, fmt
 
-    def _check_same_length(self, x1, x2):
+    @staticmethod
+    def _check_same_length(x1, x2):
         get_length = lambda x: x.shape[-1]
         assert get_length(x1) == get_length(x2)
 
-    def _process_noise_variance_settings(self, x_train, y_train, sigest, sigdf, sigquant, lamda):
+    @staticmethod
+    def _process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda):
         if lamda is not None:
             return lamda
         else:
@@ -233,7 +272,8 @@ class BART:
             invchi2rid = invchi2 * sigdf
             return sigest2 / invchi2rid
 
-    def _process_offset_settings(self, y_train, offset):
+    @staticmethod
+    def _process_offset_settings(y_train, offset):
         if offset is not None:
             return offset
         elif y_train.size < 1:
@@ -241,22 +281,27 @@ class BART:
         else:
             return y_train.mean()
 
-    def _process_scale_settings(self, y_train, k):
+    @staticmethod
+    def _process_scale_settings(y_train, k):
         if y_train.size < 2:
             return 1
         else:
             return (y_train.max() - y_train.min()) / (2 * k)
 
-    def _determine_splits(self, x_train, numcut):
+    @staticmethod
+    def _determine_splits(x_train, numcut):
         return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
 
-    def _bin_covariates(self, x, splits):
+    @staticmethod
+    def _bin_covariates(x, splits):
         return prepcovars.bin_covariates(x, splits)
 
-    def _transform_input(self, y, offset, scale):
+    @staticmethod
+    def _transform_input(y, offset, scale):
         return (y - offset) / scale
 
-    def _setup_mcmc(self, x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree):
+    @staticmethod
+    def _setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
@@ -273,7 +318,8 @@ class BART:
             large_float_dtype=jnp.float32,
         )
 
-    def _run_mcmc(self, mcmc_state, ndpost, nskip, keepevery, printevery, seed):
+    @staticmethod
+    def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed):
         if isinstance(seed, jax.Array) and jnp.issubdtype(seed.dtype, jax.dtypes.prng_key):
             key = seed
         else:
@@ -281,13 +327,16 @@ class BART:
         callback = mcmcloop.make_simple_print_callback(printevery)
         return mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
 
-    def _predict(self, trace, x):
+    @staticmethod
+    def _predict(trace, x):
         return mcmcloop.evaluate_trace(trace, x)
 
-    def _transform_output(self, y, offset, scale):
+    @staticmethod
+    def _transform_output(y, offset, scale):
         return offset + scale * y
 
-    def _extract_sigma(self, trace, scale):
+    @staticmethod
+    def _extract_sigma(trace, scale):
         return scale * jnp.sqrt(trace['sigma2'])
 
     

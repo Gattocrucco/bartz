@@ -49,7 +49,7 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
             if is_leaf:
                 node_str = f'{leaf_tree[index]:#.2g}'
             else:
-                node_str = f'{var_tree[index]}: {split_tree[index]}'
+                node_str = f'({var_tree[index]}: {split_tree[index]})'
 
         if not is_leaf:
             link = down

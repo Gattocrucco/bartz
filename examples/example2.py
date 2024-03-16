@@ -12,33 +12,42 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 1000 # number of datapoints (train + test)
+n = 100 # number of datapoints
 p = 1 # number of covariates
-sigma = 0.1 # noise standard deviation
-def f(x): # conditional mean
-    T = 2
-    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+sigma = 0 # noise standard deviation
+# def f(x): # conditional mean
+#     T = 2
+#     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+# def f(x):
+#     return jnp.sum(x, axis=0)
+def f(x):
+    return jnp.sum(jnp.abs(x), axis=0)
+# def gen_X(key, p, n):
+#     random.normal(key, (p, n))
+def gen_X(key, p, n):
+    return jnp.repeat(jnp.arange(n)[None, :] - n / 2, p, axis=0)
+
+# set up random seed
+key = random.key(202403142235)
+key, key1, key2, key3, key4, key5 = random.split(key, 6)
 
 # generate data
-key = random.key(202403142235)
-key, key1, key2, key3 = random.split(key, 4)
-X = random.normal(key1, (p, n))
-y = f(X) + sigma * random.normal(key2, (n,))
-
-# split in train/test
-n_train = n // 2
-X_train, X_test = X[:, :n_train], X[:, n_train:]
-y_train, y_test = y[:n_train], y[n_train:]
+X_train = gen_X(key1, p, n)
+y_train = f(X_train) + sigma * random.normal(key2, (n,))
+X_test = gen_X(key3, p, n)
+y_test = f(X_test) + sigma * random.normal(key4, (n,))
 
 # set test = train for debugging
 X_test = X_train
 y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=1, nskip=20, ndpost=20, numcut=255, printevery=20)
-bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key3)
+kw = dict(ntree=1, nskip=100, ndpost=100, numcut=255, printevery=20)
+bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 # fit with BART
+if 'lamda' in kw:
+    kw.update({'lambda': kw.pop('lamda')})
 bart2 = BART.mc_gbart(X_train.T, y_train, X_test.T, **kw, usequants=True, rm_const=False, mc_cores=1, seed=20240314)
 
 barts = dict(bartz=bart1, BART=bart2)
@@ -67,9 +76,9 @@ ax.set(xlabel='predicted (post mean)', ylabel='true', title='true vs. predicted 
 ax.legend()
 
 ax = axs[1]
-ax.plot(X_test[0], y_test, '.', label='data')
 for label, bart in barts.items():
-    ax.plot(X_test[0], bart.yhat_test_mean, 'o', label=label, markerfacecolor='none')
+    ax.plot(X_test[0], bart.yhat_test_mean, '.', label=label)
+ax.plot(X_test[0], y_test, 'o', label='data', markerfacecolor='none')
 ax.legend()
 
 fig.show()
