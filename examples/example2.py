@@ -12,13 +12,12 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 2000 # number of datapoints (train + test)
+n = 32000 # number of datapoints (train + test)
 p = 2 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
-    R = 2
-    r2 = jnp.einsum('ij,ij->j', x, x)
-    return jnp.cos(2 * jnp.pi / R * jnp.sqrt(r2))
+    T = 2
+    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
 
 # generate data
 key = random.key(202403142235)
@@ -32,11 +31,11 @@ X_train, X_test = X[:, :n_train], X[:, n_train:]
 y_train, y_test = y[:n_train], y[n_train:]
 
 # set test = train for debugging
-# X_test = X_train
-# y_test = y_train
+X_test = X_train
+y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=200, nskip=500, ndpost=500, numcut=255)
+kw = dict(ntree=50, nskip=100, ndpost=100, numcut=255, printevery=20)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key3)
 
 # fit with BART

@@ -931,7 +931,7 @@ def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_halfsize, num_available
     depth = index_depth(leaf_to_grow, tree_halfsize)
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal[depth + 1]
-    return cp_children * cp_children * p_parent / (1 - p_parent) / num_available_var / num_available_split
+    return cp_children * cp_children * p_parent / ((1 - p_parent) * num_available_var * num_available_split)
 
 def index_depth(index, tree_length):
     """
@@ -1210,8 +1210,8 @@ def mcmc_sample_sigma(bart, key):
     """
     bart = bart.copy()
 
-    alpha = bart['sigma2_alpha'] + bart['resid'].size / 2
     resid = bart['resid']
+    alpha = bart['sigma2_alpha'] + resid.size / 2
     norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
     beta = bart['sigma2_beta'] + norm / 2
 

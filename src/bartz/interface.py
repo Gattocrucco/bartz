@@ -290,6 +290,7 @@ class BART:
     def _extract_sigma(self, trace, scale):
         return scale * jnp.sqrt(trace['sigma2'])
 
+    
     def _predict_debug(self, x_test):
         from . import debug
         x_test, x_test_fmt = self._process_covariate_input(x_test)
@@ -297,9 +298,30 @@ class BART:
         x_test = self._bin_covariates(x_test, self._splits)
         return debug.trace_evaluate_trees(self._main_trace, x_test)
 
-    def _show_tree(self, trace, i_sample, i_tree):
+    def _show_tree(self, i_sample, i_tree):
         from . import debug
+        trace = self._main_trace
         leaf_tree = trace['leaf_trees'][i_sample, i_tree]
         var_tree = trace['var_trees'][i_sample, i_tree]
         split_tree = trace['split_trees'][i_sample, i_tree]
         debug.print_tree(leaf_tree, var_tree, split_tree)
+
+    def _sigma_harmonic_mean(self, prior=False):
+        bart = self._mcmc_state
+        if prior:
+            alpha = bart['sigma2_alpha']
+            beta = bart['sigma2_beta']
+        else:
+            resid = bart['resid']
+            alpha = bart['sigma2_alpha'] + resid.size / 2
+            norm2 = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
+            beta = bart['sigma2_beta'] + norm2 / 2
+        sigma2 = beta / alpha
+        return jnp.sqrt(sigma2) * self.scale
+
+    def _compare_resid(self):
+        bart = self._mcmc_state
+        resid1 = bart['resid']
+        yhat = mcmcstep.evaluate_tree_vmap_x(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
+        resid2 = bart['y'] - yhat
+        return resid1, resid2

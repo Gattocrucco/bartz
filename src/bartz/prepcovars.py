@@ -61,6 +61,9 @@ def quantilized_splits_from_matrix_impl(x, out_length):
     actual_length = jnp.count_nonzero(u < huge) - 1
     midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.arange(out_length) * (actual_length - 1) // (out_length - 1) # <-- potential integer overflow with int32!
+        # TODO: this indices expression always includes the first and last
+        # elements, I should make it longer by 2 and then exclude the
+        # extremities. Or not? Or at the level of x rather than the midpoints?
     decimated_midpoints = midpoints[indices]
     truncated_midpoints = midpoints[:out_length]
     splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
