@@ -68,7 +68,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         n_burn, n_save, n_skip : int
             The corresponding arguments as-is.
 
-        Since this function is called under jax jit, the values are not
+        Since this function is called under the jax jit, the values are not
         available at the time the Python code is executed. Use the utilities in
         `jax.debug` to access the values at actual runtime.
     key : jax.dtypes.prng_key array
@@ -124,6 +124,8 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     return bart, burnin_trace, main_trace
 
+    # TODO I could add an argument callback_state to carry over state. This would allow e.g. accumulating counts. If I made the callback return the mcmc state, I could modify the mcmc from the callback.
+
 @functools.lru_cache
     # cache to make the callback function object unique, such that the jit
     # of run_mcmc recognizes it
@@ -175,8 +177,7 @@ def evaluate_trace(trace, X):
     y : array (n_trace, n)
         The predictions for each iteration of the MCMC.
     """
-    return evaluate_trace_impl(trace, X)
-
-@functools.partial(jax.vmap, in_axes=(0, None))
-def evaluate_trace_impl(trace, X):
-    return mcmcstep.evaluate_tree_vmap_x(X, trace['leaf_trees'], trace['var_trees'], trace['split_trees'], jnp.float32)
+    def loop(_, state):
+        return None, mcmcstep.evaluate_tree_vmap_x(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
+    _, y = lax.scan(loop, None, trace)
+    return y

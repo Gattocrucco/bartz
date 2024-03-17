@@ -22,6 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import functools
+
 import jax
 import jax.numpy as jnp
 
@@ -176,10 +178,6 @@ class BART:
         mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree)
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
-        yhat_train = self._predict(main_trace, x_train)
-        yhat_train = self._transform_output(yhat_train, offset, scale)
-        yhat_train_mean = yhat_train.mean(axis=0)
-
         sigma = self._extract_sigma(main_trace, scale)
         first_sigma = self._extract_sigma(burnin_trace, scale)
 
@@ -187,8 +185,6 @@ class BART:
         self.scale = scale
         self.lamda = lamda * scale
         self.ntree = ntree
-        self.yhat_train = yhat_train
-        self.yhat_train_mean = yhat_train_mean
         self.sigma = sigma
         self.first_sigma = first_sigma
 
@@ -201,6 +197,16 @@ class BART:
             yhat_test = self.predict(x_test)
             self.yhat_test = yhat_test
             self.yhat_test_mean = yhat_test.mean(axis=0)
+
+    @functools.cached_property
+    def yhat_train(self):
+        x_train = self._mcmc_state['X']
+        yhat_train = self._predict(self._main_trace, x_train)
+        return self._transform_output(yhat_train, self.offset, self.scale)
+
+    @functools.cached_property
+    def yhat_train_mean(self):
+        return self.yhat_train.mean(axis=0)
 
     def predict(self, x_test):
         """
@@ -220,8 +226,7 @@ class BART:
         self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
         x_test = self._bin_covariates(x_test, self._splits)
         yhat_test = self._predict(self._main_trace, x_test)
-        yhat_test = self._transform_output(yhat_test, self.offset, self.scale)
-        return yhat_test
+        return self._transform_output(yhat_test, self.offset, self.scale)
 
     @staticmethod
     def _process_covariate_input(x):
