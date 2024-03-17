@@ -839,7 +839,7 @@ def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_avail
         # if num_growable == 1, then the starting tree is a root, and can not be pruned
     p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
         # if num_prunable == 2^(d - 2), then all leaf parents are at level d - 2, which means that all leaves are at level d - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
-    return p_grow / p_prune * num_growable / num_prunable * num_available_var * num_available_split
+    return p_prune / p_grow * num_growable / num_prunable * num_available_var * num_available_split
 
 def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n_tree):
     """
