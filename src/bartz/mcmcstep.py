@@ -107,7 +107,7 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
     if is_forest:
         m, _ = leaf_trees.shape
         forest_shape = m,
-        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1))
+        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1)),
     else:
         forest_shape = ()
         tree_index = ()
@@ -510,19 +510,18 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     
     leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, key1)
     
-    var, num_available_var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
+    var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
-    split, num_available_split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
+    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
     split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
     allowed = num_growable > 0
 
-    trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
+    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, leaf_to_grow)
     likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
-    tree_ratio = compute_tree_ratio(p_nonterminal, leaf_to_grow, var_tree.size, num_available_var, num_available_split)
 
-    ratio = trans_ratio * likelihood_ratio * tree_ratio
+    ratio = trans_tree_ratio * likelihood_ratio
 
     return var_tree, split_tree, allowed, ratio
 
@@ -767,9 +766,6 @@ def randint_exclude(key, sup, exclude):
         A random integer in the range ``[0, sup)``, and which satisfies
         ``u not in exclude``. If all values in the range are excluded, return
         `sup`.
-    num_allowed : int
-        The number of allowed values in the range, after excluding the values in
-        `exclude`.
     """
     exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
     num_allowed = sup - jnp.count_nonzero(exclude < sup)
@@ -777,7 +773,7 @@ def randint_exclude(key, sup, exclude):
     def loop(u, i):
         return jnp.where(i <= u, u + 1, u), None
     u, _ = lax.scan(loop, u, exclude)
-    return u, num_allowed
+    return u
 
 def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -801,18 +797,14 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     -------
     split : int
         The split point.
-    num_available_split : int
-        The number of available split points.
     """
     var = var_tree[leaf_index]
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
-    split = random.randint(key, (), l, r)
-    num_available_split = r - l
-    return split, num_available_split
+    return random.randint(key, (), l, r)
 
-def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, tree_halfsize):
+def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonterminal, leaf_to_grow):
     """
-    Compute the transition ratio of a grow move.
+    Compute the product of the transition and prior ratios of a grow move.
 
     Parameters
     ----------
@@ -821,25 +813,35 @@ def compute_trans_ratio(num_growable, num_prunable, num_available_var, num_avail
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         leaf to be grown to a non-terminal node.
-    num_available_var : int
-        The number of variables that have a non-empty split range on the leaf to
-        be grown.
-    num_available_split : int
-        The number of available split points on the leaf to be grown, for the
-        selected variable.
     tree_halfsize : int
         Half the length of the tree array, i.e., 2 ** (d - 1).
+    p_nonterminal : array (d - 1,)
+        The probability of a nonterminal node at each depth.
+    leaf_to_grow : int
+        The index of the leaf to grow.
 
     Returns
     -------
     ratio : float
-        The transition ratio P(new tree -> old tree) / P(old tree -> new tree).
+        The transition ratio P(new tree -> old tree) / P(old tree -> new tree)
+        times the prior ratio P(new tree) / P(old tree).
     """
+
+    # the two ratios also contain factors num_available_split *
+    # num_available_var, but they cancel out
+
     p_grow = jnp.where(num_growable > 1, 0.5, 1)
         # if num_growable == 1, then the starting tree is a root, and can not be pruned
     p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
         # if num_prunable == 2^(d - 2), then all leaf parents are at level d - 2, which means that all leaves are at level d - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
-    return p_prune / p_grow * num_growable / num_prunable * num_available_var * num_available_split
+    trans_ratio = p_prune * num_growable / (p_grow * num_prunable)
+
+    depth = index_depth(leaf_to_grow, tree_halfsize)
+    p_parent = p_nonterminal[depth]
+    cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
+    tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
+
+    return trans_ratio * tree_ratio
 
 def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n_tree):
     """
@@ -902,35 +904,6 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     )
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
-
-def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_halfsize, num_available_var, num_available_split):
-    """
-    Compute the prior ratio of a grow move.
-
-    Parameters
-    ----------
-    p_nonterminal : array (d - 1,)
-        The probability of a nonterminal node at each depth.
-    leaf_to_grow : int
-        The index of the leaf to grow.
-    tree_halfsize : int
-        Half the length of the tree array, i.e., 2 ** (d - 1).
-    num_available_var : int
-        The number of variables that have a non-empty split range on the leaf to
-        be grown.
-    num_available_split : int
-        The number of available split points on the leaf to be grown, for the
-        selected variable.
-
-    Returns
-    -------
-    ratio : float
-        The prior ratio P(new tree) / P(old tree).
-    """
-    depth = index_depth(leaf_to_grow, tree_halfsize)
-    p_parent = p_nonterminal[depth]
-    cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
-    return cp_children * cp_children * p_parent / ((1 - p_parent) * num_available_var * num_available_split)
 
 def index_depth(index, tree_length):
     """
@@ -997,17 +970,14 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
         The Metropolis-Hastings ratio.
     """
     node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, key)
-    num_available_var = count_available_var(var_tree, split_tree, max_split, node_to_prune)
-    num_available_split = count_available_split(var_tree, split_tree, max_split, node_to_prune)
 
     allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
-    trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
-    log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree)
-    tree_ratio = compute_tree_ratio(p_nonterminal, node_to_prune, var_tree.size, num_available_var, num_available_split)
+    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, node_to_prune)
+    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree)
 
-    ratio = trans_ratio * log_likelihood_ratio * tree_ratio
-    ratio = 1 / ratio
+    ratio = trans_tree_ratio * likelihood_ratio
+    ratio = 1 / ratio # Question: should I use lax.reciprocal for this?
 
     split_tree = split_tree.at[node_to_prune].set(0)
 
@@ -1041,53 +1011,6 @@ def choose_leaf_parent(split_tree, key):
     is_growable_leaf = is_actual_leaf(split_tree.at[node_to_prune].set(0))
     num_growable = jnp.count_nonzero(is_growable_leaf)
     return node_to_prune, num_prunable, num_growable
-
-def count_available_var(var_tree, split_tree, max_split, node_to_prune):
-    """
-    Count the variables that have a non-empty split range at a given node.
-
-    Parameters
-    ----------
-    var_tree : int array (2 ** (d - 1),)
-        The variable indices of the tree.
-    split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
-    max_split : int array (p,)
-        The maximum split index for each variable.
-    node_to_prune : int
-        The index of the node.
-
-    Returns
-    -------
-    num_available_var : int
-        The number of variables that have a non-empty split range.
-    """
-    forbidden_var = fully_used_variables(var_tree, split_tree, max_split, node_to_prune)
-    return max_split.size - jnp.count_nonzero(forbidden_var < max_split.size)
-
-def count_available_split(var_tree, split_tree, max_split, node_to_prune):
-    """
-    Count the available split points at a given non-terminal node.
-
-    Parameters
-    ----------
-    var_tree : int array (2 ** (d - 1),)
-        The variable indices of the tree.
-    split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
-    max_split : int array (p,)
-        The maximum split index for each variable.
-    node_to_prune : int
-        The index of the node.
-
-    Returns
-    -------
-    num_available_split : int
-        The number of available split points.
-    """
-    var = var_tree[node_to_prune]
-    l, r = split_range(var_tree, split_tree, max_split, node_to_prune, var)
-    return r - l
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     """
