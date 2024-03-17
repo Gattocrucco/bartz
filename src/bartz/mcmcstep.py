@@ -520,10 +520,10 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     allowed = num_growable > 0
 
     trans_ratio = compute_trans_ratio(num_growable, num_prunable, num_available_var, num_available_split, split_tree.size)
-    log_likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
+    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
     tree_ratio = compute_tree_ratio(p_nonterminal, leaf_to_grow, var_tree.size, num_available_var, num_available_split)
 
-    ratio = trans_ratio * log_likelihood_ratio * tree_ratio
+    ratio = trans_ratio * likelihood_ratio * tree_ratio
 
     return var_tree, split_tree, allowed, ratio
 
@@ -870,20 +870,20 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
         The likelihood ratio P(data | new tree) / P(data | old tree).
     """
 
-    resid2_tree, count_tree = agg_values(
+    resid_tree, count_tree = agg_values(
         X,
         var_tree,
         split_tree,
-        resid * resid,
+        resid,
         sigma2.dtype,
     )
 
     left_child = new_node << 1
     right_child = left_child + 1
 
-    left_resid2 = resid2_tree[left_child]
-    right_resid2 = resid2_tree[right_child]
-    total_resid2 = left_resid2 + right_resid2
+    left_resid = resid_tree[left_child]
+    right_resid = resid_tree[right_child]
+    total_resid = left_resid + right_resid
 
     left_count = count_tree[left_child]
     right_count = count_tree[right_child]
@@ -897,9 +897,9 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     sqrt_term = sigma2 * sigma2_total / (sigma2_left * sigma2_right)
 
     exp_term = sigma_mu2 / (2 * sigma2) * (
-        left_resid2 / sigma2_left +
-        right_resid2 / sigma2_right -
-        total_resid2 / sigma2_total
+        left_resid * left_resid / sigma2_left +
+        right_resid * right_resid / sigma2_right -
+        total_resid * total_resid / sigma2_total
     )
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
@@ -930,7 +930,7 @@ def compute_tree_ratio(p_nonterminal, leaf_to_grow, tree_halfsize, num_available
     """
     depth = index_depth(leaf_to_grow, tree_halfsize)
     p_parent = p_nonterminal[depth]
-    cp_children = 1 - p_nonterminal[depth + 1]
+    cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
     return cp_children * cp_children * p_parent / ((1 - p_parent) * num_available_var * num_available_split)
 
 def index_depth(index, tree_length):

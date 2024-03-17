@@ -12,20 +12,20 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 100 # number of datapoints
-p = 1 # number of covariates
-sigma = 0 # noise standard deviation
-# def f(x): # conditional mean
-#     T = 2
-#     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+n = 20000 # number of datapoints
+p = 10 # number of covariates
+sigma = 0.1 # noise standard deviation
+def f(x): # conditional mean
+    T = 2
+    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
 # def f(x):
 #     return jnp.sum(x, axis=0)
-def f(x):
-    return jnp.sum(jnp.abs(x), axis=0)
-# def gen_X(key, p, n):
-#     random.normal(key, (p, n))
+# def f(x):
+#     return jnp.sum(jnp.abs(x), axis=0)
 def gen_X(key, p, n):
-    return jnp.repeat(jnp.arange(n)[None, :] - n / 2, p, axis=0)
+    return random.normal(key, (p, n))
+# def gen_X(key, p, n):
+#     return jnp.repeat(jnp.arange(n)[None, :] - n / 2, p, axis=0)
 
 # set up random seed
 key = random.key(202403142235)
@@ -38,11 +38,11 @@ X_test = gen_X(key3, p, n)
 y_test = f(X_test) + sigma * random.normal(key4, (n,))
 
 # set test = train for debugging
-X_test = X_train
-y_test = y_train
+# X_test = X_train
+# y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=1, nskip=100, ndpost=100, numcut=255, printevery=20)
+kw = dict(ntree=200, nskip=100, ndpost=100, numcut=255, printevery=20)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 # fit with BART

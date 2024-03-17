@@ -105,6 +105,8 @@ class BART:
         The prior standard deviation of the latent mean function.
     lamda : float
         The prior harmonic mean of the error variance.
+    ntree : int
+        The number of trees.
     yhat_train : array (ndpost, n)
         The conditional posterior mean at `x_train` for each MCMC iteration.
     yhat_train_mean : array (n,)
@@ -184,6 +186,7 @@ class BART:
         self.offset = offset
         self.scale = scale
         self.lamda = lamda * scale
+        self.ntree = ntree
         self.yhat_train = yhat_train
         self.yhat_train_mean = yhat_train_mean
         self.sigma = sigma
@@ -374,3 +377,31 @@ class BART:
         yhat = mcmcstep.evaluate_tree_vmap_x(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
         resid2 = bart['y'] - yhat
         return resid1, resid2
+
+    def _avg_acc(self):
+        trace = self._main_trace
+        def acc(prefix):
+            acc = trace[f'{prefix}_acc_count']
+            prop = trace[f'{prefix}_prop_count']
+            return acc.sum() / prop.sum()
+        return acc('grow'), acc('prune')
+
+    def _avg_prop(self):
+        trace = self._main_trace
+        def prop(prefix):
+            return trace[f'{prefix}_prop_count'].sum()
+        pgrow = prop('grow')
+        pprune = prop('prune')
+        total = pgrow + pprune
+        return pgrow / total, pprune / total
+
+    def _avg_move(self):
+        agrow, aprune = self._avg_acc()
+        pgrow, pprune = self._avg_prop()
+        return agrow * pgrow, aprune * pprune
+
+    def _max_depth(self):
+        from . import debug
+        trace = self._main_trace
+        split_trees = trace['split_trees']
+        return debug.trace_max_depth(split_trees)

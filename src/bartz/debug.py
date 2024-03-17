@@ -69,3 +69,18 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
         traverse_tree(right_child, depth + 1, indent, corner, space, unused)
 
     traverse_tree(1, 0, '', '', '', False)
+
+def tree_max_depth(split_tree):
+    split_tree = jnp.concatenate([split_tree, jnp.zeros_like(split_tree)])
+    is_leaf = mcmcstep.is_actual_leaf(split_tree)
+    depth_vec = jax.vmap(mcmcstep.index_depth, in_axes=(0, None))
+    index = jnp.arange(split_tree.size)
+    depth = depth_vec(index, split_tree.size)
+    depth = jnp.where(is_leaf, depth, -1)
+    return jnp.max(depth)
+
+def forest_max_depth(split_trees):
+    return jnp.max(jax.vmap(tree_max_depth)(split_trees))
+
+def trace_max_depth(split_trees_trace):
+    return jax.vmap(forest_max_depth)(split_trees_trace)
