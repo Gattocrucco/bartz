@@ -104,12 +104,10 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
     """
 
     is_forest = leaf_trees.ndim == 2
-    depth = tree_depth(leaf_trees)
-    
     if is_forest:
         m, _ = leaf_trees.shape
         forest_shape = m,
-        tree_index = jnp.arange(m),
+        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1))
     else:
         forest_shape = ()
         tree_index = ()
@@ -147,6 +145,7 @@ def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
         carry = leaf_found, out, node_index
         return carry, _
 
+    depth = tree_depth(leaf_trees)
     (_, out, _), _ = lax.scan(loop, carry, None, depth)
     return out
 
