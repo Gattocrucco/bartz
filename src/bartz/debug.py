@@ -5,7 +5,6 @@ from jax import numpy as jnp
 
 from . import grove
 
-@functools.partial(jax.vmap, in_axes=(0, None)) # vectorize over trace
 def trace_evaluate_trees(bart, X):
     """
     Evaluate all trees, for all samples, at all x. Out axes:
@@ -13,10 +12,13 @@ def trace_evaluate_trees(bart, X):
         1: tree
         2: X
     """
-    return evaluate_all_trees_impl(X, bart['leaf_trees'], bart['var_trees'], bart['split_trees'])
+    def loop(_, bart):
+        return None, evaluate_all_trees(X, bart['leaf_trees'], bart['var_trees'], bart['split_trees'])
+    _, y = jax.lax.scan(loop, None, bart)
+    return y
 
 @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0)) # vectorize over forest
-def evaluate_all_trees_impl(X, leaf_trees, var_trees, split_trees):
+def evaluate_all_trees(X, leaf_trees, var_trees, split_trees):
     return grove.evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, jnp.float32)
 
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):

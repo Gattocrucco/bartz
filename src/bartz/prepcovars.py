@@ -61,7 +61,7 @@ def quantilized_splits_from_matrix_impl(x, out_length):
     actual_length = jnp.count_nonzero(u < huge) - 1
     midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]
-    indices = jnp.around(indices).astype(int)
+    indices = jnp.around(indices).astype(grove.minimal_unsigned_dtype(midpoints.size - 1))
         # indices calculation with float rather than int to avoid potential
         # overflow with int32, and to round to nearest instead of rounding down
     decimated_midpoints = midpoints[indices]
