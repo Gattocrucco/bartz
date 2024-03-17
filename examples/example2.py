@@ -12,7 +12,7 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 20000 # number of datapoints
+n = 100 # number of datapoints
 p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
@@ -79,6 +79,15 @@ ax = axs[1]
 for label, bart in barts.items():
     ax.plot(X_test[0], bart.yhat_test_mean, '.', label=label)
 ax.plot(X_test[0], y_test, 'o', label='data', markerfacecolor='none')
+ax.legend()
+
+fig.show()
+
+# plot posterior histograms of sigma
+fig, ax = plt.subplots(num='example2-sigma', clear=True)
+
+ax.hist([bart1.sigma, bart2.sigma], bins='auto', density=True, label=list(barts))
+ax.set(title='Posterior on error sdev', xlabel='$\\sigma$', ylabel='probability density')
 ax.legend()
 
 fig.show()
