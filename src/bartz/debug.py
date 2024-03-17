@@ -3,7 +3,7 @@ import functools
 import jax
 from jax import numpy as jnp
 
-from . import mcmcstep
+from . import grove
 
 @functools.partial(jax.vmap, in_axes=(0, None)) # vectorize over trace
 def trace_evaluate_trees(bart, X):
@@ -70,17 +70,16 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
     traverse_tree(1, 0, '', '', '', False)
 
-def tree_max_depth(split_tree):
-    split_tree = jnp.concatenate([split_tree, jnp.zeros_like(split_tree)])
-    is_leaf = grove.is_actual_leaf(split_tree)
-    depth_vec = jax.vmap(mcmcstep.index_depth, in_axes=(0, None))
-    index = jnp.arange(split_tree.size)
-    depth = depth_vec(index, split_tree.size)
-    depth = jnp.where(is_leaf, depth, -1)
+def tree_actual_depth(split_tree):
+    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True)
+    depth = grove.tree_depths(is_leaf.size)
+    depth = jnp.where(is_leaf, depth, 0)
     return jnp.max(depth)
 
-def forest_max_depth(split_trees):
-    return jnp.max(jax.vmap(tree_max_depth)(split_trees))
+def forest_depth_distr(split_trees):
+    depth = grove.tree_depth(split_trees) + 1
+    depths = jax.vmap(tree_actual_depth)(split_trees)
+    return jnp.bincount(depths, length=depth)
 
-def trace_max_depth(split_trees_trace):
-    return jax.vmap(forest_max_depth)(split_trees_trace)
+def trace_depth_distr(split_trees_trace):
+    return jax.vmap(forest_depth_distr)(split_trees_trace)

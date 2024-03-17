@@ -188,27 +188,33 @@ def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
     """
     return evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype)
 
-def is_actual_leaf(split_tree):
+def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """
     Return a mask indicating the leaf nodes in a tree.
-
-    Nodes at the bottom level are not counted.
 
     Parameters
     ----------
     split_tree : int array (2 ** (d - 1),)
         The splitting points of the tree.
+    add_bottom_level : bool, default False
+        If True, the bottom level of the tree is also considered.
 
     Returns
     -------
-    is_actual_leaf : bool array (2 ** (d - 1),)
-        The mask indicating the leaf nodes.
+    is_actual_leaf : bool array (2 ** (d - 1) or 2 ** d,)
+        The mask indicating the leaf nodes. The length is doubled if
+        `add_bottom_level` is True.
     """
-    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
+    size = split_tree.size
+    is_leaf = split_tree == 0
+    if add_bottom_level:
+        size *= 2
+        is_leaf = jnp.concatenate([is_leaf, jnp.ones_like(is_leaf)])
+    index = jnp.arange(size, dtype=minimal_unsigned_dtype(size - 1))
     parent_index = index >> 1
     parent_nonleaf = split_tree[parent_index].astype(bool)
     parent_nonleaf = parent_nonleaf.at[1].set(True)
-    return (split_tree == 0) & parent_nonleaf
+    return is_leaf & parent_nonleaf
 
 def is_leaf_parent(split_tree):
     """
@@ -230,6 +236,31 @@ def is_leaf_parent(split_tree):
     return split_tree.astype(bool) & child_leaf
         # the 0-th item has split == 0, so it's not counted
 
+def tree_depths(tree_length):
+    """
+    Return the depth of each node in a binary tree.
+
+    Parameters
+    ----------
+    tree_length : int
+        The length of the tree array, i.e., 2 ** d.
+
+    Returns
+    -------
+    depth : array (tree_length,)
+        The depth of each node. The root node (index 1) has depth 0. The depth
+        is the position of the most significant non-zero bit in the index. The
+        first element (the unused node) is marked as depth 0.
+    """
+    depths = []
+    depth = 0
+    for i in range(tree_length):
+        if i == 2 ** depth:
+            depth += 1
+        depths.append(depth - 1)
+    depths[0] = 0
+    return jnp.array(depths, minimal_unsigned_dtype(max(depths)))
+
 def index_depth(index, tree_length):
     """
     Return the depth of a node in a binary tree.
@@ -248,11 +279,5 @@ def index_depth(index, tree_length):
         the position of the most significant non-zero bit in the index. If
         ``index == 0``, return -1.
     """
-    depths = []
-    depth = 0
-    for i in range(tree_length):
-        if i == 2 ** depth:
-            depth += 1
-        depths.append(depth - 1)
-    depth = jnp.array(depths)
-    return depth[index]
+    depths = tree_depths(tree_length)
+    return depths[index]

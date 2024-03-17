@@ -406,8 +406,8 @@ class BART:
         pgrow, pprune = self._avg_prop()
         return agrow * pgrow, aprune * pprune
 
-    def _max_depth(self):
+    def _depth_distr(self):
         from . import debug
         trace = self._main_trace
         split_trees = trace['split_trees']
-        return debug.trace_max_depth(split_trees)
+        return debug.trace_depth_distr(split_trees)
