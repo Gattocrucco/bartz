@@ -28,9 +28,10 @@ import jax
 import jax.numpy as jnp
 
 from . import jaxext
-from . import prepcovars
+from . import grove
 from . import mcmcstep
 from . import mcmcloop
+from . import prepcovars
 
 class BART:
     """
@@ -379,7 +380,7 @@ class BART:
     def _compare_resid(self):
         bart = self._mcmc_state
         resid1 = bart['resid']
-        yhat = mcmcstep.evaluate_tree_vmap_x(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
+        yhat = grove.evaluate_tree_vmap_x(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
         resid2 = bart['y'] - yhat
         return resid1, resid2
 

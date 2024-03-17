@@ -17,7 +17,7 @@ def trace_evaluate_trees(bart, X):
 
 @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0)) # vectorize over forest
 def evaluate_all_trees_impl(X, leaf_trees, var_trees, split_trees):
-    return mcmcstep.evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, jnp.float32)
+    return grove.evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, jnp.float32)
 
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
@@ -72,7 +72,7 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
 def tree_max_depth(split_tree):
     split_tree = jnp.concatenate([split_tree, jnp.zeros_like(split_tree)])
-    is_leaf = mcmcstep.is_actual_leaf(split_tree)
+    is_leaf = grove.is_actual_leaf(split_tree)
     depth_vec = jax.vmap(mcmcstep.index_depth, in_axes=(0, None))
     index = jnp.arange(split_tree.size)
     depth = depth_vec(index, split_tree.size)

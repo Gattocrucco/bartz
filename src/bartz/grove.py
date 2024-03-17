@@ -1,0 +1,258 @@
+# bartz/src/bartz/grove.py
+#
+# Copyright (c) 2024, Giacomo Petrillo
+#
+# This file is part of bartz.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+""" Functions to create and manipulate trees """
+
+import functools
+import math
+
+import jax
+from jax import numpy as jnp
+from jax import lax
+
+def make_tree(depth, dtype):
+    """
+    Make an array to represent a binary tree.
+
+    Parameters
+    ----------
+    depth : int
+        The maximum depth of the tree. Depth 1 means that there is only a root
+        node.
+    dtype : dtype
+        The dtype of the array.
+
+    Returns
+    -------
+    tree : array
+        An array of zeroes with shape (2 ** depth,).
+
+    Notes
+    -----
+    The tree is represented as a heap, with the root node at index 1, and the
+    children of the node at index i at indices 2 * i and 2 * i + 1. The element
+    at index 0 is unused.
+    """
+    return jnp.zeros(2 ** depth, dtype)
+
+def tree_depth(tree):
+    """
+    Return the depth of a binary tree created by `make_tree`.
+
+    Parameters
+    ----------
+    tree : array
+        A binary tree created by `make_tree`. If the array is ND, the tree
+        structure is assumed to be along the last axis.
+
+    Returns
+    -------
+    depth : int
+        The depth of the tree.
+    """
+    return int(round(math.log2(tree.shape[-1])))
+
+def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
+    """
+    Evaluate a decision tree or forest.
+
+    Parameters
+    ----------
+    X : array (p,)
+        The coordinates to evaluate the tree at.
+    leaf_trees : array (n,) or (m, n)
+        The leaf values of the tree or forest. If the input is a forest, the
+        first axis is the tree index, and the values are summed.
+    var_trees : array (n,) or (m, n)
+        The variable indices of the tree or forest. Each index is in [0, p) and
+        indicates which value of `X` to consider.
+    split_trees : array (n,) or (m, n)
+        The split values of the tree or forest. Leaf nodes are indicated by the
+        condition `split == 0`. If non-zero, the node has children, and its left
+        children is assigned points which satisfy `x < split`.
+    out_dtype : dtype
+        The dtype of the output.
+
+    Returns
+    -------
+    out : scalar
+        The value of the tree or forest at the given point.
+    """
+
+    is_forest = leaf_trees.ndim == 2
+    if is_forest:
+        m, _ = leaf_trees.shape
+        forest_shape = m,
+        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1)),
+    else:
+        forest_shape = ()
+        tree_index = ()
+
+    carry = (
+        jnp.zeros(forest_shape, bool),
+        jnp.zeros((), out_dtype),
+        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_trees.shape[-1] - 1))
+    )
+
+    def loop(carry, _):
+        leaf_found, out, node_index = carry
+
+        is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
+        leaf_value = leaf_trees[tree_index + (node_index,)]
+        if is_forest:
+            leaf_sum = jnp.sum(leaf_value, where=is_leaf) # TODO set dtype to large float
+                # alternative: dot(is_leaf, leaf_value):
+                # - maybe faster
+                # - maybe less accurate
+                # - fucked by nans
+        else:
+            leaf_sum = jnp.where(is_leaf, leaf_value, 0)
+        out += leaf_sum
+        leaf_found |= is_leaf
+        
+        split = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
+        var = var_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
+        x = X[var]
+        
+        node_index <<= 1
+        node_index += x >= split
+        node_index = jnp.where(leaf_found, 0, node_index)
+
+        carry = leaf_found, out, node_index
+        return carry, _
+
+    depth = tree_depth(leaf_trees)
+    (_, out, _), _ = lax.scan(loop, carry, None, depth)
+    return out
+
+def minimal_unsigned_dtype(max_value):
+    """
+    Return the smallest unsigned integer dtype that can represent a given
+    maximum value.
+    """
+    if max_value < 2 ** 8:
+        return jnp.uint8
+    if max_value < 2 ** 16:
+        return jnp.uint16
+    if max_value < 2 ** 32:
+        return jnp.uint32
+    return jnp.uint64
+
+@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
+def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
+    """
+    Evaluate a decision tree or forest over multiple points.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        The points to evaluate the tree at.
+    leaf_trees : array (n,) or (m, n)
+        The leaf values of the tree or forest. If the input is a forest, the
+        first axis is the tree index, and the values are summed.
+    var_trees : array (n,) or (m, n)
+        The variable indices of the tree or forest. Each index is in [0, p) and
+        indicates which value of `X` to consider.
+    split_trees : array (n,) or (m, n)
+        The split values of the tree or forest. Leaf nodes are indicated by the
+        condition `split == 0`. If non-zero, the node has children, and its left
+        children is assigned points which satisfy `x < split`.
+    out_dtype : dtype
+        The dtype of the output.
+
+    Returns
+    -------
+    out : (n,)
+        The value of the tree or forest at each point.
+    """
+    return evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype)
+
+def is_actual_leaf(split_tree):
+    """
+    Return a mask indicating the leaf nodes in a tree.
+
+    Nodes at the bottom level are not counted.
+
+    Parameters
+    ----------
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
+
+    Returns
+    -------
+    is_actual_leaf : bool array (2 ** (d - 1),)
+        The mask indicating the leaf nodes.
+    """
+    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
+    parent_index = index >> 1
+    parent_nonleaf = split_tree[parent_index].astype(bool)
+    parent_nonleaf = parent_nonleaf.at[1].set(True)
+    return (split_tree == 0) & parent_nonleaf
+
+def is_leaf_parent(split_tree):
+    """
+    Return a mask indicating the nodes with leaf children.
+
+    Parameters
+    ----------
+    split_tree : int array (2 ** (d - 1),)
+        The splitting points of the tree.
+
+    Returns
+    -------
+    is_leaf_parent : bool array (2 ** (d - 1),)
+        The mask indicating which nodes have leaf children.
+    """
+    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * (split_tree.size - 1)))
+    child_index = index << 1 # left child
+    child_leaf = split_tree.at[child_index].get(mode='fill', fill_value=0) == 0
+    return split_tree.astype(bool) & child_leaf
+        # the 0-th item has split == 0, so it's not counted
+
+def index_depth(index, tree_length):
+    """
+    Return the depth of a node in a binary tree.
+
+    Parameters
+    ----------
+    index : int
+        The index of the node.
+    tree_length : int
+        The length of the tree array, i.e., 2 ** d.
+
+    Returns
+    -------
+    depth : int
+        The depth of the node. The root node (index 1) has depth 0. The depth is
+        the position of the most significant non-zero bit in the index. If
+        ``index == 0``, return -1.
+    """
+    depths = []
+    depth = 0
+    for i in range(tree_length):
+        if i == 2 ** depth:
+            depth += 1
+        depths.append(depth - 1)
+    depth = jnp.array(depths)
+    return depth[index]

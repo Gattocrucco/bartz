@@ -13,7 +13,7 @@ warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', Fu
 
 # DGP config
 n = 100 # number of datapoints
-p = 10 # number of covariates
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -22,8 +22,10 @@ def f(x): # conditional mean
 #     return jnp.sum(x, axis=0)
 # def f(x):
 #     return jnp.sum(jnp.abs(x), axis=0)
+# def gen_X(key, p, n):
+#     return random.normal(key, (p, n))
 def gen_X(key, p, n):
-    return random.normal(key, (p, n))
+    return random.uniform(key, (p, n), float, -2, 2)
 # def gen_X(key, p, n):
 #     return jnp.repeat(jnp.arange(n)[None, :] - n / 2, p, axis=0)
 
@@ -42,7 +44,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=200, nskip=500, ndpost=500, numcut=255, printevery=100)
+kw = dict(ntree=50, nskip=500, ndpost=500, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 # fit with BART

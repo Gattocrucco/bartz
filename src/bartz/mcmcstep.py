@@ -34,133 +34,7 @@ from jax import random
 from jax import numpy as jnp
 from jax import lax
 
-def make_tree(depth, dtype):
-    """
-    Make an array to represent a binary tree.
-
-    Parameters
-    ----------
-    depth : int
-        The maximum depth of the tree. Depth 1 means that there is only a root
-        node.
-    dtype : dtype
-        The dtype of the array.
-
-    Returns
-    -------
-    tree : array
-        An array of zeroes with shape (2 ** depth,).
-
-    Notes
-    -----
-    The tree is represented as a heap, with the root node at index 1, and the
-    children of the node at index i at indices 2 * i and 2 * i + 1. The element
-    at index 0 is unused.
-    """
-    return jnp.zeros(2 ** depth, dtype)
-
-def tree_depth(tree):
-    """
-    Return the depth of a binary tree created by `make_tree`.
-
-    Parameters
-    ----------
-    tree : array
-        A binary tree created by `make_tree`. If the array is ND, the tree
-        structure is assumed to be along the last axis.
-
-    Returns
-    -------
-    depth : int
-        The depth of the tree.
-    """
-    return int(round(math.log2(tree.shape[-1])))
-
-def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
-    """
-    Evaluate a decision tree or forest.
-
-    Parameters
-    ----------
-    X : array (p,)
-        The coordinates to evaluate the tree at.
-    leaf_trees : array (n,) or (m, n)
-        The leaf values of the tree or forest. If the input is a forest, the
-        first axis is the tree index, and the values are summed.
-    var_trees : array (n,) or (m, n)
-        The variable indices of the tree or forest. Each index is in [0, p) and
-        indicates which value of `X` to consider.
-    split_trees : array (n,) or (m, n)
-        The split values of the tree or forest. Leaf nodes are indicated by the
-        condition `split == 0`. If non-zero, the node has children, and its left
-        children is assigned points which satisfy `x < split`.
-    out_dtype : dtype
-        The dtype of the output.
-
-    Returns
-    -------
-    out : scalar
-        The value of the tree or forest at the given point.
-    """
-
-    is_forest = leaf_trees.ndim == 2
-    if is_forest:
-        m, _ = leaf_trees.shape
-        forest_shape = m,
-        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1)),
-    else:
-        forest_shape = ()
-        tree_index = ()
-
-    carry = (
-        jnp.zeros(forest_shape, bool),
-        jnp.zeros((), out_dtype),
-        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_trees.shape[-1] - 1))
-    )
-
-    def loop(carry, _):
-        leaf_found, out, node_index = carry
-
-        is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
-        leaf_value = leaf_trees[tree_index + (node_index,)]
-        if is_forest:
-            leaf_sum = jnp.sum(leaf_value, where=is_leaf) # TODO set dtype to large float
-                # alternative: dot(is_leaf, leaf_value):
-                # - maybe faster
-                # - maybe less accurate
-                # - fucked by nans
-        else:
-            leaf_sum = jnp.where(is_leaf, leaf_value, 0)
-        out += leaf_sum
-        leaf_found |= is_leaf
-        
-        split = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
-        var = var_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
-        x = X[var]
-        
-        node_index <<= 1
-        node_index += x >= split
-        node_index = jnp.where(leaf_found, 0, node_index)
-
-        carry = leaf_found, out, node_index
-        return carry, _
-
-    depth = tree_depth(leaf_trees)
-    (_, out, _), _ = lax.scan(loop, carry, None, depth)
-    return out
-
-def minimal_unsigned_dtype(max_value):
-    """
-    Return the smallest unsigned integer dtype that can represent a given
-    maximum value.
-    """
-    if max_value < 2 ** 8:
-        return jnp.uint8
-    if max_value < 2 ** 16:
-        return jnp.uint16
-    if max_value < 2 ** 32:
-        return jnp.uint32
-    return jnp.uint64
+from . import grove
 
 def make_bart(*,
     X: 'Array (p, n) int',
@@ -249,11 +123,11 @@ def make_bart(*,
 
     @functools.partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
     def make_forest(max_depth, dtype):
-        return make_tree(max_depth, dtype)
+        return grove.make_tree(max_depth, dtype)
 
     return dict(
         leaf_trees=make_forest(max_depth, small_float_dtype),
-        var_trees=make_forest(max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)),
+        var_trees=make_forest(max_depth - 1, grove.minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float_dtype),
         sigma2=jnp.ones((), large_float_dtype),
@@ -344,7 +218,7 @@ def mcmc_sample_tree(bart, key, i_tree):
     """
     bart = bart.copy()
     
-    y_tree = evaluate_tree_vmap_x(
+    y_tree = grove.evaluate_tree_vmap_x(
         bart['X'],
         bart['leaf_trees'][i_tree],
         bart['var_trees'][i_tree],
@@ -357,7 +231,7 @@ def mcmc_sample_tree(bart, key, i_tree):
     bart = mcmc_sample_tree_structure(bart, key1, i_tree)
     bart = mcmc_sample_tree_leaves(bart, key2, i_tree)
     
-    y_tree = evaluate_tree_vmap_x(
+    y_tree = grove.evaluate_tree_vmap_x(
         bart['X'],
         bart['leaf_trees'][i_tree],
         bart['var_trees'][i_tree],
@@ -367,35 +241,6 @@ def mcmc_sample_tree(bart, key, i_tree):
     bart['resid'] -= y_tree
     
     return bart
-
-@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
-def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
-    """
-    Evaluate a decision tree or forest over multiple points.
-
-    Parameters
-    ----------
-    X : array (p, n)
-        The points to evaluate the tree at.
-    leaf_trees : array (n,) or (m, n)
-        The leaf values of the tree or forest. If the input is a forest, the
-        first axis is the tree index, and the values are summed.
-    var_trees : array (n,) or (m, n)
-        The variable indices of the tree or forest. Each index is in [0, p) and
-        indicates which value of `X` to consider.
-    split_trees : array (n,) or (m, n)
-        The split values of the tree or forest. Leaf nodes are indicated by the
-        condition `split == 0`. If non-zero, the node has children, and its left
-        children is assigned points which satisfy `x < split`.
-    out_dtype : dtype
-        The dtype of the output.
-
-    Returns
-    -------
-    out : (n,)
-        The value of the tree or forest at each point.
-    """
-    return evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype)
 
 def mcmc_sample_tree_structure(bart, key, i_tree):
     """
@@ -547,34 +392,12 @@ def choose_leaf(split_tree, key):
         The number of leaf parents that could be pruned, after converting the
         selected leaf to a non-terminal node.
     """
-    is_growable = is_actual_leaf(split_tree)
+    is_growable = grove.is_actual_leaf(split_tree)
     leaf_to_grow = randint_masked(key, is_growable)
     num_growable = jnp.count_nonzero(is_growable)
-    is_parent = is_leaf_parent(split_tree.at[leaf_to_grow].set(1))
+    is_parent = grove.is_leaf_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, num_prunable
-
-def is_actual_leaf(split_tree):
-    """
-    Return a mask indicating the leaf nodes in a tree.
-
-    Nodes at the bottom level are not counted.
-
-    Parameters
-    ----------
-    split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
-
-    Returns
-    -------
-    is_actual_leaf : bool array (2 ** (d - 1),)
-        The mask indicating the leaf nodes.
-    """
-    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(split_tree.size - 1))
-    parent_index = index >> 1
-    parent_nonleaf = split_tree[parent_index].astype(bool)
-    parent_nonleaf = parent_nonleaf.at[1].set(True)
-    return (split_tree == 0) & parent_nonleaf
 
 def randint_masked(key, mask):
     """
@@ -596,26 +419,6 @@ def randint_masked(key, mask):
     ecdf = jnp.cumsum(mask)
     u = random.randint(key, (), 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right')
-
-def is_leaf_parent(split_tree):
-    """
-    Return a mask indicating the nodes with leaf children.
-
-    Parameters
-    ----------
-    split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
-
-    Returns
-    -------
-    is_leaf_parent : bool array (2 ** (d - 1),)
-        The mask indicating which nodes have leaf children.
-    """
-    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * (split_tree.size - 1)))
-    child_index = index << 1 # left child
-    child_leaf = split_tree.at[child_index].get(mode='fill', fill_value=0) == 0
-    return split_tree.astype(bool) & child_leaf
-        # the 0-th item has split == 0, so it's not counted
 
 def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -696,8 +499,8 @@ def parent_variables(var_tree, max_split, node_index):
         The variable indices of the ancestors of the node, from the root to
         the parent. Unused spots are filled with `p`.
     """
-    max_num_ancestors = tree_depth(var_tree) - 1
-    ancestor_vars = jnp.zeros(max_num_ancestors, minimal_unsigned_dtype(max_split.size))
+    max_num_ancestors = grove.tree_depth(var_tree) - 1
+    ancestor_vars = jnp.zeros(max_num_ancestors, grove.minimal_unsigned_dtype(max_split.size))
     carry = ancestor_vars.size - 1, node_index, ancestor_vars
     def loop(carry, _):
         i, index, ancestor_vars = carry
@@ -731,7 +534,7 @@ def split_range(var_tree, split_tree, max_split, node_index, ref_var):
     l, r : int
         The range of allowed splits is [l, r).
     """
-    max_num_ancestors = tree_depth(var_tree) - 1
+    max_num_ancestors = grove.tree_depth(var_tree) - 1
     initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(jnp.int32)
     carry = 0, initial_r, node_index
     def loop(carry, _):
@@ -831,12 +634,17 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
     # num_available_var, but they cancel out
 
     p_grow = jnp.where(num_growable > 1, 0.5, 1)
-        # if num_growable == 1, then the starting tree is a root, and can not be pruned
+        # if num_growable == 1, then the starting tree is a root, and can not be
+        # pruned
+        # => error: there could also be a deep tree with only 1 growable node
     p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
-        # if num_prunable == 2^(d - 2), then all leaf parents are at level d - 2, which means that all leaves are at level d - 1, which means the new tree can't be grown again, which means the probability of trying to prune it is 1
+        # if num_prunable == 2^(d - 2), then all leaf parents are at level d -
+        # 2, which means that all leaves are at level d - 1, which means the new
+        # tree can't be grown again, which means the probability of trying to
+        # prune it is 1
     trans_ratio = p_prune * num_growable / (p_grow * num_prunable)
 
-    depth = index_depth(leaf_to_grow, tree_halfsize)
+    depth = grove.index_depth(leaf_to_grow, tree_halfsize)
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
@@ -904,33 +712,6 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     )
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
-
-def index_depth(index, tree_length):
-    """
-    Return the depth of a node in a binary tree.
-
-    Parameters
-    ----------
-    index : int
-        The index of the node.
-    tree_length : int
-        The length of the tree array, i.e., 2 ** d.
-
-    Returns
-    -------
-    depth : int
-        The depth of the node. The root node (index 1) has depth 0. The depth is
-        the position of the most significant non-zero bit in the index. If
-        ``index == 0``, return -1.
-    """
-    depths = []
-    depth = 0
-    for i in range(tree_length):
-        if i == 2 ** depth:
-            depth += 1
-        depths.append(depth - 1)
-    depth = jnp.array(depths)
-    return depth[index]
 
 def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, key):
     """
@@ -1005,10 +786,10 @@ def choose_leaf_parent(split_tree, key):
         The number of leaf nodes that can be grown, after pruning the chosen
         node.
     """
-    is_prunable = is_leaf_parent(split_tree)
+    is_prunable = grove.is_leaf_parent(split_tree)
     node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
-    is_growable_leaf = is_actual_leaf(split_tree.at[node_to_prune].set(0))
+    is_growable_leaf = grove.is_actual_leaf(split_tree.at[node_to_prune].set(0))
     num_growable = jnp.count_nonzero(is_growable_leaf)
     return node_to_prune, num_prunable, num_growable
 
@@ -1081,14 +862,14 @@ def agg_values(X, var_tree, split_tree, values, acc_dtype):
         Tree leaves containing the count of such values.
     """
 
-    depth = tree_depth(var_tree) + 1
+    depth = grove.tree_depth(var_tree) + 1
     carry = (
         jnp.zeros(values.size, bool),
-        jnp.ones(values.size, minimal_unsigned_dtype(2 * var_tree.size - 1)),
-        make_tree(depth, acc_dtype),
-        make_tree(depth, minimal_unsigned_dtype(values.size - 1)),
+        jnp.ones(values.size, grove.minimal_unsigned_dtype(2 * var_tree.size - 1)),
+        grove.make_tree(depth, acc_dtype),
+        grove.make_tree(depth, grove.minimal_unsigned_dtype(values.size - 1)),
     )
-    unit_index = jnp.arange(values.size, dtype=minimal_unsigned_dtype(values.size - 1))
+    unit_index = jnp.arange(values.size, dtype=grove.minimal_unsigned_dtype(values.size - 1))
 
     def loop(carry, _):
         leaf_found, node_index, acc_tree, count_tree = carry

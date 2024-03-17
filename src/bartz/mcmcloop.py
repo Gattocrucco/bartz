@@ -35,6 +35,7 @@ from jax import numpy as jnp
 from jax import lax
 
 from . import mcmcstep
+from . import grove
 
 @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
@@ -178,6 +179,6 @@ def evaluate_trace(trace, X):
         The predictions for each iteration of the MCMC.
     """
     def loop(_, state):
-        return None, mcmcstep.evaluate_tree_vmap_x(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
+        return None, grove.evaluate_tree_vmap_x(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
     _, y = lax.scan(loop, None, trace)
     return y

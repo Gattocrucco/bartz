@@ -27,7 +27,7 @@ import functools
 import jax
 from jax import numpy as jnp
 
-from . import mcmcstep
+from . import grove
 
 def quantilized_splits_from_matrix(X, max_bins):
     """
@@ -68,7 +68,7 @@ def quantilized_splits_from_matrix_impl(x, out_length):
     truncated_midpoints = midpoints[:out_length]
     splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
     max_split = jnp.minimum(actual_length, out_length)
-    max_split = max_split.astype(mcmcstep.minimal_unsigned_dtype(out_length))
+    max_split = max_split.astype(grove.minimal_unsigned_dtype(out_length))
     return splits, max_split
 
 def huge_value(x):
@@ -114,5 +114,5 @@ def bin_covariates(X, splits):
 
 @jax.vmap
 def bin_covariates_impl(x, splits):
-    dtype = mcmcstep.minimal_unsigned_dtype(splits.size)
+    dtype = grove.minimal_unsigned_dtype(splits.size)
     return jnp.searchsorted(splits, x).astype(dtype)
