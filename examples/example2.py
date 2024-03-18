@@ -12,8 +12,8 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 100 # number of datapoints
-p = 1 # number of covariates
+n = 500 # number of datapoints
+p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -44,8 +44,14 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=50, nskip=0, ndpost=100, numcut=255, printevery=100)
+kw = dict(ntree=50, nskip=1000, ndpost=500, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
+
+bad = bart1._check_trees()
+total = bad.size
+bad_count = jnp.count_nonzero(bad)
+if bad_count:
+    print(f'*******  bad trees: {bad_count}/{total}  *******')
 
 # fit with BART
 if 'lamda' in kw:

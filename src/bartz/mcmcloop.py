@@ -106,17 +106,15 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         return (bart, i_total + 1, i_skip + 1, key), output
 
     # TODO avoid invoking this altogether if burnin is 0 to shorten compilation time & size
-    key, subkey = random.split(key)
-    carry = bart, 0, 0, subkey
+    carry = bart, 0, 0, key
     burnin_loop = functools.partial(inner_loop, tracelist=tracelist_burnin, burnin=True)
-    (bart, i_total, _, _), burnin_trace = lax.scan(burnin_loop, carry, None, n_burn)
+    (bart, i_total, _, key), burnin_trace = lax.scan(burnin_loop, carry, None, n_burn)
 
     def outer_loop(carry, _):
         bart, i_total, key = carry
-        main_inner_loop = functools.partial(inner_loop, tracelist=[], burnin=False)
-        key, subkey = random.split(key)
-        inner_carry = bart, i_total, 0, subkey
-        (bart, i_total, _, _), _ = lax.scan(main_inner_loop, inner_carry, None, n_skip)
+        main_loop = functools.partial(inner_loop, tracelist=[], burnin=False)
+        inner_carry = bart, i_total, 0, key
+        (bart, i_total, _, key), _ = lax.scan(main_loop, inner_carry, None, n_skip)
         output = {key: bart[key] for key in tracelist_main}
         return (bart, i_total, key), output
 
