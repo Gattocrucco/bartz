@@ -325,7 +325,7 @@ class BART:
             sigma2_beta=sigma2_beta,
             small_float_dtype=jnp.float32,
             large_float_dtype=jnp.float32,
-            min_points_per_leaf=5,
+            min_points_per_leaf=1,
         )
 
     @staticmethod
@@ -416,3 +416,14 @@ class BART:
     def _points_per_leaf_distr(self):
         from . import debug
         return debug.trace_points_per_leaf_distr(self._main_trace, self._mcmc_state['X'])
+
+    def _check_trees(self):
+        from . import debug
+        return debug.check_trace(self._main_trace, self._mcmc_state)
+
+    def _tree_goes_bad(self):
+        bad = self._check_trees()
+        bad_before = bad[:-1]
+        bad_after = bad[1:]
+        goes_bad = bad_after & ~bad_before
+        return jnp.pad(goes_bad, [(1, 0), (0, 0)])

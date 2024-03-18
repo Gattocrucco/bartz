@@ -404,7 +404,7 @@ def choose_leaf(split_tree, key):
     is_growable = grove.is_actual_leaf(split_tree)
     leaf_to_grow = randint_masked(key, is_growable)
     num_growable = jnp.count_nonzero(is_growable)
-    is_parent = grove.is_leaf_parent(split_tree.at[leaf_to_grow].set(1))
+    is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, num_prunable
 
@@ -803,7 +803,7 @@ def choose_leaf_parent(split_tree, key):
         The number of leaf nodes that can be grown, after pruning the chosen
         node.
     """
-    is_prunable = grove.is_leaf_parent(split_tree)
+    is_prunable = grove.is_leaves_parent(split_tree)
     node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
     is_growable_leaf = grove.is_actual_leaf(split_tree.at[node_to_prune].set(0))

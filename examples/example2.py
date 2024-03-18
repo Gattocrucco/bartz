@@ -44,7 +44,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=50, nskip=500, ndpost=500, numcut=255, printevery=100)
+kw = dict(ntree=50, nskip=0, ndpost=100, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 # fit with BART

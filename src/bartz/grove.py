@@ -216,9 +216,9 @@ def is_actual_leaf(split_tree, *, add_bottom_level=False):
     parent_nonleaf = parent_nonleaf.at[1].set(True)
     return is_leaf & parent_nonleaf
 
-def is_leaf_parent(split_tree):
+def is_leaves_parent(split_tree):
     """
-    Return a mask indicating the nodes with leaf children.
+    Return a mask indicating the nodes with leaf (and only leaf) children.
 
     Parameters
     ----------
@@ -227,13 +227,16 @@ def is_leaf_parent(split_tree):
 
     Returns
     -------
-    is_leaf_parent : bool array (2 ** (d - 1),)
+    is_leaves_parent : bool array (2 ** (d - 1),)
         The mask indicating which nodes have leaf children.
     """
-    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * (split_tree.size - 1)))
-    child_index = index << 1 # left child
-    child_leaf = split_tree.at[child_index].get(mode='fill', fill_value=0) == 0
-    return split_tree.astype(bool) & child_leaf
+    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * split_tree.size - 1))
+    left_index = index << 1 # left child
+    right_index = left_index + 1 # right child
+    left_leaf = split_tree.at[left_index].get(mode='fill', fill_value=0) == 0
+    right_leaf = split_tree.at[right_index].get(mode='fill', fill_value=0) == 0
+    is_not_leaf = split_tree.astype(bool)
+    return is_not_leaf & left_leaf & right_leaf
         # the 0-th item has split == 0, so it's not counted
 
 def tree_depths(tree_length):
@@ -245,7 +248,7 @@ def tree_depths(tree_length):
     tree_length : int
         The length of the tree array, i.e., 2 ** d.
 
-    Returns
+    Returns    
     -------
     depth : array (tree_length,)
         The depth of each node. The root node (index 1) has depth 0. The depth
