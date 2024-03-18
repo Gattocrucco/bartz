@@ -12,8 +12,8 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 500 # number of datapoints
-p = 10 # number of covariates
+n = 15 # number of datapoints
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -65,8 +65,9 @@ print(f'\ndata sdev = {y_test.std():#.2g}')
 for label, bart in barts.items():
     resid = y_test - bart.yhat_test_mean
     rmse = jnp.sqrt(resid @ resid / resid.size)
+    sigma = jnp.sqrt(jnp.mean(jnp.square(bart.sigma)))
     print(f'{label}:')
-    print(f'    sigma: {bart.sigma.mean():#.2g} (true: {sigma:#.2g})')
+    print(f'    sigma: {sigma:#.2g} (true: {sigma:#.2g})')
     print(f'    RMSE: {rmse.item():#.2g}')
 
 # plot true vs. predicted

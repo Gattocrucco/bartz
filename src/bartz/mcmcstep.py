@@ -44,9 +44,9 @@ def make_bart(*,
     p_nonterminal,
     sigma2_alpha,
     sigma2_beta,
-    small_float_dtype,
-    large_float_dtype,
-    min_points_per_leaf,
+    small_float_dtype=jnp.float32,
+    large_float_dtype=jnp.float32,
+    min_points_per_leaf=None,
     ):
     """
     Make a BART posterior sampling MCMC initial state.
@@ -68,12 +68,12 @@ def make_bart(*,
         The shape parameter of the inverse gamma prior on the noise variance.
     sigma2_beta : float
         The scale parameter of the inverse gamma prior on the noise variance.
-    small_float_dtype : dtype
+    small_float_dtype : dtype, default float32
         The dtype for large arrays used in the algorithm.
-    large_float_dtype : dtype
+    large_float_dtype : dtype, default float32
         The dtype for scalars, small arrays, and arrays which require accuracy.
-    min_points_per_leaf : int
-        The minimum number of data points in a leaf node.
+    min_points_per_leaf : int, optional
+        The minimum number of data points in a leaf node. 0 if not specified.
 
     Returns
     -------
@@ -109,8 +109,11 @@ def make_bart(*,
             The response.
         'X' : int array (p, n)
             The predictors.
-        'min_points_per_leaf' : int
+        'min_points_per_leaf' : int or None
             The minimum number of data points in a leaf node.
+        'affluence_trees' : bool array (num_trees, 2 ** (d - 1)) or None
+            Whether a non-bottom leaf nodes contains twice `min_points_per_leaf`
+            datapoints. If `min_points_per_leaf` is not specified, this is None.
 
     Notes
     -----
@@ -130,7 +133,7 @@ def make_bart(*,
     def make_forest(max_depth, dtype):
         return grove.make_tree(max_depth, dtype)
 
-    return dict(
+    bart = dict(
         leaf_trees=make_forest(max_depth, small_float_dtype),
         var_trees=make_forest(max_depth - 1, grove.minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
@@ -146,8 +149,17 @@ def make_bart(*,
         max_split=max_split,
         y=jnp.asarray(y, small_float_dtype),
         X=X,
-        min_points_per_leaf=jnp.asarray(min_points_per_leaf),
+        min_points_per_leaf=(
+            None if min_points_per_leaf is None else
+            jnp.asarray(min_points_per_leaf)
+        ),
+        affluence_trees=(
+            None if min_points_per_leaf is None else
+            make_forest(max_depth - 1, bool).at[:, 1].set(y.size >= 2 * min_points_per_leaf)
+        ),
     )
+
+    return bart
 
 def mcmc_step(bart, key):
     """
@@ -188,7 +200,7 @@ def mcmc_sample_trees(bart, key):
 
     Notes
     -----
-    This function zeros the proposal counters.
+    This function zeroes the proposal counters.
     """
     bart = bart.copy()
     for count_var in ['grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count']:
@@ -271,12 +283,14 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     
     var_tree = bart['var_trees'][i_tree]
     split_tree = bart['split_trees'][i_tree]
+    affluence_tree = None if bart['affluence_trees'] is None else bart['affluence_trees'][i_tree]
     
     key1, key2, key3 = random.split(key, 3)
     args = [
         bart['X'],
         var_tree,
         split_tree,
+        affluence_tree,
         bart['max_split'],
         bart['p_nonterminal'],
         bart['sigma2'],
@@ -314,7 +328,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
 
     return bart
 
-def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
+def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
     """
     Tree structure grow move proposal of BART MCMC.
 
@@ -326,6 +340,8 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
         The variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
     max_split : array (p,)
         The maximum split index for each variable.
     p_nonterminal : array (d - 1,)
@@ -362,7 +378,7 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
 
     key1, key2, key3 = random.split(key, 3)
     
-    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, key1)
+    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, affluence_tree, key1)
     
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
@@ -379,7 +395,7 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
 
     return var_tree, split_tree, allowed, ratio
 
-def choose_leaf(split_tree, key):
+def choose_leaf(split_tree, affluence_tree, key):
     """
     Choose a leaf node to grow in a tree.
 
@@ -387,6 +403,8 @@ def choose_leaf(split_tree, key):
     ----------
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -402,6 +420,8 @@ def choose_leaf(split_tree, key):
         selected leaf to a non-terminal node.
     """
     is_growable = grove.is_actual_leaf(split_tree)
+    if affluence_tree is not None:
+        is_growable &= affluence_tree
     leaf_to_grow = randint_masked(key, is_growable)
     num_growable = jnp.count_nonzero(is_growable)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
@@ -483,13 +503,13 @@ def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
         particular order. Variables may appear more than once.
     """
     
-    var_to_ignore = parent_variables(var_tree, max_split, leaf_index)
+    var_to_ignore = ancestor_variables(var_tree, max_split, leaf_index)
     split_range_vec = jax.vmap(split_range, in_axes=(None, None, None, None, 0))
     l, r = split_range_vec(var_tree, split_tree, max_split, leaf_index, var_to_ignore)
     num_split = r - l
     return jnp.where(num_split == 0, var_to_ignore, max_split.size)
 
-def parent_variables(var_tree, max_split, node_index):
+def ancestor_variables(var_tree, max_split, node_index):
     """
     Return the list of variables in the ancestors of a node.
 
@@ -645,7 +665,7 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
     p_grow = jnp.where(num_growable > 1, 0.5, 1)
         # if num_growable == 1, then the starting tree is a root, and can not be
         # pruned
-        # => error: there could also be a deep tree with only 1 growable node
+        # => error: there could also be a deep tree with only 1 growable node (TODO)
     p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
         # if num_prunable == 2^(d - 2), then all leaf parents are at level d -
         # 2, which means that all leaves are at level d - 1, which means the new
@@ -681,7 +701,7 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
         The index of the leaf that has been grown.
     n_tree : int
         The number of trees in the forest.
-    min_points_per_leaf : int
+    min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
 
     Returns
@@ -723,12 +743,14 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     )
 
     ratio = jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
-    ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
-    ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
+
+    if min_points_per_leaf is not None:
+        ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
+        ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
 
     return ratio
 
-def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
+def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
     """
     Tree structure prune move proposal of BART MCMC.
 
@@ -740,6 +762,8 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
         The variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
     max_split : array (p,)
         The maximum split index for each variable.
     p_nonterminal : array (d - 1,)
@@ -767,7 +791,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
     ratio : float
         The Metropolis-Hastings ratio.
     """
-    node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, key)
+    node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, affluence_tree, key)
 
     allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
@@ -781,7 +805,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
 
     return var_tree, split_tree, allowed, ratio
 
-def choose_leaf_parent(split_tree, key):
+def choose_leaf_parent(split_tree, affluence_tree, key):
     """
     Pick a non-terminal node with leaf children to prune in a tree.
 
@@ -789,6 +813,8 @@ def choose_leaf_parent(split_tree, key):
     ----------
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -806,8 +832,12 @@ def choose_leaf_parent(split_tree, key):
     is_prunable = grove.is_leaves_parent(split_tree)
     node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
+
     is_growable_leaf = grove.is_actual_leaf(split_tree.at[node_to_prune].set(0))
+    if affluence_tree is not None:
+        is_growable_leaf &= affluence_tree.at[node_to_prune].set(True)
     num_growable = jnp.count_nonzero(is_growable_leaf)
+
     return node_to_prune, num_prunable, num_growable
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
@@ -841,7 +871,7 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
 
     prec_lk = count_tree / bart['sigma2']
     prec_prior = len(bart['leaf_trees'])
-    var_post = 1 / (prec_lk + prec_prior)
+    var_post = 1 / (prec_lk + prec_prior) # lax.reciprocal?
     mean_post = resid_tree / bart['sigma2'] * var_post # = mean_lk * prec_lk * var_post
 
     z = random.normal(key, mean_post.shape, mean_post.dtype)
@@ -849,6 +879,10 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
     leaf_tree = leaf_tree.at[0].set(0) # this 0 is used by evaluate_tree
     bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
+
+    if bart['min_points_per_leaf'] is not None:
+        affluence_tree = count_tree[:count_tree.size // 2] >= 2 * bart['min_points_per_leaf']
+        bart['affluence_trees'] = bart['affluence_trees'].at[i_tree].set(affluence_tree)
 
     return bart
 

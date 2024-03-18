@@ -323,8 +323,6 @@ class BART:
             p_nonterminal=p_nonterminal,
             sigma2_alpha=sigma2_alpha,
             sigma2_beta=sigma2_beta,
-            small_float_dtype=jnp.float32,
-            large_float_dtype=jnp.float32,
             min_points_per_leaf=5,
         )
 
