@@ -325,6 +325,7 @@ class BART:
             sigma2_beta=sigma2_beta,
             small_float_dtype=jnp.float32,
             large_float_dtype=jnp.float32,
+            min_points_per_leaf=5,
         )
 
     @staticmethod
@@ -411,3 +412,7 @@ class BART:
         trace = self._main_trace
         split_trees = trace['split_trees']
         return debug.trace_depth_distr(split_trees)
+
+    def _points_per_leaf_distr(self):
+        from . import debug
+        return debug.trace_points_per_leaf_distr(self._main_trace, self._mcmc_state['X'])

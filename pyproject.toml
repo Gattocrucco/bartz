@@ -64,6 +64,7 @@ myst-parser = "^2.0.0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
+    'error:scatter inputs have incompatible types.*',
 ]
 addopts = [
     "-r xXfE",

@@ -37,15 +37,16 @@ from jax import lax
 from . import grove
 
 def make_bart(*,
-    X: 'Array (p, n) int',
-    y: 'Array (n,) float',
-    max_split: 'Array (p,) int',
-    num_trees: int,
-    p_nonterminal: 'Array (d - 1,) float',
-    sigma2_alpha: float,
-    sigma2_beta: float,
-    small_float_dtype: 'dtype',
-    large_float_dtype: 'dtype',
+    X,
+    y,
+    max_split,
+    num_trees,
+    p_nonterminal,
+    sigma2_alpha,
+    sigma2_beta,
+    small_float_dtype,
+    large_float_dtype,
+    min_points_per_leaf,
     ):
     """
     Make a BART posterior sampling MCMC initial state.
@@ -71,6 +72,8 @@ def make_bart(*,
         The dtype for large arrays used in the algorithm.
     large_float_dtype : dtype
         The dtype for scalars, small arrays, and arrays which require accuracy.
+    min_points_per_leaf : int
+        The minimum number of data points in a leaf node.
 
     Returns
     -------
@@ -106,6 +109,8 @@ def make_bart(*,
             The response.
         'X' : int array (p, n)
             The predictors.
+        'min_points_per_leaf' : int
+            The minimum number of data points in a leaf node.
 
     Notes
     -----
@@ -141,6 +146,7 @@ def make_bart(*,
         max_split=max_split,
         y=jnp.asarray(y, small_float_dtype),
         X=X,
+        min_points_per_leaf=jnp.asarray(min_points_per_leaf),
     )
 
 def mcmc_step(bart, key):
@@ -276,6 +282,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['sigma2'],
         bart['resid'],
         len(bart['var_trees']),
+        bart['min_points_per_leaf'],
         key1,
     ]
     grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(*args)
@@ -286,11 +293,11 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     u0, u1 = random.uniform(key3, (2,))
 
     p_grow = jnp.where(grow_allowed & prune_allowed, 0.5, grow_allowed)
-    try_grow = u0 <= p_grow
+    try_grow = u0 < p_grow
     try_prune = prune_allowed & ~try_grow
 
-    do_grow = try_grow & (u1 <= grow_ratio)
-    do_prune = try_prune & (u1 <= prune_ratio)
+    do_grow = try_grow & (u1 < grow_ratio)
+    do_prune = try_prune & (u1 < prune_ratio)
 
     var_tree = jnp.where(do_grow, grow_var_tree, var_tree)
     split_tree = jnp.where(do_grow, grow_split_tree, split_tree)
@@ -307,7 +314,7 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
 
     return bart
 
-def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, key):
+def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
     """
     Tree structure grow move proposal of BART MCMC.
 
@@ -330,6 +337,8 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
         the tree under consideration.
     n_tree : int
         The number of trees in the forest.
+    min_points_per_leaf : int
+        The minimum number of data points in a leaf node.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -364,7 +373,7 @@ def grow_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, 
     allowed = num_growable > 0
 
     trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, leaf_to_grow)
-    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree)
+    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree, min_points_per_leaf)
 
     ratio = trans_tree_ratio * likelihood_ratio
 
@@ -651,7 +660,7 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
 
     return trans_ratio * tree_ratio
 
-def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n_tree):
+def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n_tree, min_points_per_leaf):
     """
     Compute the likelihood ratio of a grow move.
 
@@ -672,6 +681,8 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
         The index of the leaf that has been grown.
     n_tree : int
         The number of trees in the forest.
+    min_points_per_leaf : int
+        The minimum number of data points in a leaf node.
 
     Returns
     -------
@@ -711,9 +722,13 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
         total_resid * total_resid / sigma2_total
     )
 
-    return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+    ratio = jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+    ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
+    ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
 
-def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, key):
+    return ratio
+
+def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
     """
     Tree structure prune move proposal of BART MCMC.
 
@@ -736,6 +751,8 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
         the tree under consideration.
     n_tree : int
         The number of trees in the forest.
+    min_points_per_leaf : int
+        The minimum number of data points in a leaf node.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -755,7 +772,7 @@ def prune_move(X, var_tree, split_tree, max_split, p_nonterminal, sigma2, resid,
     allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
     trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, node_to_prune)
-    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree)
+    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree, min_points_per_leaf)
 
     ratio = trans_tree_ratio * likelihood_ratio
     ratio = 1 / ratio # Question: should I use lax.reciprocal for this?
@@ -854,7 +871,7 @@ def agg_values(X, var_tree, split_tree, values, acc_dtype):
 
     Returns
     -------
-    acc_tree : array (2 ** d,)
+    acc_tree : acc_dtype array (2 ** d,)
         Tree leaves for the tree structure indicated by the arguments, where
         each leaf contains the sum of the `values` whose corresponding `X` fall
         into the leaf.
@@ -876,7 +893,7 @@ def agg_values(X, var_tree, split_tree, values, acc_dtype):
 
         is_leaf = split_tree.at[node_index].get(mode='fill', fill_value=0) == 0
         leaf_count = is_leaf & ~leaf_found
-        leaf_values = jnp.where(leaf_count, values, 0)
+        leaf_values = jnp.where(leaf_count, values, jnp.array(0, values.dtype))
         acc_tree = acc_tree.at[node_index].add(leaf_values)
         count_tree = count_tree.at[node_index].add(leaf_count)
         leaf_found |= is_leaf

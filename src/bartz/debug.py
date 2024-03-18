@@ -2,8 +2,10 @@ import functools
 
 import jax
 from jax import numpy as jnp
+from jax import lax
 
 from . import grove
+from . import mcmcstep
 
 def trace_evaluate_trees(bart, X):
     """
@@ -14,7 +16,7 @@ def trace_evaluate_trees(bart, X):
     """
     def loop(_, bart):
         return None, evaluate_all_trees(X, bart['leaf_trees'], bart['var_trees'], bart['split_trees'])
-    _, y = jax.lax.scan(loop, None, bart)
+    _, y = lax.scan(loop, None, bart)
     return y
 
 @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0)) # vectorize over forest
@@ -53,7 +55,7 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
             else:
                 node_str = f'({var_tree[index]}: {split_tree[index]})'
 
-        if not is_leaf:
+        if not is_leaf or (print_all and left_child < len(leaf_tree)):
             link = down
         elif not print_all and left_child >= len(leaf_tree):
             link = bottom
@@ -85,3 +87,23 @@ def forest_depth_distr(split_trees):
 
 def trace_depth_distr(split_trees_trace):
     return jax.vmap(forest_depth_distr)(split_trees_trace)
+
+def points_per_leaf_distr(var_tree, split_tree, X):
+    dummy = jnp.ones(X.shape[1], jnp.uint8)
+    _, count_tree = mcmcstep.agg_values(X, var_tree, split_tree, dummy, dummy.dtype)
+    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True).view(jnp.uint8)
+    return jnp.bincount(count_tree, is_leaf, length=X.shape[1] + 1)
+
+def forest_points_per_leaf_distr(bart, X):
+    distr = jnp.zeros(X.shape[1] + 1, int)
+    trees = bart['var_trees'], bart['split_trees']
+    def loop(distr, tree):
+        return distr + points_per_leaf_distr(*tree, X), None
+    distr, _ = lax.scan(loop, distr, trees)
+    return distr
+
+def trace_points_per_leaf_distr(bart, X):
+    def loop(_, bart):
+        return None, forest_points_per_leaf_distr(bart, X)
+    _, distr = lax.scan(loop, None, bart)
+    return distr
