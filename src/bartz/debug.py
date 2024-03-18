@@ -39,7 +39,7 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
         var = var_tree.at[index].get(mode='fill', fill_value=0)
         split = split_tree.at[index].get(mode='fill', fill_value=0)
 
-        is_leaf = split_tree[index] == 0
+        is_leaf = split == 0
         left_child = 2 * index
         right_child = 2 * index + 1
 
@@ -64,7 +64,16 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
             link = bottom
         else:
             link = ' '
-        print(f'{indent}{first_indent}{link}{node_str}')
+
+        if print_all:
+            max_number = len(leaf_tree) - 1
+            ndigits = len(str(max_number))
+            number = str(index).rjust(ndigits)
+            number = f' {number} '
+        else:
+            number = ''
+
+        print(f'{number}{indent}{first_indent}{link}{node_str}')
 
         indent += next_indent
         unused = unused or is_leaf
@@ -128,7 +137,7 @@ def check_leaf_values(leaf_tree, var_tree, split_tree, max_split):
 def check_stray_nodes(leaf_tree, var_tree, split_tree, max_split):
     index = jnp.arange(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(2 * split_tree.size - 1))
     parent_index = index >> 1
-    is_not_leaf = split_tree[index] != 0
+    is_not_leaf = split_tree.at[index].get(mode='fill', fill_value=0) != 0
     parent_is_leaf = split_tree[parent_index] == 0
     stray = is_not_leaf & parent_is_leaf
     stray = stray.at[1].set(False)

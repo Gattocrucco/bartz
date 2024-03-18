@@ -422,7 +422,7 @@ class BART:
         return debug.check_trace(self._main_trace, self._mcmc_state)
 
     def _tree_goes_bad(self):
-        bad = self._check_trees()
+        bad = self._check_trees().astype(bool)
         bad_before = bad[:-1]
         bad_after = bad[1:]
         goes_bad = bad_after & ~bad_before
