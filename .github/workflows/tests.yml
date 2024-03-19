@@ -117,7 +117,9 @@ jobs:
       #   run: make COVERAGE_SUFFIX=-ubuntu-latest-py3.11 docscode
       
       - name: Generate documentation
-        run: make docs
+        run: |
+          source package-venv/bin/activate
+          make docs
       
       # - name: Copy documentation to github pages
       #   if: github.event_name == 'push'
@@ -253,7 +255,6 @@ jobs:
 
       - name: Put together site
         run: |
-          mkdir -p _site
           mv docs/_build/html _site/docs
           mv htmlcov _site/
       
