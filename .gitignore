@@ -9,5 +9,9 @@ dist/
 docs/_build
 .coverage*
 
+# Documentation
+_site/docs
+_site/coverage
+
 # Personal
 note.txt

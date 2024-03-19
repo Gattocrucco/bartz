@@ -74,11 +74,13 @@ docscode:
 
 docs:
 	make -C docs html
+	mv docs/_build/html _site/docs
 	@echo
-	@echo "Now open docs/_build/html/index.html"
+	@echo "Now open _site/docs/index.html"
 
 covreport:
 	coverage combine
 	coverage html
+	mv htmlcov _site/coverage
 	@echo
-	@echo "Now open htmlcov/index.html"
+	@echo "Now open _site/coverage/index.html"

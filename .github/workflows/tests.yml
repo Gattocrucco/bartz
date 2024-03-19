@@ -128,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: docs
-          path: docs/_build/html
+          path: _site/docs
       
       # - name: Save coverage from examples
       #   uses: actions/upload-artifact@v3
@@ -189,7 +189,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: covreport
-          path: htmlcov
+          path: _site/coverage
 
   deploy:
     
