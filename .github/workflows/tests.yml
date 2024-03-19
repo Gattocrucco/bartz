@@ -240,24 +240,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: docs
+          path: _site/docs
       
       - name: Get coverage report
         uses: actions/download-artifact@v4
         with:
           name: covreport
+          path: _site/coverage
 
       - name: List files
         run: |
           pwd
           ls -a
-          ls htmlcov
-          ls docs/_build/html
+          ls -a _site
 
-      - name: Put together site
-        run: |
-          mv docs/_build/html _site/docs
-          mv htmlcov _site/
-      
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
 
