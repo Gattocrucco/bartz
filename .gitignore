@@ -6,10 +6,10 @@
 __pycache__
 poetry.toml
 dist/
-docs/_build
 .coverage*
 
 # Documentation
+docs/_build
 _site/docs
 _site/coverage
 

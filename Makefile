@@ -74,6 +74,8 @@ docscode:
 
 docs:
 	make -C docs html
+	echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
+	rm -r _site/docs || true
 	mv docs/_build/html _site/docs
 	@echo
 	@echo "Now open _site/docs/index.html"
@@ -81,6 +83,7 @@ docs:
 covreport:
 	coverage combine
 	coverage html
+	rm -r _site/coverage || true
 	mv htmlcov _site/coverage
 	@echo
 	@echo "Now open _site/coverage/index.html"

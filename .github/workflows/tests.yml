@@ -121,9 +121,6 @@ jobs:
           source package-venv/bin/activate
           make docs
       
-      - name: Get version number
-        run: echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
-      
       - name: Save documentation
         uses: actions/upload-artifact@v4
         with:
@@ -182,9 +179,6 @@ jobs:
       - name: Generate coverage report
         run: make covreport
       
-      - name: Remove gitignore file
-        run: rm htmlcov/.gitignore
-
       - name: Save coverage report
         uses: actions/upload-artifact@v4
         with:
