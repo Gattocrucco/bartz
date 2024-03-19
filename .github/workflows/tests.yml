@@ -47,7 +47,7 @@ jobs:
             experimental: true
     
     env:
-      S: ${{ contains(matrix.os, 'windows') && '\\' || '/' }}
+      S: ${{ contains(matrix.os, 'windows') && '\' || '/' }}
 
     steps:
       - name: Checkout repository
