@@ -12,8 +12,8 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 15 # number of datapoints
-p = 1 # number of covariates
+n = 200 # number of datapoints
+p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
