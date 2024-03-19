@@ -46,6 +46,9 @@ jobs:
             python-version: "3.12"
             experimental: true
     
+    env:
+      S: ${{ contains(matrix.os, 'windows') && '\\' || '/' }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,21 +61,21 @@ jobs:
       - name: Install poetry
         run: |
           python -m venv poetry-venv
-          poetry-venv/bin/python -m pip install --upgrade pip
-          poetry-venv/bin/python -m pip install poetry
-          poetry-venv/bin/poetry config virtualenvs.create false
+          poetry-venv${{env.S}}bin${{env.S}}python -m pip install --upgrade pip
+          poetry-venv${{env.S}}bin${{env.S}}python -m pip install poetry
+          poetry-venv${{env.S}}bin${{env.S}}poetry config virtualenvs.create false
 
       - name: Install package
         run: |
           python -m venv package-venv
-          source package-venv/bin/activate
-          test `realpath \`which python\`` = `realpath package-venv/bin/python` || echo WRONG PYTHON
+          source package-venv${{env.S}}bin${{env.S}}activate
+          test `realpath \`which python\`` = `realpath package-venv${{env.S}}bin${{env.S}}python` || echo WRONG PYTHON
           python -m pip install --upgrade pip
-          poetry-venv/bin/poetry install
+          poetry-venv${{env.S}}bin${{env.S}}poetry install
 
       - name: Run unit tests
         run: |
-          source package-venv/bin/activate
+          source package-venv${{env.S}}bin${{env.S}}activate
           make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
 
       - name: Save coverage information
