@@ -26,8 +26,8 @@
 
 COVERAGE_SUFFIX=
 
-RELEASE_TARGETS = tests examples docscode docs
-TARGETS = upload release $(RELEASE_TARGETS) covreport
+RELEASE_TARGETS = tests docs
+TARGETS = upload release $(RELEASE_TARGETS) covreport examples
 
 .PHONY: all $(TARGETS)
 
@@ -38,13 +38,12 @@ all:
 	@echo "Release instructions:"
 	@echo " 1) remove .devN suffix from version in src/bartz/__init__.py"
 	@echo " 2) describe release in docs/changelog.md"
-	@echo " 3) link versioned docs in docs/index.rst"
-	@echo " 4) commit, push and check CI completes"
-	@echo " 5) $$ make release"
-	@echo " 6) repeat 4 and 5 until everything goes smoothly"
-	@echo " 7) $$ make upload"
-	@echo " 8) publish the github release"
-	@echo " 9) bump version number and add .dev0 suffix"
+	@echo " 3) commit, push and check CI completes"
+	@echo " 4) $$ make release"
+	@echo " 5) repeat 3 and 4 until everything goes smoothly"
+	@echo " 6) $$ make upload"
+	@echo " 7) publish the github release"
+	@echo " 8) bump version number and add .dev0 suffix"
 
 upload:
 	poetry publish
@@ -56,7 +55,6 @@ release: $(RELEASE_TARGETS)
 PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
 EXAMPLESPY = COVERAGE_FILE=.coverage.examples$(COVERAGE_SUFFIX) $(PY) --context=examples$(COVERAGE_SUFFIX)
-DOCSPY = COVERAGE_FILE=.coverage.docs$(COVERAGE_SUFFIX) $(PY) --context=docs$(COVERAGE_SUFFIX)
 
 tests:
 	$(TESTSPY) -m pytest tests
@@ -68,9 +66,6 @@ EXAMPLES = $(wildcard examples/*.py)
 .PHONY: $(EXAMPLES)
 examples: $(EXAMPLES)
 	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
-
-docscode:
-	$(DOCSPY) docs/runcode.py docs/*.rst
 
 docs:
 	make -C docs html
