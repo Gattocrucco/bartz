@@ -48,10 +48,10 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -71,7 +71,9 @@ jobs:
           poetry-venv/bin/poetry install
 
       - name: Run unit tests
-        run: make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
+        run: |
+          source package-venv/bin/activate
+          make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
 
       - name: Save coverage information
         uses: actions/upload-artifact@v3 # v3 allows uploading to same artifact
@@ -86,10 +88,10 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       
@@ -162,10 +164,10 @@ jobs:
     steps:
       
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       
