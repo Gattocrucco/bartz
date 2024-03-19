@@ -121,14 +121,6 @@ jobs:
           source package-venv/bin/activate
           make docs
       
-      # - name: Copy documentation to github pages
-      #   if: github.event_name == 'push'
-      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
-      #   with:
-      #     branch: gh-pages
-      #     folder: docs/_build/html
-      #     target-folder: docs
-      
       - name: Get version number
         run: echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
       
@@ -137,14 +129,6 @@ jobs:
         with:
           name: docs
           path: docs/_build/html
-
-      # - name: Copy documentation to github pages (versioned directory)
-      #   if: github.event_name == 'push'
-      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
-      #   with:
-      #     branch: gh-pages
-      #     folder: docs/_build/html
-      #     target-folder: docs-${{ env.bartz_version }}
       
       # - name: Save coverage from examples
       #   uses: actions/upload-artifact@v3
@@ -206,14 +190,6 @@ jobs:
         with:
           name: covreport
           path: htmlcov
-
-      # - name: Copy report to github pages
-      #   if: github.event_name == 'push'
-      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
-      #   with:
-      #     branch: gh-pages
-      #     folder: htmlcov
-      #     target-folder: htmlcov
 
   deploy:
     
