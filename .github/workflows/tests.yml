@@ -74,7 +74,7 @@ jobs:
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
 
       - name: Save coverage information
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v3 # v3 allows uploading to same artifact
         with:
           name: coverage
           path: .coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
@@ -117,24 +117,30 @@ jobs:
       - name: Generate documentation
         run: make docs
       
-      - name: Copy documentation to github pages
-        if: github.event_name == 'push'
-        uses: JamesIves/github-pages-deploy-action@v4.4.1
-        with:
-          branch: gh-pages
-          folder: docs/_build/html
-          target-folder: docs
+      # - name: Copy documentation to github pages
+      #   if: github.event_name == 'push'
+      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
+      #   with:
+      #     branch: gh-pages
+      #     folder: docs/_build/html
+      #     target-folder: docs
       
       - name: Get version number
-        run: echo bartz_version=`python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` >> $GITHUB_ENV
+        run: echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
       
-      - name: Copy documentation to github pages (versioned directory)
-        if: github.event_name == 'push'
-        uses: JamesIves/github-pages-deploy-action@v4.4.1
+      - name: Save documentation
+        uses: actions/upload-artifact@v4
         with:
-          branch: gh-pages
-          folder: docs/_build/html
-          target-folder: docs-${{ env.bartz_version }}
+          name: docs
+          path: docs/_build/html
+
+      # - name: Copy documentation to github pages (versioned directory)
+      #   if: github.event_name == 'push'
+      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
+      #   with:
+      #     branch: gh-pages
+      #     folder: docs/_build/html
+      #     target-folder: docs-${{ env.bartz_version }}
       
       # - name: Save coverage from examples
       #   uses: actions/upload-artifact@v3
@@ -148,10 +154,10 @@ jobs:
       #     name: coverage
       #     path: .coverage.docs-macos-latest-py3.11
 
-  postcov:
+  covreport:
 
     runs-on: ubuntu-latest
-    needs: [tests, docs]
+    needs: [tests] # add docs if I run examples and tutorials
     
     steps:
       
@@ -161,7 +167,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       
       - name: Install coverage
         run: |
@@ -190,11 +196,68 @@ jobs:
       
       - name: Remove gitignore file
         run: rm htmlcov/.gitignore
-      
-      - name: Copy report to github pages
-        if: github.event_name == 'push'
-        uses: JamesIves/github-pages-deploy-action@v4.4.1
+
+      - name: Save coverage report
+        uses: actions/upload-artifact@v4
         with:
-          branch: gh-pages
-          folder: htmlcov
-          target-folder: htmlcov
+          name: covreport
+          path: htmlcov
+
+      # - name: Copy report to github pages
+      #   if: github.event_name == 'push'
+      #   uses: JamesIves/github-pages-deploy-action@v4.4.1
+      #   with:
+      #     branch: gh-pages
+      #     folder: htmlcov
+      #     target-folder: htmlcov
+
+  deploy:
+    
+    runs-on: ubuntu-latest
+    needs: [docs, covreport]
+    
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Get documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: docs
+      
+      - name: Get coverage report
+        uses: actions/download-artifact@v4
+        with:
+          name: covreport
+
+      - name: List files
+        run: |
+          pwd
+          ls -a
+          ls htmlcov
+          ls docs/_build/html
+
+      - name: Put together site
+        run: |
+          mkdir -p _site
+          mv docs/_build/html _site/docs
+          mv htmlcov _site/
+      
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
