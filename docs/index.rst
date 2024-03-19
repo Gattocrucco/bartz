@@ -39,6 +39,7 @@ Contents
     grove.rst
     mcmcstep.rst
     mcmcloop.rst
+    changelog.md
     development.rst
     
 * :ref:`genindex`

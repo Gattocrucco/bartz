@@ -7,6 +7,7 @@ __pycache__
 poetry.toml
 dist/
 docs/_build
+.coverage*
 
 # Personal
 note.txt
