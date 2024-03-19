@@ -36,5 +36,6 @@ def rng(request):
 @pytest.fixture
 def key(rng):
     """ A deterministic per-test jax random key """
-    seed = np.array(rng.bytes(8)).view(np.uint64)
-    return jax.random.key(seed)
+    seed = np.array(rng.bytes(4)).view(np.uint32)
+    key = jax.random.key(seed)
+    return jax.random.fold_in(key, 0xcc755e92)
