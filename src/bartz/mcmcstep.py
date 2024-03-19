@@ -283,7 +283,10 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
     
     var_tree = bart['var_trees'][i_tree]
     split_tree = bart['split_trees'][i_tree]
-    affluence_tree = None if bart['affluence_trees'] is None else bart['affluence_trees'][i_tree]
+    affluence_tree = (
+        None if bart['affluence_trees'] is None else
+        bart['affluence_trees'][i_tree]
+    )
     
     key1, key2, key3 = random.split(key, 3)
     args = [
@@ -299,10 +302,10 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
         bart['min_points_per_leaf'],
         key1,
     ]
-    grow_var_tree, grow_split_tree, grow_allowed, grow_ratio = grow_move(*args)
+    grow_var_tree, grow_split_tree, grow_affluence_tree, grow_allowed, grow_ratio = grow_move(*args)
 
     args[-1] = key2
-    prune_var_tree, prune_split_tree, prune_allowed, prune_ratio = prune_move(*args)
+    prune_var_tree, prune_split_tree, prune_affluence_tree, prune_allowed, prune_ratio = prune_move(*args)
 
     u0, u1 = random.uniform(key3, (2,))
 
@@ -320,6 +323,11 @@ def mcmc_sample_tree_structure(bart, key, i_tree):
 
     bart['var_trees'] = bart['var_trees'].at[i_tree].set(var_tree)
     bart['split_trees'] = bart['split_trees'].at[i_tree].set(split_tree)
+
+    if bart['min_points_per_leaf'] is not None:
+        affluence_tree = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
+        affluence_tree = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
+        bart['affluence_trees'] = bart['affluence_trees'].at[i_tree].set(affluence_tree)
 
     bart['grow_prop_count'] += try_grow
     bart['grow_acc_count'] += do_grow
@@ -364,6 +372,8 @@ def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal,
         The new variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
         The new splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        The new indicator whether a leaf has enough points to be grown.
     allowed : bool
         Whether the move is allowed.
     ratio : float
@@ -378,22 +388,46 @@ def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal,
 
     key1, key2, key3 = random.split(key, 3)
     
-    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, affluence_tree, key1)
+    leaf_to_grow, num_growable, num_prunable, allowed = choose_leaf(split_tree, affluence_tree, key1)
     
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
-    split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
+    new_split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    allowed = num_growable > 0
-
-    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, leaf_to_grow)
-    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, leaf_to_grow, n_tree, min_points_per_leaf)
+    likelihood_ratio, new_affluence_tree = compute_likelihood_ratio(X, var_tree, new_split_tree, resid, sigma2, leaf_to_grow, n_tree, min_points_per_leaf)
+    
+    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, leaf_to_grow, split_tree, new_split_tree, affluence_tree, new_affluence_tree)
 
     ratio = trans_tree_ratio * likelihood_ratio
 
-    return var_tree, split_tree, allowed, ratio
+    return var_tree, new_split_tree, new_affluence_tree, allowed, ratio
+
+def growable_leaves(split_tree, affluence_tree):
+    """
+    Return a mask indicating the leaf nodes that can be proposed for growth.
+
+    Parameters
+    ----------
+    split_tree : array (2 ** (d - 1),)
+        The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
+
+    Returns
+    -------
+    is_growable : bool array (2 ** (d - 1),)
+        The mask indicating the leaf nodes that can be proposed to grow, i.e.,
+        that are not at the bottom level and have at least two times the number
+        of minimum points per leaf.
+    allowed : bool
+        Whether the grow move is allowed, i.e., there are growable leaves.
+    """
+    is_growable = grove.is_actual_leaf(split_tree)
+    if affluence_tree is not None:
+        is_growable &= affluence_tree
+    return is_growable, jnp.any(is_growable)
 
 def choose_leaf(split_tree, affluence_tree, key):
     """
@@ -418,15 +452,15 @@ def choose_leaf(split_tree, affluence_tree, key):
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         selected leaf to a non-terminal node.
+    allowed : bool
+        Whether the grow move is allowed.
     """
-    is_growable = grove.is_actual_leaf(split_tree)
-    if affluence_tree is not None:
-        is_growable &= affluence_tree
+    is_growable, allowed = growable_leaves(split_tree, affluence_tree)
     leaf_to_grow = randint_masked(key, is_growable)
     num_growable = jnp.count_nonzero(is_growable)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
-    return leaf_to_grow, num_growable, num_prunable
+    return leaf_to_grow, num_growable, num_prunable, allowed
 
 def randint_masked(key, mask):
     """
@@ -634,7 +668,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonterminal, leaf_to_grow):
+def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonterminal, leaf_to_grow, initial_split_tree, new_split_tree, initial_affluence_tree, new_affluence_tree):
     """
     Compute the product of the transition and prior ratios of a grow move.
 
@@ -651,6 +685,14 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
         The probability of a nonterminal node at each depth.
     leaf_to_grow : int
         The index of the leaf to grow.
+    initial_split_tree : array (2 ** (d - 1),)
+        The splitting points of the tree, before the leaf is grown.
+    new_split_tree : array (2 ** (d - 1),)
+        The splitting points of the tree, after the leaf is grown.
+    initial_affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown, before the leaf is grown.
+    new_affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown, after the leaf is grown.
 
     Returns
     -------
@@ -662,15 +704,12 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
     # the two ratios also contain factors num_available_split *
     # num_available_var, but they cancel out
 
-    p_grow = jnp.where(num_growable > 1, 0.5, 1)
-        # if num_growable == 1, then the starting tree is a root, and can not be
-        # pruned
-        # => error: there could also be a deep tree with only 1 growable node (TODO)
-    p_prune = jnp.where(num_prunable < tree_halfsize // 2, 0.5, 1)
-        # if num_prunable == 2^(d - 2), then all leaf parents are at level d -
-        # 2, which means that all leaves are at level d - 1, which means the new
-        # tree can't be grown again, which means the probability of trying to
-        # prune it is 1
+    prune_was_allowed = prune_allowed(initial_split_tree)
+    p_grow = jnp.where(prune_was_allowed, 0.5, 1)
+
+    _, grow_again_allowed = growable_leaves(new_split_tree, new_affluence_tree)
+    p_prune = jnp.where(grow_again_allowed, 0.5, 1)
+
     trans_ratio = p_prune * num_growable / (p_grow * num_prunable)
 
     depth = grove.index_depth(leaf_to_grow, tree_halfsize)
@@ -708,6 +747,8 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     -------
     ratio : float
         The likelihood ratio P(data | new tree) / P(data | old tree).
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown, after the grow move.
     """
 
     resid_tree, count_tree = agg_values(
@@ -747,8 +788,11 @@ def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n
     if min_points_per_leaf is not None:
         ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
         ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
+        affluence_tree = count_tree[:count_tree.size // 2] >= 2 * min_points_per_leaf
+    else:
+        affluence_tree = None
 
-    return ratio
+    return ratio, affluence_tree
 
 def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
     """
@@ -786,24 +830,30 @@ def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal
         The new variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
         The new splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        The new indicator whether a leaf has enough points to be grown.
     allowed : bool
         Whether the move is allowed.
     ratio : float
         The Metropolis-Hastings ratio.
     """
     node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, affluence_tree, key)
+    allowed = prune_allowed(split_tree)
 
-    allowed = split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
+    new_split_tree = split_tree.at[node_to_prune].set(0)
+    # should I clean up var_tree as well? just for debugging. it hasn't given me problems though
 
-    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, node_to_prune)
-    likelihood_ratio = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree, min_points_per_leaf)
+    likelihood_ratio, _ = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree, min_points_per_leaf)
+    new_affluence_tree = (
+        None if affluence_tree is None else
+        affluence_tree.at[node_to_prune].set(True)
+    )
+    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, node_to_prune, new_split_tree, split_tree, new_affluence_tree, affluence_tree)
 
     ratio = trans_tree_ratio * likelihood_ratio
     ratio = 1 / ratio # Question: should I use lax.reciprocal for this?
 
-    split_tree = split_tree.at[node_to_prune].set(0)
-
-    return var_tree, split_tree, allowed, ratio
+    return var_tree, new_split_tree, new_affluence_tree, allowed, ratio
 
 def choose_leaf_parent(split_tree, affluence_tree, key):
     """
@@ -833,12 +883,31 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
     node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
 
-    is_growable_leaf = grove.is_actual_leaf(split_tree.at[node_to_prune].set(0))
-    if affluence_tree is not None:
-        is_growable_leaf &= affluence_tree.at[node_to_prune].set(True)
+    pruned_split_tree = split_tree.at[node_to_prune].set(0)
+    pruned_affluence_tree = (
+        None if affluence_tree is None else
+        affluence_tree.at[node_to_prune].set(True)
+    )
+    is_growable_leaf, _ = growable_leaves(pruned_split_tree, pruned_affluence_tree)
     num_growable = jnp.count_nonzero(is_growable_leaf)
 
     return node_to_prune, num_prunable, num_growable
+
+def prune_allowed(split_tree):
+    """
+    Return whether a prune move is allowed.
+
+    Parameters
+    ----------
+    split_tree : array (2 ** (d - 1),)
+        The splitting points of the tree.
+
+    Returns
+    -------
+    allowed : bool
+        Whether a prune move is allowed.
+    """
+    return split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
 def mcmc_sample_tree_leaves(bart, key, i_tree):
     """
@@ -879,10 +948,6 @@ def mcmc_sample_tree_leaves(bart, key, i_tree):
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
     leaf_tree = leaf_tree.at[0].set(0) # this 0 is used by evaluate_tree
     bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
-
-    if bart['min_points_per_leaf'] is not None:
-        affluence_tree = count_tree[:count_tree.size // 2] >= 2 * bart['min_points_per_leaf']
-        bart['affluence_trees'] = bart['affluence_trees'].at[i_tree].set(affluence_tree)
 
     return bart
 

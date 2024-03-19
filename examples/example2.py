@@ -12,7 +12,7 @@ from rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 200 # number of datapoints
+n = 500 # number of datapoints
 p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
@@ -31,7 +31,7 @@ def gen_X(key, p, n):
 
 # set up random seed
 key = random.key(202403142235)
-key, key1, key2, key3, key4, key5 = random.split(key, 6)
+key, key1, key2, key3, key4, key5, key6 = random.split(key, 7)
 
 # generate data
 X_train = gen_X(key1, p, n)
@@ -44,7 +44,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=50, nskip=1000, ndpost=500, numcut=255, printevery=100)
+kw = dict(ntree=50, nskip=1000, ndpost=1000, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 bad = bart1._check_trees()
@@ -65,9 +65,21 @@ print(f'\ndata sdev = {y_test.std():#.2g}')
 for label, bart in barts.items():
     resid = y_test - bart.yhat_test_mean
     rmse = jnp.sqrt(resid @ resid / resid.size)
-    sigma = jnp.sqrt(jnp.mean(jnp.square(bart.sigma)))
+    sigma_m = jnp.sqrt(jnp.mean(jnp.square(bart.sigma)))
     print(f'{label}:')
-    print(f'    sigma: {sigma:#.2g} (true: {sigma:#.2g})')
+    print(f'    sigma: {sigma_m:#.2g} (true: {sigma:#.2g})')
+    print(f'    RMSE: {rmse.item():#.2g}')
+# compute RMSE
+print(f'\ndata sdev = {y_test.std():#.2g}')
+for label, bart in barts.items():
+    resid = y_test - bart.yhat_test_mean
+    rmse = jnp.sqrt(resid @ resid / resid.size)
+    y_pred = bart.yhat_test + bart.sigma[:, None] * random.normal(key6, bart.yhat_test.shape)
+    totsdev = jnp.sqrt(jnp.var(y_pred, axis=0).mean())
+    sigma_m = jnp.sqrt(jnp.mean(jnp.square(bart.sigma)))
+    print(f'{label}:')
+    print(f'    sigma: {sigma_m:#.2g} (true: {sigma:#.2g})')
+    print(f'    avg_pred_sdev: {totsdev:#.2g}')
     print(f'    RMSE: {rmse.item():#.2g}')
 
 # plot true vs. predicted

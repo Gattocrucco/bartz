@@ -47,6 +47,7 @@ jax = "^0.4.25"
 jaxlib = "^0.4.25"
 numpy = "^1.26.4"
 scipy = "^1.12.0"
+appnope = "^0.1.4"
 
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.22.2"
