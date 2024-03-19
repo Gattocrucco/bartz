@@ -28,7 +28,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "bartz"
-version = "0.0.dev0"
+version = "0.0"
 description = "A JAX implementation of BART"
 authors = ["Giacomo Petrillo <info@giacomopetrillo.com>"]
 license = "MIT"
@@ -47,11 +47,11 @@ jax = "^0.4.25"
 jaxlib = "^0.4.25"
 numpy = "^1.26.4"
 scipy = "^1.12.0"
-appnope = "^0.1.4"
 
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.22.2"
 matplotlib = "^3.8.3"
+appnope = "^0.1.4"
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"
