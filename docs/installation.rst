@@ -1,4 +1,4 @@
-.. bartz/docs/index.rst
+.. bartz/docs/installation.rst
 ..
 .. Copyright (c) 2024, Giacomo Petrillo
 ..
@@ -22,24 +22,11 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. module:: bartz
+Installation
+============
 
-bartz
-=====
+Install and set up Python. There are various ways to do it; my favorite one is to use `micromamba <https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html>`_. Then:
 
-Contents
---------
+.. code-block:: sh
 
-.. toctree::
-    :maxdepth: 1
-    
-    installation.rst
-    usage.rst
-    interface.rst
-    grove.rst
-    mcmcstep.rst
-    mcmcloop.rst
-    development.rst
-    
-* :ref:`genindex`
-* :ref:`search`
+    $ pip install bartz

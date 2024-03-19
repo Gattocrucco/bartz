@@ -83,7 +83,7 @@ class BART:
         The number of trees used to represent the latent mean function.
     numcut : int, default 255
         The maximum number of cutpoints to use for binning the predictors. Each
-        covariate is binned such that its distribution in `x_train` is
+        predictor is binned such that its distribution in `x_train` is
         approximately uniform across bins. The number of bins is at most the
         number of unique values appearing in `x_train`, or ``numcut + 1``.
         Before running the algorithm, the predictors are compressed to th
@@ -129,11 +129,11 @@ class BART:
 
     Notes
     -----
-    This interface imitates the function `wbart` from the R package `BART`, but
-    with these differences:
+    This interface imitates the function `wbart` from the R package `BART
+    <https://cran.r-project.org/package=BART>`_, but with these differences:
 
-    - If `x_train` and `x_test` are matrices, they have covariates as rows
-      instead of columns.
+    - If `x_train` and `x_test` are matrices, they have one predictor per row
+      instead of per column.
     - The error variance parameter is called `lamda` instead of `lambda`.
     - `usequants` is always `True`.
     - `rm_const` is always `False`.
@@ -161,7 +161,7 @@ class BART:
         seed=0,
         ):
 
-        x_train, x_train_fmt = self._process_covariate_input(x_train)
+        x_train, x_train_fmt = self._process_predictor_input(x_train)
         
         y_train, y_train_fmt = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
@@ -171,7 +171,7 @@ class BART:
         scale = self._process_scale_settings(y_train, k)
 
         splits, max_split = self._determine_splits(x_train, numcut)
-        x_train = self._bin_covariates(x_train, splits)
+        x_train = self._bin_predictors(x_train, splits)
 
         y_train = self._transform_input(y_train, offset, scale)
         lamda = lamda / scale
@@ -223,14 +223,14 @@ class BART:
         yhat_test : array (ndpost, m)
             The conditional posterior mean at `x_test` for each MCMC iteration.
         """
-        x_test, x_test_fmt = self._process_covariate_input(x_test)
+        x_test, x_test_fmt = self._process_predictor_input(x_test)
         self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
-        x_test = self._bin_covariates(x_test, self._splits)
+        x_test = self._bin_predictors(x_test, self._splits)
         yhat_test = self._predict(self._main_trace, x_test)
         return self._transform_output(yhat_test, self.offset, self.scale)
 
     @staticmethod
-    def _process_covariate_input(x):
+    def _process_predictor_input(x):
         if hasattr(x, 'columns'):
             fmt = dict(kind='dataframe', columns=x.columns)
             x = x.to_numpy().T
@@ -302,8 +302,8 @@ class BART:
         return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
 
     @staticmethod
-    def _bin_covariates(x, splits):
-        return prepcovars.bin_covariates(x, splits)
+    def _bin_predictors(x, splits):
+        return prepcovars.bin_predictors(x, splits)
 
     @staticmethod
     def _transform_input(y, offset, scale):
@@ -350,9 +350,9 @@ class BART:
     
     def _predict_debug(self, x_test):
         from . import debug
-        x_test, x_test_fmt = self._process_covariate_input(x_test)
+        x_test, x_test_fmt = self._process_predictor_input(x_test)
         self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
-        x_test = self._bin_covariates(x_test, self._splits)
+        x_test = self._bin_predictors(x_test, self._splits)
         return debug.trace_evaluate_trees(self._main_trace, x_test)
 
     def _show_tree(self, i_sample, i_tree, print_all=False):

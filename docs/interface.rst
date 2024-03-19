@@ -1,4 +1,4 @@
-.. bartz/docs/index.rst
+.. bartz/docs/interface.rst
 ..
 .. Copyright (c) 2024, Giacomo Petrillo
 ..
@@ -22,24 +22,8 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. module:: bartz
+Interface
+=========
 
-bartz
-=====
-
-Contents
---------
-
-.. toctree::
-    :maxdepth: 1
-    
-    installation.rst
-    usage.rst
-    interface.rst
-    grove.rst
-    mcmcstep.rst
-    mcmcloop.rst
-    development.rst
-    
-* :ref:`genindex`
-* :ref:`search`
+.. automodule:: bartz.interface
+    :members:

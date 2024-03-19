@@ -31,21 +31,21 @@ from . import grove
 
 def quantilized_splits_from_matrix(X, max_bins):
     """
-    Determine bins that make the distribution of each covariate uniform.
+    Determine bins that make the distribution of each predictor uniform.
 
     Parameters
     ----------
     X : array (p, n)
-        A matrix with p covariates and n observations.
+        A matrix with `p` predictors and `n` observations.
     max_bins : int
         The maximum number of bins to produce.
 
     Returns
     -------
     splits : array (p, m)
-        A matrix containing, for each covariate, the boundaries between bins.
+        A matrix containing, for each predictor, the boundaries between bins.
         `m` is ``min(max_bins, n) - 1``, which is an upper bound on the number
-        of splits. Each covariate may have a different number of splits; unused
+        of splits. Each predictor may have a different number of splits; unused
         values at the end of each row are filled with the maximum value
         representable in the type of `X`.
     max_split : array (p,)
@@ -90,16 +90,16 @@ def huge_value(x):
     else:
         return jnp.inf
 
-def bin_covariates(X, splits):
+def bin_predictors(X, splits):
     """
-    Bin the covariates according to the given splits.
+    Bin the predictors according to the given splits.
 
     Parameters
     ----------
     X : array (p, n)
-        A matrix with p covariates and n observations.
+        A matrix with `p` predictors and `n` observations.
     splits : array (p, m)
-        A matrix containing, for each covariate, the boundaries between bins.
+        A matrix containing, for each predictor, the boundaries between bins.
         `m` is the maximum number of splits; each row may have shorter
         actual length, marked by padding unused locations at the end of the
         row with the maximum value allowed by the type.
@@ -107,12 +107,12 @@ def bin_covariates(X, splits):
     Returns
     -------
     X_binned : int array (p, n)
-        A matrix with p covariates and n observations, where each covariate has
-        been replaced by the index of the bin it falls into.
+        A matrix with `p` predictors and `n` observations, where each predictor
+        has been replaced by the index of the bin it falls into.
     """
-    return bin_covariates_impl(X, splits)
+    return bin_predictors_impl(X, splits)
 
 @jax.vmap
-def bin_covariates_impl(x, splits):
+def bin_predictors_impl(x, splits):
     dtype = grove.minimal_unsigned_dtype(splits.size)
     return jnp.searchsorted(splits, x).astype(dtype)

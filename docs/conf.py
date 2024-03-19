@@ -114,6 +114,9 @@ master_doc = 'index'
 autoclass_content = 'both' # concatenate the class and __init__ docstrings
 autodoc_preserve_defaults = True # default arguments are printed as in source
                                  # instead of being evaluated
+autodoc_default_options = {
+    'member-order': 'bysource',
+}
 
 numpydoc_class_members_toctree = False
 numpydoc_show_class_members = False

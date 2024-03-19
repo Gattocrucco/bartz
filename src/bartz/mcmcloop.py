@@ -46,7 +46,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     ----------
     bart : dict
         The initial MCMC state, as created and updated by the functions in
-        `mcmcstep`.
+        `bartz.mcmcstep`.
     n_burn : int
         The number of initial iterations which are not saved.
     n_save : int
@@ -60,7 +60,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         bart : dict
             The current MCMC state.
         burnin : bool
-            Whether the current iteration is in the burn-in phase.
+            Whether the last iteration was in the burn-in phase.
         i_total : int
             The index of the last iteration (0-based).
         i_skip : int
@@ -169,7 +169,7 @@ def evaluate_trace(trace, X):
     trace : dict
         A trace of the BART MCMC, as returned by `run_mcmc`.
     X : array (p, n)
-        The covariate matrix, with p covariates and n observations.
+        The predictors matrix, with `p` predictors and `n` observations.
 
     Returns
     -------

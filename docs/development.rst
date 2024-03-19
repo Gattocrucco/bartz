@@ -30,11 +30,13 @@ Initial setup
 
 Clone the repository:
 
-.. code-block:: shell
+.. code-block:: sh
+
     $ git clone git@github.com:Gattocrucco/bartz.git
     $ cd bartz
 
 Install `poetry <https://python-poetry.org/docs/#installation>`_. My favorite complete installation route on macOS:
+
 * Install `brew <https://brew.sh/>`_, then add :literal:`brew` to the :literal:`PATH`
 * :literal:`$ brew install pipx`, then add :literal:`pipx`'s directory to the :literal:`PATH`
 * :literal:`$ pipx install poetry`
@@ -42,14 +44,16 @@ Install `poetry <https://python-poetry.org/docs/#installation>`_. My favorite co
 Create a virtual environment and activate it. You can skip this, as :literal:`poetry` will do it automatically. My favorite complete installation route:
 
 .. code-block:: shell
+
     $ brew install micromamba
     $ micromamba env create -n bartz python
     $ micromamba activate bartz
-    $ poetry config virtualenvs.create false --local
+    (bartz) $ poetry config virtualenvs.create false --local
 
 Finally, install the package with
 
 .. code-block:: shell
+
     (bartz) $ poetry install
 
 Routine setup
@@ -58,6 +62,7 @@ Routine setup
 Each time you want to work on `bartz` in a terminal, do
 
 .. code-block:: shell
+
     $ cd <...>/bartz
     $ micromamba activate bartz # or the activation command for your env
     (bartz) $
@@ -65,15 +70,17 @@ Each time you want to work on `bartz` in a terminal, do
 Maintainer setup
 ----------------
 
-Go to PyPI, create a token, add it to poetry with
+Login to PyPI, create a token, add it to poetry with
 
 .. code-block:: shell
+
     $ poetry config pypi-token.pypi <token>
 
 Routine poetry commands
 -----------------------
 
 .. code-block:: shell
+
     $ poetry update # updates the lock file to the latest available versions of the dependencies
     $ poetry build
     $ poetry publish

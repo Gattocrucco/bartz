@@ -27,13 +27,13 @@
 COVERAGE_SUFFIX=
 
 RELEASE_TARGETS = tests examples docscode docs
-TARGETS = upload release $(RELEASE_TARGETS) covreport resetenv
+TARGETS = upload release $(RELEASE_TARGETS) covreport
 
 .PHONY: all $(TARGETS)
 
 all:
 	@echo "available targets: $(TARGETS)"
-	@echo "release = $(RELEASE_TARGETS) (in order)"
+	@echo "release = $(RELEASE_TARGETS) (in order) + build"
 	@echo
 	@echo "Release instructions:"
 	@echo " 1) remove .devN suffix from version in src/bartz/__init__.py"

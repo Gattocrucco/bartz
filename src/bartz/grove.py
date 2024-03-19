@@ -22,7 +22,21 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-""" Functions to create and manipulate trees """
+"""
+
+Functions to create and manipulate binary trees.
+
+A tree is represented with arrays as a heap. The root node is at index 1. The children nodes of a node at index :math:`i` are at indices :math:`2i` (left child) and :math:`2i + 1` (right child). The array element at index 0 is unused.
+
+A decision tree is represented by tree arrays: 'leaf', 'var', and 'split'. The 'leaf' array contains the values in the leaves. The 'var' array contains the axes along which the decision nodes operate. The 'split' array contains the decision boundaries.
+
+Whether a node is a leaf is indicated by the corresponding 'split' element being 0.
+
+Since the nodes at the bottom can only be leaves and not decision nodes, the 'var' and 'split' arrays have half the length of the 'leaf' array.
+
+The unused array element at index 0 is always fixed to 0 by convention.
+
+"""
 
 import functools
 import math
@@ -30,6 +44,8 @@ import math
 import jax
 from jax import numpy as jnp
 from jax import lax
+
+from . import jaxext
 
 def make_tree(depth, dtype):
     """
@@ -58,7 +74,7 @@ def make_tree(depth, dtype):
 
 def tree_depth(tree):
     """
-    Return the depth of a binary tree created by `make_tree`.
+    Return the maximum depth of a binary tree created by `make_tree`.
 
     Parameters
     ----------
@@ -69,7 +85,7 @@ def tree_depth(tree):
     Returns
     -------
     depth : int
-        The depth of the tree.
+        The maximum depth of the tree.
     """
     return int(round(math.log2(tree.shape[-1])))
 
@@ -159,7 +175,7 @@ def minimal_unsigned_dtype(max_value):
         return jnp.uint32
     return jnp.uint64
 
-@functools.partial(jax.vmap, in_axes=(1, None, None, None, None), out_axes=0)
+@functools.partial(jaxext.vmap_nodoc, in_axes=(1, None, None, None, None), out_axes=0)
 def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
     """
     Evaluate a decision tree or forest over multiple points.

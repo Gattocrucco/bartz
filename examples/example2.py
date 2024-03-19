@@ -1,19 +1,17 @@
 import warnings
-import sys
 
 from jax import numpy as jnp
 from jax import random
 from matplotlib import pyplot as plt
 import bartz
 
-# sys.path.insert(1, 'examples')
 from rbartpackages import BART
 
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
 n = 500 # number of datapoints
-p = 10 # number of covariates
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2

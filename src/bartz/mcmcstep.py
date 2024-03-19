@@ -24,6 +24,13 @@
 
 """
 Functions that implement the BART posterior MCMC initialization and update step.
+
+Functions that do MCMC steps operate by taking as input a bart state, and
+outputting a new dictionary with the new state. The input dict/arrays are not
+modified.
+
+In general, integer types are chosen to be the minimal types that contain the
+range of possible values.
 """
 
 import functools
@@ -114,16 +121,6 @@ def make_bart(*,
         'affluence_trees' : bool array (num_trees, 2 ** (d - 1)) or None
             Whether a non-bottom leaf nodes contains twice `min_points_per_leaf`
             datapoints. If `min_points_per_leaf` is not specified, this is None.
-
-    Notes
-    -----
-    Integer types are chosen to be the minimal type that contains the range of
-    possible values.
-
-    Functions that implement MCMC steps operate by taking as input a bart state,
-    and outputting a new dictionary with the new state. The input dict/arrays
-    are not modified.
-
     """
 
     p_nonterminal = jnp.asarray(p_nonterminal, large_float_dtype)

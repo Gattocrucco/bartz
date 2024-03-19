@@ -76,3 +76,10 @@ class scipy:
             
             def ppf(q, a):
                 return 1 / scipy.special.gammainccinv(a, q)
+
+@functools.wraps(jax.vmap)
+def vmap_nodoc(fun, *args, **kw):
+    doc = fun.__doc__
+    fun = jax.vmap(fun, *args, **kw)
+    fun.__doc__ = doc
+    return fun
