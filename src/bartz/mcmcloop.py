@@ -148,16 +148,17 @@ def make_simple_print_callback(printevery):
         prune_prop = bart['prune_prop_count'] / prop_total
         grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
         prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
-        n_total = n_burn + n_save
+        n_total = n_burn + n_save * n_skip
         debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
     return callback
-
-    # TODO this is wrong if n_skip != 1
 
 def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
     if (i_total + 1) % printevery == 0:
         burnin_flag = ' (burnin)' if burnin else ''
-        print(f'Iteration {i_total + 1:4d}/{n_total:d} '
+        total_str = str(n_total)
+        ndigits = len(total_str)
+        i_str = str(i_total + 1).rjust(ndigits)
+        print(f'Iteration {i_str}/{total_str} '
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
             f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}{burnin_flag}')
 
