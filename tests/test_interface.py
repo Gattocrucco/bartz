@@ -140,3 +140,28 @@ def test_residuals_accuracy(key):
     bart = bartz.BART(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
     acc_resid, actual_resid = bart._compare_resid()
     numpy.testing.assert_allclose(actual_resid, acc_resid, atol=1e-5, rtol=1e-5)
+
+def test_no_datapoints(X, y, kw, key):
+    X = X[:, :0]
+    y = y[:0]
+    bart = bartz.BART(X, y, **kw, seed=key)
+    ndpost = kw['ndpost']
+    assert bart.yhat_train.shape == (ndpost, 0)
+    assert bart.offset == 0
+    assert bart.scale == 1
+    assert bart.sigest == 1
+
+def test_one_datapoint(X, y, kw, key):
+    X = X[:, :1]
+    y = y[:1]
+    bart = bartz.BART(X, y, **kw, seed=key)
+    ndpost = kw['ndpost']
+    assert bart.scale == 1
+    assert bart.sigest == 1
+
+def test_two_datapoints(X, y, kw, key):
+    X = X[:, :2]
+    y = y[:2]
+    bart = bartz.BART(X, y, **kw, seed=key)
+    ndpost = kw['ndpost']
+    numpy.testing.assert_allclose(bart.sigest, y.std())
