@@ -152,6 +152,8 @@ def make_simple_print_callback(printevery):
         debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
     return callback
 
+    # TODO this is wrong if n_skip != 1
+
 def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
     if (i_total + 1) % printevery == 0:
         burnin_flag = ' (burnin)' if burnin else ''

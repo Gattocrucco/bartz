@@ -120,3 +120,15 @@ def test_scale_shift(X, y, key, kw):
     numpy.testing.assert_allclose(bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, atol=1e-5, rtol=1e-5)
     numpy.testing.assert_allclose(bart1.sigma, bart2.sigma / scale, atol=1e-6, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.first_sigma, bart2.first_sigma / scale, atol=1e-6, rtol=1e-6)
+
+def test_min_points_per_leaf(X, y, key, kw):
+    bart = bartz.BART(X, y, **kw, seed=key)
+    distr = bart._points_per_leaf_distr()
+    distr_marg = distr.sum(axis=0)
+    distr_lim = distr_marg[:5]
+    assert jnp.all(distr_lim == 0)
+
+def test_residuals_accuracy(X, y, key, kw):
+    bart = bartz.BART(X, y, **kw, seed=key)
+    acc_resid, actual_resid = bart._compare_resid()
+    numpy.testing.assert_allclose(actual_resid, acc_resid, atol=1e-6, rtol=1e-5)
