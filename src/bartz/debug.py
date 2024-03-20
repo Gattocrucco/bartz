@@ -65,15 +65,11 @@ def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
         else:
             link = ' '
 
-        if print_all:
-            max_number = len(leaf_tree) - 1
-            ndigits = len(str(max_number))
-            number = str(index).rjust(ndigits)
-            number = f' {number} '
-        else:
-            number = ''
+        max_number = len(leaf_tree) - 1
+        ndigits = len(str(max_number))
+        number = str(index).rjust(ndigits)
 
-        print(f'{number}{indent}{first_indent}{link}{node_str}')
+        print(f' {number} {indent}{first_indent}{link}{node_str}')
 
         indent += next_indent
         unused = unused or is_leaf
