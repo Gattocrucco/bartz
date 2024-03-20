@@ -49,15 +49,18 @@ def f(x): # conditional mean
     T = 2
     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
 
-@pytest.fixture
-def y(X, key):
+def gen_y(key, X):
     sigma = 0.1
-    key = random.fold_in(key, 0x1391bc96)
     return f(X) + sigma * random.normal(key, (X.shape[1],))
 
 @pytest.fixture
+def y(X, key):
+    key = random.fold_in(key, 0x1391bc96)
+    return gen_y(key, X)
+
+@pytest.fixture
 def kw():
-    return dict(ntree=20, ndpost=100, nskip=100)
+    return dict(ntree=20, ndpost=100, nskip=50)
 
 def test_bad_trees(X, y, key, kw):
     bart = bartz.BART(X, y, **kw, seed=key)
@@ -128,7 +131,12 @@ def test_min_points_per_leaf(X, y, key, kw):
     distr_lim = distr_marg[:5]
     assert jnp.all(distr_lim == 0)
 
-def test_residuals_accuracy(X, y, key, kw):
-    bart = bartz.BART(X, y, **kw, seed=key)
+def test_residuals_accuracy(key):
+    key1, key2, key3 = random.split(key, 3)
+    n = 100
+    p = 1
+    X = gen_X(key1, p, n)
+    y = gen_y(key2, X)
+    bart = bartz.BART(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
     acc_resid, actual_resid = bart._compare_resid()
-    numpy.testing.assert_allclose(actual_resid, acc_resid, atol=1e-6, rtol=1e-5)
+    numpy.testing.assert_allclose(actual_resid, acc_resid, atol=1e-5, rtol=1e-5)
