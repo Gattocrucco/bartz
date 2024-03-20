@@ -1,4 +1,5 @@
 import warnings
+import time
 
 from jax import numpy as jnp
 from jax import random
@@ -8,8 +9,8 @@ import bartz
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 2000 # number of datapoints (train + test)
-p = 2 # number of covariates
+n = 10 # number of datapoints (train + test)
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     R = 2
@@ -31,8 +32,22 @@ y_train, y_test = y[:n_train], y[n_train:]
 # X_test = X_train
 # y_test = y_train
 
+class Timer:
+
+    def __init__(self, name):
+        self.name = name
+        self.start = time.perf_counter()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.end = time.perf_counter()
+        print(f'{self.name}: {self.end - self.start:.2f} s')
+
 # fit with bartz
-bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=200, nskip=500, ndpost=500, seed=key3)
+with Timer('bartz'):
+    bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=10, nskip=500, ndpost=500, seed=key3)
 
 # compute RMSE
 resid = y_test - bart.yhat_test_mean
