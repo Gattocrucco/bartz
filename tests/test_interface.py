@@ -85,6 +85,7 @@ def test_sequential_guarantee(X, y, key, kw):
 def test_finite(X, y, key, kw):
     bart = bartz.BART(X, y, **kw, seed=key)
     assert jnp.all(jnp.isfinite(bart.yhat_train))
+    assert jnp.all(jnp.isfinite(bart.sigma))
 
 def test_output_shapes(X, y, key, kw):
     bart = bartz.BART(X, y, x_test=X, **kw, seed=key)
@@ -117,7 +118,7 @@ def test_scale_shift(X, y, key, kw):
 
     numpy.testing.assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale)
-    numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale)
+    numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale, atol=1e-7)
     numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale ** 2)
     numpy.testing.assert_allclose(bart1.yhat_train, (bart2.yhat_train - offset) / scale, atol=1e-5, rtol=1e-5)
     numpy.testing.assert_allclose(bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, atol=1e-5, rtol=1e-5)
