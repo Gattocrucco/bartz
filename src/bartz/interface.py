@@ -108,6 +108,8 @@ class BART:
         The prior standard deviation of the latent mean function.
     lamda : float
         The prior harmonic mean of the error variance.
+    sigest : float or None
+        The estimated standard deviation of the error used to set `lamda`.
     ntree : int
         The number of trees.
     yhat_train : array (ndpost, n)
@@ -166,17 +168,17 @@ class BART:
         y_train, y_train_fmt = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
         
-        lamda = self._process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda)
         offset = self._process_offset_settings(y_train, offset)
         scale = self._process_scale_settings(y_train, k)
+        lamda, sigest = self._process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, offset)
 
         splits, max_split = self._determine_splits(x_train, numcut)
         x_train = self._bin_predictors(x_train, splits)
 
         y_train = self._transform_input(y_train, offset, scale)
-        lamda = lamda / scale
+        lamda_scaled = lamda / (scale * scale)
 
-        mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree)
+        mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree)
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         sigma = self._extract_sigma(main_trace, scale)
@@ -184,7 +186,8 @@ class BART:
 
         self.offset = offset
         self.scale = scale
-        self.lamda = lamda * scale
+        self.lamda = lamda
+        self.sigest = sigest
         self.ntree = ntree
         self.sigma = sigma
         self.first_sigma = first_sigma
@@ -261,25 +264,25 @@ class BART:
         assert get_length(x1) == get_length(x2)
 
     @staticmethod
-    def _process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda):
+    def _process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, offset):
         if lamda is not None:
-            return lamda
+            return lamda, None
         else:
             if sigest is not None:
                 sigest2 = sigest * sigest
             elif y_train.size < 2:
                 sigest2 = 1
             elif y_train.size <= x_train.shape[0]:
-                sigest2 = jnp.var(y_train)
+                sigest2 = jnp.var(y_train - offset)
             else:
-                _, chisq, rank, _ = jnp.linalg.lstsq(x_train.T, y_train)
+                _, chisq, rank, _ = jnp.linalg.lstsq(x_train.T, y_train - offset)
                 chisq = chisq.squeeze(0)
                 dof = len(y_train) - rank
                 sigest2 = chisq / dof
             alpha = sigdf / 2
             invchi2 = jaxext.scipy.stats.invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
-            return sigest2 / invchi2rid
+            return sigest2 / invchi2rid, jnp.sqrt(sigest2)
 
     @staticmethod
     def _process_offset_settings(y_train, offset):
