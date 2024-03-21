@@ -50,11 +50,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # - name: Set up Python
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: ${{ matrix.python-version }}
-
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
@@ -62,29 +57,24 @@ jobs:
           environment-file: condaenv.yml
           create-args: python=${{ matrix.python-version }}
 
-      - name: Create virtualenvs
+      - name: Install poetry
         run: |
           python -m pip install --upgrade pip
           python -m venv poetry-venv
-          python -m venv package-venv
-        shell: micromamba-shell {0}
-
-      - name: Install poetry
-        run: |
           source poetry-venv/bin/activate
           python -m pip install poetry
           poetry config virtualenvs.create false
+        shell: micromamba-shell {0}
 
       - name: Install package
         run: |
-          source package-venv/bin/activate
-          test `realpath \`which python\`` = `realpath package-venv/bin/python`
           poetry-venv/bin/poetry install
+        shell: micromamba-shell {0}
 
       - name: Run unit tests
         run: |
-          source package-venv/bin/activate
           make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
+        shell: micromamba-shell {0}
 
       - name: Save coverage information
         uses: actions/upload-artifact@v3 # v3 allows uploading to same artifact
