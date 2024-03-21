@@ -61,6 +61,7 @@ jobs:
           micromamba-version: 1.5.7-0
           environment-file: condaenv.yml
           create-args: python=${{ matrix.python-version }}
+          init-shell: bash
 
       - name: Install poetry
         run: |
