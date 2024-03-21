@@ -1,0 +1,6 @@
+name: bartz
+channels:
+  - conda-forge
+dependencies:
+  - r-bart
+  - rpy2

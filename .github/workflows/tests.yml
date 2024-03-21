@@ -50,10 +50,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # - name: Set up Python
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: ${{ matrix.python-version }}
+
+      - name: Set up micromamba
+        uses: mamba-org/setup-micromamba@v1
         with:
-          python-version: ${{ matrix.python-version }}
+          micromamba-version: 1.5.7
+          environment-file: condaenv.yml
+          create-args: python=${{ matrix.python-version }}
 
       - name: Install poetry
         run: |
