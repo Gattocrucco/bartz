@@ -61,21 +61,24 @@ jobs:
           micromamba-version: 1.5.7-0
           environment-file: condaenv.yml
           create-args: python=${{ matrix.python-version }}
-          init-shell: bash
+
+      - name: Create virtualenvs
+      - run: |
+          python -m pip install --upgrade pip
+          python -m venv poetry-venv
+          python -m venv package-venv
+        shell: micromamba-shell
 
       - name: Install poetry
         run: |
-          python -m venv poetry-venv
-          poetry-venv/bin/python -m pip install --upgrade pip
-          poetry-venv/bin/python -m pip install poetry
-          poetry-venv/bin/poetry config virtualenvs.create false
+          source poetry-venv/bin/activate
+          python -m pip install poetry
+          poetry config virtualenvs.create false
 
       - name: Install package
         run: |
-          python -m venv package-venv
           source package-venv/bin/activate
-          test `realpath \`which python\`` = `realpath package-venv/bin/python` || echo WRONG PYTHON
-          python -m pip install --upgrade pip
+          test `realpath \`which python\`` = `realpath package-venv/bin/python`
           poetry-venv/bin/poetry install
 
       - name: Run unit tests
