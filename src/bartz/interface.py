@@ -102,16 +102,6 @@ class BART:
 
     Attributes
     ----------
-    offset : float
-        The prior mean of the latent mean function.
-    scale : float
-        The prior standard deviation of the latent mean function.
-    lamda : float
-        The prior harmonic mean of the error variance.
-    sigest : float or None
-        The estimated standard deviation of the error used to set `lamda`.
-    ntree : int
-        The number of trees.
     yhat_train : array (ndpost, n)
         The conditional posterior mean at `x_train` for each MCMC iteration.
     yhat_train_mean : array (n,)
@@ -124,6 +114,18 @@ class BART:
         The standard deviation of the error.
     first_sigma : array (nskip,)
         The standard deviation of the error in the burn-in phase.
+    offset : float
+        The prior mean of the latent mean function.
+    scale : float
+        The prior standard deviation of the latent mean function.
+    lamda : float
+        The prior harmonic mean of the error variance.
+    sigest : float or None
+        The estimated standard deviation of the error used to set `lamda`.
+    ntree : int
+        The number of trees.
+    maxdepth : int
+        The maximum depth of the trees.
 
     Methods
     -------
@@ -189,6 +191,7 @@ class BART:
         self.lamda = lamda
         self.sigest = sigest
         self.ntree = ntree
+        self.maxdepth = maxdepth
         self.sigma = sigma
         self.first_sigma = first_sigma
 
