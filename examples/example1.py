@@ -1,12 +1,9 @@
-import warnings
 import time
 
 from jax import numpy as jnp
 from jax import random
 from matplotlib import pyplot as plt
 import bartz
-
-warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
 n = 10 # number of datapoints (train + test)

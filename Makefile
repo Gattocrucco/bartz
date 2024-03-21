@@ -36,14 +36,13 @@ all:
 	@echo "release = $(RELEASE_TARGETS) (in order) + build"
 	@echo
 	@echo "Release instructions:"
-	@echo " 1) remove .devN suffix from version in src/bartz/__init__.py"
+	@echo " 1) bump version in pyproject.toml and src/bartz/__init__.py"
 	@echo " 2) describe release in docs/changelog.md"
 	@echo " 3) commit, push and check CI completes"
 	@echo " 4) $$ make release"
 	@echo " 5) repeat 3 and 4 until everything goes smoothly"
 	@echo " 6) $$ make upload"
 	@echo " 7) publish the github release"
-	@echo " 8) bump version number and add .dev0 suffix"
 
 upload:
 	poetry publish
