@@ -67,7 +67,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m venv poetry-venv
           python -m venv package-venv
-        shell: micromamba-shell
+        shell: micromamba-shell {0}
 
       - name: Install poetry
         run: |
