@@ -29,6 +29,13 @@ SOFTWARE.
 
 # Changelog
 
+## 0.0.1
+
+* `BART` has attributes `maxdepth`, `sigest`.
+* Fix errors with scaling of noise variance prior.
+* Fix iteration report when `keepevery` is not 1.
+* Lower required versions of dependencies to allow running on Colab.
+
 ## 0.0
 
 First release.
