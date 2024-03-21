@@ -58,7 +58,7 @@ jobs:
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          micromamba-version: 1.5.7
+          micromamba-version: 1.5.7-0
           environment-file: condaenv.yml
           create-args: python=${{ matrix.python-version }}
 
