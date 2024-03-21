@@ -29,6 +29,8 @@ import numpy
 
 import bartz
 
+from .rbartpackages import BART
+
 @pytest.fixture
 def n():
     return 30
@@ -204,3 +206,38 @@ def test_few_datapoints(X, y, kw, key):
     y = y[:9]
     bart = bartz.BART(X, y, **kw, seed=key)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
+
+def test_comparison_rbart(X, y, key):
+    key1, key2 = random.split(key, 2)
+    kw = dict(
+        ntree=2 * X.shape[1],
+        nskip=1000,
+        ndpost=1000,
+        numcut=255,
+    )
+    bart = bartz.BART(X, y, **kw, seed=key1)
+    seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
+    rbart = BART.mc_gbart(X.T, y, **kw, usequants=True, rm_const=False, mc_cores=1, seed=seed)
+
+    dist, rank = mahalanobis_distance(bart.yhat_train, rbart.yhat_train)
+    assert dist < rank / 10
+
+    dist, rank = mahalanobis_distance(bart.sigma[:, None], rbart.sigma[:, None])
+    assert dist < rank / 10
+
+def mahalanobis_distance(x, y):
+    avg = (x + y) / 2
+    cov = jnp.atleast_2d(jnp.cov(avg, rowvar=False))
+    
+    w, O = jnp.linalg.eigh(cov) # cov = O w O^T
+    eps = len(w) * jnp.max(jnp.abs(w)) * jnp.finfo(w.dtype).eps
+    nonzero = w > eps
+    w = w[nonzero]
+    O = O[:, nonzero]
+    rank = len(w)
+
+    d = x.mean(0) - y.mean(0)
+    Od = O.T @ d
+    dist = Od @ (Od / w)
+
+    return dist, rank

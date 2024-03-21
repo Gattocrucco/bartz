@@ -10,8 +10,8 @@ from tests.rbartpackages import BART
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 
 # DGP config
-n = 500 # number of datapoints
-p = 1 # number of covariates
+n = 30 # number of datapoints
+p = 2 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -42,7 +42,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=50, nskip=1000, ndpost=1000, numcut=255, printevery=100)
+kw = dict(ntree=60, nskip=1000, ndpost=1000, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 bad = bart1._check_trees()
