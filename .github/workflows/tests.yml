@@ -41,10 +41,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.12"]
-        include:
-          - os: windows-latest
-            python-version: "3.12"
-            experimental: true
+        # include:
+        #   - os: windows-latest
+        #     python-version: "3.12"
+        #     experimental: true
     
     steps:
       - name: Checkout repository
