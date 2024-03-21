@@ -5,7 +5,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import bartz
 
-from rbartpackages import BART
+from tests.rbartpackages import BART
 
 warnings.filterwarnings('error', r'scatter inputs have incompatible types.*', FutureWarning)
 

@@ -33,18 +33,16 @@ try:
     def jax_to_r(x):
         x = np.asarray(x)
         return numpy2ri.py2rpy(x)
-    # example_array = jax.numpy.empty(0)
-    # jax_converter.py2rpy.register(example_array.__class__, jax_to_r)
     jax_converter.py2rpy.register(jax.Array, jax_to_r)
 except ImportError:
     pass
 
 # alternative numpy converter because the default one produces conflicts
-numpy_converter = robjects.conversion.Converter('numpy')
-def numpy_to_r(x):
-    return numpy2ri.py2rpy(x)
-numpy_converter.py2rpy.register(np.ndarray, numpy_to_r)
-numpy_converter.py2rpy.register(np.generic, numpy_to_r)
+# numpy_converter = robjects.conversion.Converter('numpy')
+# def numpy_to_r(x):
+#     return numpy2ri.py2rpy(x)
+# numpy_converter.py2rpy.register(np.ndarray, numpy_to_r)
+# numpy_converter.py2rpy.register(np.generic, numpy_to_r)
 numpy_converter = numpy2ri.converter
 
 # converter for python dictionaries
