@@ -241,3 +241,6 @@ def mahalanobis_distance(x, y):
     dist = Od @ (Od / w)
 
     return dist, rank
+
+# TODO
+# - test where I jit around the whole interface, returning only a prediction
