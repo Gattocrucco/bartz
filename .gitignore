@@ -13,5 +13,8 @@ docs/_build
 _site/docs
 _site/coverage
 
+# Tracing
+jax-trace
+
 # Personal
 note.txt

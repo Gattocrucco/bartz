@@ -30,7 +30,7 @@ Initial setup
 
 Clone the repository:
 
-.. code-block:: sh
+.. code-block:: shell
 
     $ git clone git@github.com:Gattocrucco/bartz.git
     $ cd bartz
@@ -41,14 +41,17 @@ Install `poetry <https://python-poetry.org/docs/#installation>`_. My favorite co
 * :literal:`$ brew install pipx`, then add :literal:`pipx`'s directory to the :literal:`PATH`
 * :literal:`$ pipx install poetry`
 
-Create a virtual environment and activate it. You can skip this, as :literal:`poetry` will do it automatically. My favorite complete installation route:
+Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html>`_ or an equivalent package manager like :literal:`mamba` or :literal:`micromamba`. My favorite is :literal:`micromamba`:
 
 .. code-block:: shell
 
     $ brew install micromamba
-    $ micromamba env create -n bartz python
+
+Create a virtual environment from the file spec:
+
+    $ micromamba env create --file condaenv.yml
     $ micromamba activate bartz
-    (bartz) $ poetry config virtualenvs.create false --local
+    (bartz) $ poetry config virtualenvs.create false --local # to make sure poetry does not create another virtualenv
 
 Finally, install the package with
 
