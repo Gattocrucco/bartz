@@ -244,3 +244,7 @@ def mahalanobis_distance(x, y):
 
 # TODO
 # - test where I jit around the whole interface, returning only a prediction
+# - test where I count how many trees have changes, and check it's equal to total acc count
+# - test for prop & acc counts internal consistency:
+#    - acc <= prop (per category)
+#    - prop_total <= ntree

@@ -797,13 +797,13 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
 
     # pick trees for chosen move
     trees = {}
-    trees['var_trees'] = jnp.where(do_grow, grow_move['var_tree'], var_tree)
-    trees['split_trees'] = jnp.where(do_grow, grow_move['split_tree'], split_tree)
-    trees['var_trees'] = jnp.where(do_prune, prune_move['var_tree'], var_tree)
-    trees['split_trees'] = jnp.where(do_prune, prune_move['split_tree'], split_tree)
+    var_tree = jnp.where(do_grow, grow_move['var_tree'], var_tree)
+    split_tree = jnp.where(do_grow, grow_move['split_tree'], split_tree)
+    var_tree = jnp.where(do_prune, prune_move['var_tree'], var_tree)
+    split_tree = jnp.where(do_prune, prune_move['split_tree'], split_tree)
     if min_points_per_leaf is not None:
-        trees['affluence_trees'] = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
-        trees['affluence_trees'] = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
+        affluence_tree = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
+        affluence_tree = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
     resid_tree = jnp.where(do_grow, grow_resid_tree, resid_tree)
     count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
     resid_tree = jnp.where(do_prune, prune_resid_tree, resid_tree)
@@ -823,12 +823,20 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
 
     # sample leaves
     z = random.normal(key, mean_post.shape, mean_post.dtype)
-    trees['leaf_trees'] = mean_post + z * jnp.sqrt(var_post)
+    leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
     # add new tree to function
     leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
     leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
-    resid -= trees['leaf_trees'][leaf_indices]
+    resid -= leaf_tree[leaf_indices]
+
+    # pack trees
+    trees = {
+        'leaf_trees': leaf_tree,
+        'var_trees': var_tree,
+        'split_trees': split_tree,
+        'affluence_trees': affluence_tree,
+    }
 
     return resid, counts, trees
 
