@@ -100,7 +100,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     def inner_loop(carry, _, tracelist, burnin):
         bart, i_total, i_skip, key = carry
         key, subkey = random.split(key)
-        bart = mcmcstep.mcmc_step(bart, subkey)
+        bart = mcmcstep.step(bart, subkey)
         callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw)
         output = {key: bart[key] for key in tracelist}
         return (bart, i_total + 1, i_skip + 1, key), output
@@ -180,6 +180,6 @@ def evaluate_trace(trace, X):
         The predictions for each iteration of the MCMC.
     """
     def loop(_, state):
-        return None, grove.evaluate_tree_vmap_x(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
+        return None, grove.evaluate_forest(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
     _, y = lax.scan(loop, None, trace)
     return y

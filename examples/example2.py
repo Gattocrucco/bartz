@@ -7,7 +7,7 @@ from tests.rbartpackages import BART
 
 # DGP config
 n = 30 # number of datapoints
-p = 2 # number of covariates
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2

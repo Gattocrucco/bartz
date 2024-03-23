@@ -43,7 +43,7 @@ from jax import lax
 
 from . import grove
 
-def make_bart(*,
+def init(*,
     X,
     y,
     max_split,
@@ -158,14 +158,14 @@ def make_bart(*,
 
     return bart
 
-def mcmc_step(bart, key):
+def step(bart, key):
     """
     Perform one full MCMC step on a BART state.
 
     Parameters
     ----------
     bart : dict
-        A BART mcmc state, as created by `make_bart`.
+        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -174,19 +174,19 @@ def mcmc_step(bart, key):
     bart : dict
         The new BART mcmc state.
     """
-    key1, key2 = random.split(key, 2)
-    bart = mcmc_sample_trees(bart, key1)
-    bart = mcmc_sample_sigma(bart, key2)
+    key, subkey = random.split(key)
+    bart = sample_trees(bart, subkey)
+    bart = sample_sigma(bart, key)
     return bart
 
-def mcmc_sample_trees(bart, key):
+def sample_trees(bart, key):
     """
     Forest sampling step of BART MCMC.
 
     Parameters
     ----------
     bart : dict
-        A BART mcmc state, as created by `make_bart`.
+        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -199,148 +199,28 @@ def mcmc_sample_trees(bart, key):
     -----
     This function zeroes the proposal counters.
     """
-    bart = bart.copy()
-    for count_var in ['grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count']:
-        bart[count_var] = jnp.zeros_like(bart[count_var])
-    
-    carry = 0, bart, key
-    def loop(carry, _):
-        i, bart, key = carry
-        key, subkey = random.split(key)
-        bart = mcmc_sample_tree(bart, subkey, i)
-        return (i + 1, bart, key), None
-    
-    (_, bart, _), _ = lax.scan(loop, carry, None, len(bart['leaf_trees']))
-    return bart
+    key, subkey = random.split(key)
+    grow_moves, prune_moves = sample_moves(bart, subkey)
+    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
 
-def mcmc_sample_tree(bart, key, i_tree):
-    """
-    Single tree sampling step of BART MCMC.
+def sample_moves(bart, key):
+    key = random.split(key, bart['var_trees'].shape[0])
+    return sample_move_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], key)
 
-    Parameters
-    ----------
-    bart : dict
-        A BART mcmc state, as created by `make_bart`.
-    key : jax.dtypes.prng_key array
-        A jax random key.
-    i_tree : int
-        The index of the tree to sample.
+@functools.partial(jax.vmap, in_axes=(0, 0, 0, None, None, 0))
+def sample_move_vmap_trees(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
+    key, key1 = random.split(key)
+    args = var_tree, split_tree, affluence_tree, max_split, p_nonterminal
+    grow = grow_move(*args, key)
+    prune = prune_move(*args, key1)
+    return grow, prune
 
-    Returns
-    -------
-    bart : dict
-        The new BART mcmc state.
-    """
-    bart = bart.copy()
-    
-    y_tree = grove.evaluate_tree_vmap_x(
-        bart['X'],
-        bart['leaf_trees'][i_tree],
-        bart['var_trees'][i_tree],
-        bart['split_trees'][i_tree],
-        bart['resid'].dtype,
-    )
-    bart['resid'] += y_tree
-    
-    key1, key2 = random.split(key, 2)
-    bart = mcmc_sample_tree_structure(bart, key1, i_tree)
-    bart = mcmc_sample_tree_leaves(bart, key2, i_tree)
-    
-    y_tree = grove.evaluate_tree_vmap_x(
-        bart['X'],
-        bart['leaf_trees'][i_tree],
-        bart['var_trees'][i_tree],
-        bart['split_trees'][i_tree],
-        bart['resid'].dtype,
-    )
-    bart['resid'] -= y_tree
-    
-    return bart
-
-def mcmc_sample_tree_structure(bart, key, i_tree):
-    """
-    Single tree structure sampling step of BART MCMC.
-
-    Parameters
-    ----------
-    bart : dict
-        A BART mcmc state, as created by `make_bart`. The ``'resid'`` field
-        shall contain only the residuals w.r.t. the other trees.
-    key : jax.dtypes.prng_key array
-        A jax random key.
-    i_tree : int
-        The index of the tree to sample.
-
-    Returns
-    -------
-    bart : dict
-        The new BART mcmc state.
-    """
-    bart = bart.copy()
-    
-    var_tree = bart['var_trees'][i_tree]
-    split_tree = bart['split_trees'][i_tree]
-    affluence_tree = (
-        None if bart['affluence_trees'] is None else
-        bart['affluence_trees'][i_tree]
-    )
-    
-    key1, key2, key3 = random.split(key, 3)
-    args = [
-        bart['X'],
-        var_tree,
-        split_tree,
-        affluence_tree,
-        bart['max_split'],
-        bart['p_nonterminal'],
-        bart['sigma2'],
-        bart['resid'],
-        len(bart['var_trees']),
-        bart['min_points_per_leaf'],
-        key1,
-    ]
-    grow_var_tree, grow_split_tree, grow_affluence_tree, grow_allowed, grow_ratio = grow_move(*args)
-
-    args[-1] = key2
-    prune_var_tree, prune_split_tree, prune_affluence_tree, prune_allowed, prune_ratio = prune_move(*args)
-
-    u0, u1 = random.uniform(key3, (2,))
-
-    p_grow = jnp.where(grow_allowed & prune_allowed, 0.5, grow_allowed)
-    try_grow = u0 < p_grow
-    try_prune = prune_allowed & ~try_grow
-
-    do_grow = try_grow & (u1 < grow_ratio)
-    do_prune = try_prune & (u1 < prune_ratio)
-
-    var_tree = jnp.where(do_grow, grow_var_tree, var_tree)
-    split_tree = jnp.where(do_grow, grow_split_tree, split_tree)
-    var_tree = jnp.where(do_prune, prune_var_tree, var_tree)
-    split_tree = jnp.where(do_prune, prune_split_tree, split_tree)
-
-    bart['var_trees'] = bart['var_trees'].at[i_tree].set(var_tree)
-    bart['split_trees'] = bart['split_trees'].at[i_tree].set(split_tree)
-
-    if bart['min_points_per_leaf'] is not None:
-        affluence_tree = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
-        affluence_tree = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
-        bart['affluence_trees'] = bart['affluence_trees'].at[i_tree].set(affluence_tree)
-
-    bart['grow_prop_count'] += try_grow
-    bart['grow_acc_count'] += do_grow
-    bart['prune_prop_count'] += try_prune
-    bart['prune_acc_count'] += do_prune
-
-    return bart
-
-def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
+def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
     """
     Tree structure grow move proposal of BART MCMC.
 
     Parameters
     ----------
-    X : array (p, n)
-        The predictors.
     var_tree : array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
@@ -351,15 +231,6 @@ def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal,
         The maximum split index for each variable.
     p_nonterminal : array (d - 1,)
         The probability of a nonterminal node at each depth.
-    sigma2 : float
-        The noise variance.
-    resid : array (n,)
-        The residuals (data minus forest value), computed using all trees but
-        the tree under consideration.
-    n_tree : int
-        The number of trees in the forest.
-    min_points_per_leaf : int
-        The minimum number of data points in a leaf node.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -383,48 +254,25 @@ def grow_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal,
     maximum depth.
     """
 
-    key1, key2, key3 = random.split(key, 3)
+    key, key1, key2 = random.split(key, 3)
     
-    leaf_to_grow, num_growable, num_prunable, allowed = choose_leaf(split_tree, affluence_tree, key1)
+    leaf_to_grow, num_growable, num_prunable, allowed = choose_leaf(split_tree, affluence_tree, key)
     
-    var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key2)
+    var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
-    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key3)
+    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
     new_split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    likelihood_ratio, new_affluence_tree = compute_likelihood_ratio(X, var_tree, new_split_tree, resid, sigma2, leaf_to_grow, n_tree, min_points_per_leaf)
-    
-    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, leaf_to_grow, split_tree, new_split_tree, affluence_tree, new_affluence_tree)
+    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, split_tree, new_split_tree)
 
-    ratio = trans_tree_ratio * likelihood_ratio
-
-    return var_tree, new_split_tree, new_affluence_tree, allowed, ratio
-
-def growable_leaves(split_tree, affluence_tree):
-    """
-    Return a mask indicating the leaf nodes that can be proposed for growth.
-
-    Parameters
-    ----------
-    split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree.
-    affluence_tree : bool array (2 ** (d - 1),) or None
-        Whether a leaf has enough points to be grown.
-
-    Returns
-    -------
-    is_growable : bool array (2 ** (d - 1),)
-        The mask indicating the leaf nodes that can be proposed to grow, i.e.,
-        that are not at the bottom level and have at least two times the number
-        of minimum points per leaf.
-    allowed : bool
-        Whether the grow move is allowed, i.e., there are growable leaves.
-    """
-    is_growable = grove.is_actual_leaf(split_tree)
-    if affluence_tree is not None:
-        is_growable &= affluence_tree
-    return is_growable, jnp.any(is_growable)
+    return dict(
+        allowed=allowed,
+        node=leaf_to_grow,
+        var_tree=var_tree,
+        split_tree=new_split_tree,
+        partial_ratio=ratio,
+    )
 
 def choose_leaf(split_tree, affluence_tree, key):
     """
@@ -458,6 +306,31 @@ def choose_leaf(split_tree, affluence_tree, key):
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, num_prunable, allowed
+
+def growable_leaves(split_tree, affluence_tree):
+    """
+    Return a mask indicating the leaf nodes that can be proposed for growth.
+
+    Parameters
+    ----------
+    split_tree : array (2 ** (d - 1),)
+        The splitting points of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
+
+    Returns
+    -------
+    is_growable : bool array (2 ** (d - 1),)
+        The mask indicating the leaf nodes that can be proposed to grow, i.e.,
+        that are not at the bottom level and have at least two times the number
+        of minimum points per leaf.
+    allowed : bool
+        Whether the grow move is allowed, i.e., there are growable leaves.
+    """
+    is_growable = grove.is_actual_leaf(split_tree)
+    if affluence_tree is not None:
+        is_growable &= affluence_tree
+    return is_growable, jnp.any(is_growable)
 
 def randint_masked(key, mask):
     """
@@ -665,7 +538,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonterminal, leaf_to_grow, initial_split_tree, new_split_tree, initial_affluence_tree, new_affluence_tree):
+def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, initial_split_tree, new_split_tree):
     """
     Compute the product of the transition and prior ratios of a grow move.
 
@@ -676,8 +549,6 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         leaf to be grown to a non-terminal node.
-    tree_halfsize : int
-        Half the length of the tree array, i.e., 2 ** (d - 1).
     p_nonterminal : array (d - 1,)
         The probability of a nonterminal node at each depth.
     leaf_to_grow : int
@@ -686,16 +557,13 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
         The splitting points of the tree, before the leaf is grown.
     new_split_tree : array (2 ** (d - 1),)
         The splitting points of the tree, after the leaf is grown.
-    initial_affluence_tree : bool array (2 ** (d - 1),) or None
-        Whether a leaf has enough points to be grown, before the leaf is grown.
-    new_affluence_tree : bool array (2 ** (d - 1),) or None
-        Whether a leaf has enough points to be grown, after the leaf is grown.
 
     Returns
     -------
     ratio : float
         The transition ratio P(new tree -> old tree) / P(old tree -> new tree)
-        times the prior ratio P(new tree) / P(old tree).
+        times the prior ratio P(new tree) / P(old tree), but the transition
+        ratio is missing the factor P(propose prune) in the numerator.
     """
 
     # the two ratios also contain factors num_available_split *
@@ -704,101 +572,21 @@ def compute_trans_tree_ratio(num_growable, num_prunable, tree_halfsize, p_nonter
     prune_was_allowed = prune_allowed(initial_split_tree)
     p_grow = jnp.where(prune_was_allowed, 0.5, 1)
 
-    _, grow_again_allowed = growable_leaves(new_split_tree, new_affluence_tree)
-    p_prune = jnp.where(grow_again_allowed, 0.5, 1)
+    trans_ratio = num_growable / (p_grow * num_prunable)
 
-    trans_ratio = p_prune * num_growable / (p_grow * num_prunable)
-
-    depth = grove.index_depth(leaf_to_grow, tree_halfsize)
+    depth = grove.index_depth(leaf_to_grow, initial_split_tree.size)
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
 
     return trans_ratio * tree_ratio
 
-def compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, new_node, n_tree, min_points_per_leaf):
-    """
-    Compute the likelihood ratio of a grow move.
-
-    Parameters
-    ----------
-    X : array (p, n)
-        The predictors.
-    var_tree : array (2 ** (d - 1),)
-        The variable indices of the tree, after the grow move.
-    split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree, after the grow move.
-    resid : array (n,)
-        The residuals (data minus forest value), for all trees but the one
-        under consideration.
-    sigma2 : float
-        The noise variance.
-    new_node : int
-        The index of the leaf that has been grown.
-    n_tree : int
-        The number of trees in the forest.
-    min_points_per_leaf : int or None
-        The minimum number of data points in a leaf node.
-
-    Returns
-    -------
-    ratio : float
-        The likelihood ratio P(data | new tree) / P(data | old tree).
-    affluence_tree : bool array (2 ** (d - 1),) or None
-        Whether a leaf has enough points to be grown, after the grow move.
-    """
-
-    resid_tree, count_tree = agg_values(
-        X,
-        var_tree,
-        split_tree,
-        resid,
-        sigma2.dtype,
-    )
-
-    left_child = new_node << 1
-    right_child = left_child + 1
-
-    left_resid = resid_tree[left_child]
-    right_resid = resid_tree[right_child]
-    total_resid = left_resid + right_resid
-
-    left_count = count_tree[left_child]
-    right_count = count_tree[right_child]
-    total_count = left_count + right_count
-
-    sigma_mu2 = 1 / n_tree
-    sigma2_left = sigma2 + left_count * sigma_mu2
-    sigma2_right = sigma2 + right_count * sigma_mu2
-    sigma2_total = sigma2 + total_count * sigma_mu2
-
-    sqrt_term = sigma2 * sigma2_total / (sigma2_left * sigma2_right)
-
-    exp_term = sigma_mu2 / (2 * sigma2) * (
-        left_resid * left_resid / sigma2_left +
-        right_resid * right_resid / sigma2_right -
-        total_resid * total_resid / sigma2_total
-    )
-
-    ratio = jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
-
-    if min_points_per_leaf is not None:
-        ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
-        ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
-        affluence_tree = count_tree[:count_tree.size // 2] >= 2 * min_points_per_leaf
-    else:
-        affluence_tree = None
-
-    return ratio, affluence_tree
-
-def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, sigma2, resid, n_tree, min_points_per_leaf, key):
+def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
     """
     Tree structure prune move proposal of BART MCMC.
 
     Parameters
     ----------
-    X : array (p, n)
-        The predictors.
     var_tree : array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
@@ -809,15 +597,6 @@ def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal
         The maximum split index for each variable.
     p_nonterminal : array (d - 1,)
         The probability of a nonterminal node at each depth.
-    sigma2 : float
-        The noise variance.
-    resid : array (n,)
-        The residuals (data minus forest value), computed using all trees but
-        the tree under consideration.
-    n_tree : int
-        The number of trees in the forest.
-    min_points_per_leaf : int
-        The minimum number of data points in a leaf node.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -838,19 +617,16 @@ def prune_move(X, var_tree, split_tree, affluence_tree, max_split, p_nonterminal
     allowed = prune_allowed(split_tree)
 
     new_split_tree = split_tree.at[node_to_prune].set(0)
-    # should I clean up var_tree as well? just for debugging. it hasn't given me problems though
 
-    likelihood_ratio, _ = compute_likelihood_ratio(X, var_tree, split_tree, resid, sigma2, node_to_prune, n_tree, min_points_per_leaf)
-    new_affluence_tree = (
-        None if affluence_tree is None else
-        affluence_tree.at[node_to_prune].set(True)
+    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, node_to_prune, new_split_tree, split_tree)
+
+    return dict(
+        allowed=allowed,
+        node=node_to_prune,
+        var_tree=var_tree,
+        split_tree=new_split_tree,
+        partial_ratio=1 / ratio, # should I use lax.reciprocal for this?
     )
-    trans_tree_ratio = compute_trans_tree_ratio(num_growable, num_prunable, split_tree.size, p_nonterminal, node_to_prune, new_split_tree, split_tree, new_affluence_tree, affluence_tree)
-
-    ratio = trans_tree_ratio * likelihood_ratio
-    ratio = 1 / ratio # Question: should I use lax.reciprocal for this?
-
-    return var_tree, new_split_tree, new_affluence_tree, allowed, ratio
 
 def choose_leaf_parent(split_tree, affluence_tree, key):
     """
@@ -906,116 +682,223 @@ def prune_allowed(split_tree):
     """
     return split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
-def mcmc_sample_tree_leaves(bart, key, i_tree):
-    """
-    Single tree leaves sampling step of BART MCMC.
-
-    Parameters
-    ----------
-    bart : dict
-        A BART mcmc state, as created by `make_bart`. The ``'resid'`` field
-        shall contain the residuals only w.r.t. the other trees.
-    key : jax.dtypes.prng_key array
-        A jax random key.
-    i_tree : int
-        The index of the tree to sample.
-
-    Returns
-    -------
-    bart : dict
-        The new BART mcmc state.
-    """
+def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart = bart.copy()
-
-    resid_tree, count_tree = agg_values(
-        bart['X'],
-        bart['var_trees'][i_tree],
-        bart['split_trees'][i_tree],
-        bart['resid'],
-        bart['sigma2'].dtype,
+    def loop(carry, item):
+        resid = carry.pop('resid')
+        resid, carry, trees = accept_move_and_sample_leaves(
+            bart['X'],
+            len(bart['leaf_trees']),
+            resid,
+            bart['sigma2'],
+            bart['min_points_per_leaf'],
+            carry,
+            *item,
+        )
+        carry['resid'] = resid
+        return carry, trees
+    carry = {
+        k: bart[k] for k in
+        ['resid', 'grow_prop_count', 'prune_prop_count', 'grow_acc_count', 'prune_acc_count']
+    }
+    items = (
+        bart['leaf_trees'],
+        bart['var_trees'],
+        bart['split_trees'],
+        bart['affluence_trees'],
+        grow_moves,
+        prune_moves,
+        random.split(key, len(bart['leaf_trees'])),
     )
-
-    prec_lk = count_tree / bart['sigma2']
-    prec_prior = len(bart['leaf_trees'])
-    var_post = 1 / (prec_lk + prec_prior) # lax.reciprocal?
-    mean_post = resid_tree / bart['sigma2'] * var_post # = mean_lk * prec_lk * var_post
-
-    z = random.normal(key, mean_post.shape, mean_post.dtype)
-        # TODO maybe use long float here, I guess this part is not a bottleneck
-    leaf_tree = mean_post + z * jnp.sqrt(var_post)
-    leaf_tree = leaf_tree.at[0].set(0) # this 0 is used by evaluate_tree
-    bart['leaf_trees'] = bart['leaf_trees'].at[i_tree].set(leaf_tree)
-
+    counts, trees = lax.scan(loop, carry, items)
+    bart.update(counts)
+    bart.update(trees)
     return bart
 
-def agg_values(X, var_tree, split_tree, values, acc_dtype):
+def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, var_tree, split_tree, affluence_tree, grow_move, prune_move, key):
+    
+    # compute leaf indices according to grow move tree
+    traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
+    grow_leaf_indices = traverse_tree(X, grow_move['var_tree'], grow_move['split_tree'])
+    
+    # compute leaf indices in starting tree
+    grow_node = grow_move['node']
+    grow_left = grow_node << 1
+    grow_right = grow_left + 1
+    leaf_indices = jnp.where(
+        (grow_leaf_indices == grow_left) | (grow_leaf_indices == grow_right),
+        grow_node,
+        grow_leaf_indices,
+    )
+
+    # compute leaf indices in prune tree
+    prune_node = prune_move['node']
+    prune_left = prune_node << 1
+    prune_right = prune_left + 1
+    prune_leaf_indices = jnp.where(
+        (leaf_indices == prune_left) | (leaf_indices == prune_right),
+        prune_node,
+        leaf_indices,
+    )
+
+    # subtract starting tree from function
+    resid += leaf_tree[leaf_indices]
+
+    # aggregate residuals and count units per leaf
+    grow_resid_tree = jnp.zeros_like(leaf_tree, sigma2.dtype)
+    grow_resid_tree = grow_resid_tree.at[grow_leaf_indices].add(resid)
+    grow_count_tree = jnp.zeros_like(leaf_tree, grove.minimal_unsigned_dtype(resid.size))
+    grow_count_tree = grow_count_tree.at[grow_leaf_indices].add(1)
+
+    # compute aggregations in starting tree
+    # I do not zero the children because garbage there does not matter
+    resid_tree = (grow_resid_tree.at[grow_node]
+        .set(grow_resid_tree[grow_left] + grow_resid_tree[grow_right]))
+    count_tree = (grow_count_tree.at[grow_node]
+        .set(grow_count_tree[grow_left] + grow_count_tree[grow_right]))
+
+    # compute aggregations in prune tree
+    prune_resid_tree = (resid_tree.at[prune_node]
+        .set(resid_tree[prune_left] + resid_tree[prune_right]))
+    prune_count_tree = (count_tree.at[prune_node]
+        .set(count_tree[prune_left] + count_tree[prune_right]))
+
+    # compute affluence trees
+    if min_points_per_leaf is not None:
+        grow_affluence_tree = grow_count_tree[:grow_count_tree.size // 2] >= 2 * min_points_per_leaf
+        prune_affluence_tree = affluence_tree.at[prune_node].set(True)
+
+    # compute probability of proposing prune
+    grow_p_prune = compute_p_prune_back(grow_move['split_tree'], grow_affluence_tree)
+    prune_p_prune = compute_p_prune_back(split_tree, affluence_tree)
+
+    # compute likelihood ratios
+    grow_lk_ratio = compute_likelihood_ratio(grow_resid_tree, grow_count_tree, sigma2, grow_node, ntree, min_points_per_leaf)
+    prune_lk_ratio = compute_likelihood_ratio(resid_tree, count_tree, sigma2, prune_node, ntree, min_points_per_leaf)
+
+    # compute acceptance ratios
+    grow_ratio = grow_p_prune * grow_move['partial_ratio'] * grow_lk_ratio
+    prune_ratio = prune_p_prune * prune_move['partial_ratio'] * prune_lk_ratio
+    prune_ratio = lax.reciprocal(prune_ratio)
+
+    # random coins in [0, 1) for proposal and acceptance
+    key, subkey = random.split(key)
+    u0, u1 = random.uniform(subkey, (2,))
+
+    # determine what move to propose (not proposing anything is an option)
+    p_grow = jnp.where(grow_move['allowed'] & prune_move['allowed'], 0.5, grow_move['allowed'])
+    try_grow = u0 < p_grow
+    try_prune = prune_move['allowed'] & ~try_grow
+
+    # determine whether to accept the move
+    do_grow = try_grow & (u1 < grow_ratio)
+    do_prune = try_prune & (u1 < prune_ratio)
+
+    # pick trees for chosen move
+    trees = {}
+    trees['var_trees'] = jnp.where(do_grow, grow_move['var_tree'], var_tree)
+    trees['split_trees'] = jnp.where(do_grow, grow_move['split_tree'], split_tree)
+    trees['var_trees'] = jnp.where(do_prune, prune_move['var_tree'], var_tree)
+    trees['split_trees'] = jnp.where(do_prune, prune_move['split_tree'], split_tree)
+    if min_points_per_leaf is not None:
+        trees['affluence_trees'] = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
+        trees['affluence_trees'] = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
+    resid_tree = jnp.where(do_grow, grow_resid_tree, resid_tree)
+    count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
+    resid_tree = jnp.where(do_prune, prune_resid_tree, resid_tree)
+    count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
+
+    # update acceptance counts
+    counts = counts.copy()
+    counts['grow_prop_count'] += try_grow
+    counts['grow_acc_count'] += do_grow
+    counts['prune_prop_count'] += try_prune
+    counts['prune_acc_count'] += do_prune
+
+    # compute leaves posterior
+    prec_lk = count_tree / sigma2
+    var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
+    mean_post = resid_tree / sigma2 * var_post # = mean_lk * prec_lk * var_post
+
+    # sample leaves
+    z = random.normal(key, mean_post.shape, mean_post.dtype)
+    trees['leaf_trees'] = mean_post + z * jnp.sqrt(var_post)
+
+    # add new tree to function
+    leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
+    leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
+    resid -= leaf_tree[leaf_indices]
+
+    return resid, counts, trees
+
+def compute_p_prune_back(new_split_tree, new_affluence_tree):
     """
-    Aggregate values at the leaves of a tree.
+    Compute the probability of proposing a prune move after doing a grow move.
+    """
+    _, grow_again_allowed = growable_leaves(new_split_tree, new_affluence_tree)
+    return jnp.where(grow_again_allowed, 0.5, 1)
+
+def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_points_per_leaf):
+    """
+    Compute the likelihood ratio of a grow move.
 
     Parameters
     ----------
-    X : array (p, n)
-        The predictors.
-    var_tree : array (2 ** (d - 1),)
-        The variable indices of the tree.
-    split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree.
-    values : array (n,)
-        The values to aggregate.
-    acc_dtype : dtype
-        The dtype of the output.
+    sigma2 : float
+        The noise variance.
+    node : int
+        The index of the leaf that has been grown.
+    n_tree : int
+        The number of trees in the forest.
+    min_points_per_leaf : int or None
+        The minimum number of data points in a leaf node.
 
     Returns
     -------
-    acc_tree : acc_dtype array (2 ** d,)
-        Tree leaves for the tree structure indicated by the arguments, where
-        each leaf contains the sum of the `values` whose corresponding `X` fall
-        into the leaf.
-    count_tree : int array (2 ** d,)
-        Tree leaves containing the count of such values.
+    ratio : float
+        The likelihood ratio P(data | new tree) / P(data | old tree).
     """
 
-    depth = grove.tree_depth(var_tree) + 1
-    carry = (
-        jnp.zeros(values.size, bool),
-        jnp.ones(values.size, grove.minimal_unsigned_dtype(2 * var_tree.size - 1)),
-        grove.make_tree(depth, acc_dtype),
-        grove.make_tree(depth, grove.minimal_unsigned_dtype(values.size - 1)),
+    left_child = node << 1
+    right_child = left_child + 1
+
+    left_resid = resid_tree[left_child]
+    right_resid = resid_tree[right_child]
+    total_resid = left_resid + right_resid
+
+    left_count = count_tree[left_child]
+    right_count = count_tree[right_child]
+    total_count = left_count + right_count
+
+    sigma_mu2 = 1 / n_tree
+    sigma2_left = sigma2 + left_count * sigma_mu2
+    sigma2_right = sigma2 + right_count * sigma_mu2
+    sigma2_total = sigma2 + total_count * sigma_mu2
+
+    sqrt_term = sigma2 * sigma2_total / (sigma2_left * sigma2_right)
+
+    exp_term = sigma_mu2 / (2 * sigma2) * (
+        left_resid * left_resid / sigma2_left +
+        right_resid * right_resid / sigma2_right -
+        total_resid * total_resid / sigma2_total
     )
-    unit_index = jnp.arange(values.size, dtype=grove.minimal_unsigned_dtype(values.size - 1))
 
-    def loop(carry, _):
-        leaf_found, node_index, acc_tree, count_tree = carry
+    ratio = jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
 
-        is_leaf = split_tree.at[node_index].get(mode='fill', fill_value=0) == 0
-        leaf_count = is_leaf & ~leaf_found
-        leaf_values = jnp.where(leaf_count, values, jnp.array(0, values.dtype))
-        acc_tree = acc_tree.at[node_index].add(leaf_values)
-        count_tree = count_tree.at[node_index].add(leaf_count)
-        leaf_found |= is_leaf
-        
-        split = split_tree[node_index]
-        var = var_tree.at[node_index].get(mode='fill', fill_value=0)
-        x = X[var, unit_index]
-        
-        node_index <<= 1
-        node_index += x >= split
-        node_index = jnp.where(leaf_found, 0, node_index)
+    if min_points_per_leaf is not None:
+        ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
+        ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
 
-        carry = leaf_found, node_index, acc_tree, count_tree
-        return carry, None
+    return ratio
 
-    (_, _, acc_tree, count_tree), _ = lax.scan(loop, carry, None, depth)
-    return acc_tree, count_tree
-
-def mcmc_sample_sigma(bart, key):
+def sample_sigma(bart, key):
     """
     Noise variance sampling step of BART MCMC.
 
     Parameters
     ----------
     bart : dict
-        A BART mcmc state, as created by `make_bart`.
+        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -1028,8 +911,8 @@ def mcmc_sample_sigma(bart, key):
 
     resid = bart['resid']
     alpha = bart['sigma2_alpha'] + resid.size / 2
-    norm = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
-    beta = bart['sigma2_beta'] + norm / 2
+    norm2 = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
+    beta = bart['sigma2_beta'] + norm2 / 2
 
     sample = random.gamma(key, alpha)
     bart['sigma2'] = beta / sample

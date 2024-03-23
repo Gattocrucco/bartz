@@ -49,6 +49,8 @@ Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/instal
 
 Create a virtual environment from the file spec:
 
+.. code-block:: shell
+
     $ micromamba env create --file condaenv.yml
     $ micromamba activate bartz
     (bartz) $ poetry config virtualenvs.create false --local # to make sure poetry does not create another virtualenv

@@ -28,13 +28,17 @@ Functions to create and manipulate binary trees.
 
 A tree is represented with arrays as a heap. The root node is at index 1. The children nodes of a node at index :math:`i` are at indices :math:`2i` (left child) and :math:`2i + 1` (right child). The array element at index 0 is unused.
 
-A decision tree is represented by tree arrays: 'leaf', 'var', and 'split'. The 'leaf' array contains the values in the leaves. The 'var' array contains the axes along which the decision nodes operate. The 'split' array contains the decision boundaries.
+A decision tree is represented by tree arrays: 'leaf', 'var', and 'split'.
 
-Whether a node is a leaf is indicated by the corresponding 'split' element being 0.
+The 'leaf' array contains the values in the leaves.
+
+The 'var' array contains the axes along which the decision nodes operate.
+
+The 'split' array contains the decision boundaries. The boundaries are open on the right, i.e., a point belongs to the left child iff x < split. Whether a node is a leaf is indicated by the corresponding 'split' element being 0.
 
 Since the nodes at the bottom can only be leaves and not decision nodes, the 'var' and 'split' arrays have half the length of the 'leaf' array.
 
-The unused array element at index 0 is always fixed to 0 by convention.
+The unused array element at index 0 is always fixed to 0 by convention, in all arrays.
 
 """
 
@@ -75,13 +79,13 @@ def make_tree(depth, dtype):
 
 def tree_depth(tree):
     """
-    Return the maximum depth of a binary tree created by `make_tree`.
+    Return the maximum depth of a tree.
 
     Parameters
     ----------
     tree : array
-        A binary tree created by `make_tree`. If the array is ND, the tree
-        structure is assumed to be along the last axis.
+        A tree created by `make_tree`. If the array is ND, the tree structure is
+        assumed to be along the last axis.
 
     Returns
     -------
@@ -90,78 +94,84 @@ def tree_depth(tree):
     """
     return int(round(math.log2(tree.shape[-1])))
 
-def evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype):
+def traverse_tree(x, var_tree, split_tree):
     """
-    Evaluate a decision tree or forest.
+    Find the leaf where a point falls into.
 
     Parameters
     ----------
-    X : array (p,)
+    x : array (p,)
         The coordinates to evaluate the tree at.
-    leaf_trees : array (n,) or (m, n)
+    var_tree : array (2 ** (d - 1),)
+        The decision axes of the tree.
+    split_tree : array (2 ** (d - 1),)
+        The decision boundaries of the tree.
+
+    Returns
+    -------
+    index : int
+        The index of the leaf.
+    """
+
+    carry = (
+        jnp.zeros((), bool),
+        jnp.ones((), minimal_unsigned_dtype(2 * var_tree.size - 1)),
+    )
+
+    def loop(carry, _):
+        leaf_found, index = carry
+
+        split = split_tree.at[index].get(mode='fill', fill_value=0)
+        var = var_tree.at[index].get(mode='fill', fill_value=0)
+        
+        leaf_found |= split_tree.at[index].get(mode='fill', fill_value=0) == 0
+        child_index = (index << 1) + (x[var] >= split)
+        index = jnp.where(leaf_found, index, child_index)
+
+        return (leaf_found, index), None
+
+        # TODO
+        # - unroll (how much? 5?)
+        # - separate and special-case the last iteration
+
+    depth = 1 + tree_depth(var_tree)
+    (_, index), _ = lax.scan(loop, carry, None, depth)
+    return index
+
+def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
+    """
+    Evaluate a ensemble of trees at an array of points.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        The coordinates to evaluate the trees at.
+    leaf_trees : (m, 2 ** d)
         The leaf values of the tree or forest. If the input is a forest, the
         first axis is the tree index, and the values are summed.
-    var_trees : array (n,) or (m, n)
-        The variable indices of the tree or forest. Each index is in [0, p) and
-        indicates which value of `X` to consider.
-    split_trees : array (n,) or (m, n)
-        The split values of the tree or forest. Leaf nodes are indicated by the
-        condition `split == 0`. If non-zero, the node has children, and its left
-        children is assigned points which satisfy `x < split`.
-    out_dtype : dtype
+    var_trees : array (m, 2 ** (d - 1))
+        The decision axes of the trees.
+    split_trees : array (m, 2 ** (d - 1))
+        The decision boundaries of the trees.
+    dtype : dtype
         The dtype of the output.
 
     Returns
     -------
-    out : scalar
-        The value of the tree or forest at the given point.
+    out : array (n,)
+        The sum of the values of the trees at the points in `X`.
     """
+    indices = _traverse_forest(X, var_trees, split_trees)
+    ntree, _ = leaf_trees.shape
+    tree_index = jnp.arange(ntree, dtype=minimal_unsigned_dtype(ntree - 1))[:, None]
+    leaves = leaf_trees[tree_index, indices]
+    return jnp.sum(leaves, axis=0, dtype=dtype)
+        # this sum suggests to swap the vmaps, but I think it's better for X copying to keep it that way
 
-    is_forest = leaf_trees.ndim == 2
-    if is_forest:
-        m, _ = leaf_trees.shape
-        forest_shape = m,
-        tree_index = jnp.arange(m, dtype=minimal_unsigned_dtype(m - 1)),
-    else:
-        forest_shape = ()
-        tree_index = ()
-
-    carry = (
-        jnp.zeros(forest_shape, bool),
-        jnp.zeros((), out_dtype),
-        jnp.ones(forest_shape, minimal_unsigned_dtype(leaf_trees.shape[-1] - 1))
-    )
-
-    def loop(carry, _):
-        leaf_found, out, node_index = carry
-
-        is_leaf = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0) == 0
-        leaf_value = leaf_trees[tree_index + (node_index,)]
-        if is_forest:
-            leaf_sum = jnp.sum(leaf_value, where=is_leaf) # TODO set dtype to large float
-                # alternative: dot(is_leaf, leaf_value):
-                # - maybe faster
-                # - maybe less accurate
-                # - fucked by nans
-        else:
-            leaf_sum = jnp.where(is_leaf, leaf_value, 0)
-        out += leaf_sum
-        leaf_found |= is_leaf
-        
-        split = split_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
-        var = var_trees.at[tree_index + (node_index,)].get(mode='fill', fill_value=0)
-        x = X[var]
-        
-        node_index <<= 1
-        node_index += x >= split
-        node_index = jnp.where(leaf_found, 0, node_index)
-
-        carry = leaf_found, out, node_index
-        return carry, _
-
-    depth = tree_depth(leaf_trees)
-    (_, out, _), _ = lax.scan(loop, carry, None, depth)
-    return out
+@functools.partial(jax.vmap, in_axes=(None, 0, 0))
+@functools.partial(jax.vmap, in_axes=(1, None, None))
+def _traverse_forest(X, var_trees, split_trees):
+    return traverse_tree(X, var_trees, split_trees)
 
 def minimal_unsigned_dtype(max_value):
     """
@@ -175,35 +185,6 @@ def minimal_unsigned_dtype(max_value):
     if max_value < 2 ** 32:
         return jnp.uint32
     return jnp.uint64
-
-@functools.partial(jaxext.vmap_nodoc, in_axes=(1, None, None, None, None), out_axes=0)
-def evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, out_dtype):
-    """
-    Evaluate a decision tree or forest over multiple points.
-
-    Parameters
-    ----------
-    X : array (p, n)
-        The points to evaluate the tree at.
-    leaf_trees : array (n,) or (m, n)
-        The leaf values of the tree or forest. If the input is a forest, the
-        first axis is the tree index, and the values are summed.
-    var_trees : array (n,) or (m, n)
-        The variable indices of the tree or forest. Each index is in [0, p) and
-        indicates which value of `X` to consider.
-    split_trees : array (n,) or (m, n)
-        The split values of the tree or forest. Leaf nodes are indicated by the
-        condition `split == 0`. If non-zero, the node has children, and its left
-        children is assigned points which satisfy `x < split`.
-    out_dtype : dtype
-        The dtype of the output.
-
-    Returns
-    -------
-    out : (n,)
-        The value of the tree or forest at each point.
-    """
-    return evaluate_tree(X, leaf_trees, var_trees, split_trees, out_dtype)
 
 def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """

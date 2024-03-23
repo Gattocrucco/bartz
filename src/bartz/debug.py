@@ -7,22 +7,6 @@ from jax import lax
 from . import grove
 from . import mcmcstep
 
-def trace_evaluate_trees(bart, X):
-    """
-    Evaluate all trees, for all samples, at all x. Out axes:
-        0: mcmc sample
-        1: tree
-        2: X
-    """
-    def loop(_, bart):
-        return None, evaluate_all_trees(X, bart['leaf_trees'], bart['var_trees'], bart['split_trees'])
-    _, y = lax.scan(loop, None, bart)
-    return y
-
-@functools.partial(jax.vmap, in_axes=(None, 0, 0, 0)) # vectorize over forest
-def evaluate_all_trees(X, leaf_trees, var_trees, split_trees):
-    return grove.evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, jnp.float32)
-
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
     tee = '├──'
