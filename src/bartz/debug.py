@@ -109,7 +109,7 @@ def check_sizes(leaf_tree, var_tree, split_tree, max_split):
     return leaf_tree.size == 2 * var_tree.size == 2 * split_tree.size
 
 def check_unused_node(leaf_tree, var_tree, split_tree, max_split):
-    return (leaf_tree[0] == 0) & (var_tree[0] == 0) & (split_tree[0] == 0)
+    return (var_tree[0] == 0) & (split_tree[0] == 0)
 
 def check_leaf_values(leaf_tree, var_tree, split_tree, max_split):
     return jnp.all(jnp.isfinite(leaf_tree))

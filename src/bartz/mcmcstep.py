@@ -176,8 +176,7 @@ def step(bart, key):
     """
     key, subkey = random.split(key)
     bart = sample_trees(bart, subkey)
-    bart = sample_sigma(bart, key)
-    return bart
+    return sample_sigma(bart, key)
 
 def sample_trees(bart, key):
     """
@@ -257,7 +256,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     key, key1, key2 = random.split(key, 3)
     
     leaf_to_grow, num_growable, num_prunable, allowed = choose_leaf(split_tree, affluence_tree, key)
-    
+
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
@@ -291,7 +290,7 @@ def choose_leaf(split_tree, affluence_tree, key):
     -------
     leaf_to_grow : int
         The index of the leaf to grow. If ``num_growable == 0``, return
-        ``split_tree.size``.
+        ``2 ** d``.
     num_growable : int
         The number of leaf nodes that can be grown.
     num_prunable : int
@@ -302,6 +301,7 @@ def choose_leaf(split_tree, affluence_tree, key):
     """
     is_growable, allowed = growable_leaves(split_tree, affluence_tree)
     leaf_to_grow = randint_masked(key, is_growable)
+    leaf_to_grow = jnp.where(allowed, leaf_to_grow, 2 * split_tree.size)
     num_growable = jnp.count_nonzero(is_growable)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
@@ -698,9 +698,10 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         carry['resid'] = resid
         return carry, trees
     carry = {
-        k: bart[k] for k in
-        ['resid', 'grow_prop_count', 'prune_prop_count', 'grow_acc_count', 'prune_acc_count']
+        k: jnp.zeros_like(bart[k]) for k in
+        ['grow_prop_count', 'prune_prop_count', 'grow_acc_count', 'prune_acc_count']
     }
+    carry['resid'] = bart['resid']
     items = (
         bart['leaf_trees'],
         bart['var_trees'],
@@ -710,8 +711,8 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         prune_moves,
         random.split(key, len(bart['leaf_trees'])),
     )
-    counts, trees = lax.scan(loop, carry, items)
-    bart.update(counts)
+    carry, trees = lax.scan(loop, carry, items)
+    bart.update(carry)
     bart.update(trees)
     return bart
 
@@ -827,7 +828,7 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
     # add new tree to function
     leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
     leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
-    resid -= leaf_tree[leaf_indices]
+    resid -= trees['leaf_trees'][leaf_indices]
 
     return resid, counts, trees
 

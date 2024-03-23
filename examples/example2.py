@@ -6,7 +6,7 @@ import bartz
 from tests.rbartpackages import BART
 
 # DGP config
-n = 30 # number of datapoints
+n = 100 # number of datapoints
 p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
@@ -38,7 +38,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=60, nskip=1000, ndpost=1000, numcut=255, printevery=100)
+kw = dict(ntree=1, nskip=0, ndpost=100, numcut=255, printevery=20)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 bad = bart1._check_trees()

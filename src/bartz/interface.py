@@ -420,7 +420,5 @@ class BART:
 
     def _tree_goes_bad(self):
         bad = self._check_trees().astype(bool)
-        bad_before = bad[:-1]
-        bad_after = bad[1:]
-        goes_bad = bad_after & ~bad_before
-        return jnp.pad(goes_bad, [(1, 0), (0, 0)])
+        bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
+        return bad & ~bad_before
