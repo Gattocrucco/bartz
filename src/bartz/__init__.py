@@ -28,7 +28,7 @@ A jax implementation of BART
 See the manual at https://gattocrucco.github.io/bartz/docs
 """
 
-__version__ = '0.0.1'
+from ._version import __version__
 
 from .interface import BART
 

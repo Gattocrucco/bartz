@@ -52,6 +52,7 @@ scipy = "^1.11.4"
 ipython = "^8.22.2"
 matplotlib = "^3.8.3"
 appnope = "^0.1.4"
+tomli = "^2.0.1"
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"

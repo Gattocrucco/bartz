@@ -51,11 +51,16 @@ release: $(RELEASE_TARGETS)
 	test ! -d dist || rm -r dist
 	poetry build
 
+.PHONY: version
+version: src/bartz/_version.py
+src/bartz/_version.py: pyproject.toml
+	python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
+
 PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
 EXAMPLESPY = COVERAGE_FILE=.coverage.examples$(COVERAGE_SUFFIX) $(PY) --context=examples$(COVERAGE_SUFFIX)
 
-tests:
+tests: version
 	$(TESTSPY) -m pytest tests
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
@@ -66,7 +71,7 @@ EXAMPLES = $(wildcard examples/*.py)
 examples: $(EXAMPLES)
 	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
 
-docs:
+docs: version
 	make -C docs html
 	echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
 	rm -r _site/docs || true
@@ -74,7 +79,7 @@ docs:
 	@echo
 	@echo "Now open _site/docs/index.html"
 
-covreport:
+covreport: version
 	coverage combine
 	coverage html
 	rm -r _site/coverage || true
