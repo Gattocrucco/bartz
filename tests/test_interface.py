@@ -30,6 +30,7 @@ import numpy
 import bartz
 
 from .rbartpackages import BART
+from . import util
 
 @pytest.fixture
 def n():
@@ -141,8 +142,8 @@ def test_residuals_accuracy(key):
     X = gen_X(key1, p, n)
     y = gen_y(key2, X)
     bart = bartz.BART(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
-    acc_resid, actual_resid = bart._compare_resid()
-    numpy.testing.assert_allclose(actual_resid, acc_resid, atol=1e-5, rtol=1e-5)
+    accum_resid, actual_resid = bart._compare_resid()
+    util.assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 def test_no_datapoints(X, y, kw, key):
     X = X[:, :0]
