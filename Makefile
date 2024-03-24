@@ -26,28 +26,33 @@
 
 COVERAGE_SUFFIX=
 
-RELEASE_TARGETS = tests docs
-TARGETS = upload release $(RELEASE_TARGETS) covreport examples
-
-.PHONY: all $(TARGETS)
-
+.PHONY: all
 all:
-	@echo "available targets: $(TARGETS)"
-	@echo "release = $(RELEASE_TARGETS) (in order) + build"
+	@echo "Available targets:"
+	@echo "- tests: run unit tests, saving coverage information"
+	@echo "- docs: build html documentation"
+	@echo "- covreport: build html coverage report"
+	@echo "- release: packages the python module, invokes tests and docs first"
+	@echo "- upload: upload release to PyPI"
+	@echo "- version: update version in package from version in config file"
+	@echo "- examples: run example scripts, saving figures"
+	@echo "- version-tag: tag the current commit with a version number"
 	@echo
 	@echo "Release instructions:"
-	@echo " 1) $$ poetry version <rule>"
-	@echo " 2) describe release in docs/changelog.md"
-	@echo " 3) commit, push and check CI completes"
-	@echo " 4) $$ make release"
-	@echo " 5) repeat 3 and 4 until everything goes smoothly"
-	@echo " 6) $$ make upload"
-	@echo " 7) publish the github release"
+	@echo "- $$ poetry version <rule>"
+	@echo "- describe release in docs/changelog.md"
+	@echo "- $$ make release (repeat until it goes smoothly)"
+	@echo "- $$ make version-tag"
+	@echo "- commit, push and check CI completes"
+	@echo "- $$ make upload"
+	@echo "- publish the github release"
 
+.PHONY: upload
 upload:
 	poetry publish
 
-release: $(RELEASE_TARGETS)
+.PHONY: release
+release: tests docs
 	test ! -d dist || rm -r dist
 	poetry build
 
@@ -60,6 +65,7 @@ PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
 EXAMPLESPY = COVERAGE_FILE=.coverage.examples$(COVERAGE_SUFFIX) $(PY) --context=examples$(COVERAGE_SUFFIX)
 
+.PHONY: tests
 tests: version
 	$(TESTSPY) -m pytest tests
 
@@ -67,6 +73,7 @@ tests: version
 # coverage
 
 EXAMPLES = $(wildcard examples/*.py)
+EXAMPLES := $(filter-out examples/runexamples.py, $(EXAMPLES)) # runner script
 .PHONY: $(EXAMPLES)
 examples: $(EXAMPLES)
 	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
@@ -84,10 +91,12 @@ docs-dev:
 	rm -r _site/docs-dev || true
 	mv docs/_build/html _site/docs-dev
 
+.PHONY: docs
 docs: version docs-latest docs-dev
 	@echo
 	@echo "Now open _site/index.html"
 
+.PHONY: covreport
 covreport: version
 	coverage combine
 	coverage html
@@ -95,3 +104,9 @@ covreport: version
 	mv htmlcov _site/coverage
 	@echo
 	@echo "Now open _site/index.html"
+
+.PHONY: version-tag
+version-tag: version
+	git fetch --tags
+	git tag v$(shell python -c 'import bartz; print(bartz.__version__)')
+	git push --tags
