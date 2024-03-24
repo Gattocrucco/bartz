@@ -45,7 +45,6 @@ all:
 	@echo "- $$ make version-tag"
 	@echo "- commit, push and check CI completes"
 	@echo "- $$ make upload"
-	@echo "- publish the github release"
 
 .PHONY: upload
 upload:
