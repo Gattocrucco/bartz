@@ -38,8 +38,6 @@ The 'split' array contains the decision boundaries. The boundaries are open on t
 
 Since the nodes at the bottom can only be leaves and not decision nodes, the 'var' and 'split' arrays have half the length of the 'leaf' array.
 
-The unused array element at index 0 is always fixed to 0 by convention, in all arrays.
-
 """
 
 import functools
@@ -68,12 +66,6 @@ def make_tree(depth, dtype):
     -------
     tree : array
         An array of zeroes with shape (2 ** depth,).
-
-    Notes
-    -----
-    The tree is represented as a heap, with the root node at index 1, and the
-    children of the node at index i at indices 2 * i and 2 * i + 1. The element
-    at index 0 is unused.
     """
     return jnp.zeros(2 ** depth, dtype)
 
@@ -221,7 +213,7 @@ def is_leaves_parent(split_tree):
     Parameters
     ----------
     split_tree : int array (2 ** (d - 1),)
-        The splitting points of the tree.
+        The decision boundaries of the tree.
 
     Returns
     -------
@@ -261,24 +253,3 @@ def tree_depths(tree_length):
         depths.append(depth - 1)
     depths[0] = 0
     return jnp.array(depths, minimal_unsigned_dtype(max(depths)))
-
-def index_depth(index, tree_length):
-    """
-    Return the depth of a node in a binary tree.
-
-    Parameters
-    ----------
-    index : int
-        The index of the node.
-    tree_length : int
-        The length of the tree array, i.e., 2 ** d.
-
-    Returns
-    -------
-    depth : int
-        The depth of the node. The root node (index 1) has depth 0. The depth is
-        the position of the most significant non-zero bit in the index. If
-        ``index == 0``, return -1.
-    """
-    depths = tree_depths(tree_length)
-    return depths[index]

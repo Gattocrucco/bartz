@@ -41,6 +41,7 @@ from jax import random
 from jax import numpy as jnp
 from jax import lax
 
+from . import jaxext
 from . import grove
 
 def init(*,
@@ -51,8 +52,8 @@ def init(*,
     p_nonterminal,
     sigma2_alpha,
     sigma2_beta,
-    small_float_dtype=jnp.float32,
-    large_float_dtype=jnp.float32,
+    small_float=jnp.float32,
+    large_float=jnp.float32,
     min_points_per_leaf=None,
     ):
     """
@@ -75,9 +76,9 @@ def init(*,
         The shape parameter of the inverse gamma prior on the noise variance.
     sigma2_beta : float
         The scale parameter of the inverse gamma prior on the noise variance.
-    small_float_dtype : dtype, default float32
+    small_float : dtype, default float32
         The dtype for large arrays used in the algorithm.
-    large_float_dtype : dtype, default float32
+    large_float : dtype, default float32
         The dtype for scalars, small arrays, and arrays which require accuracy.
     min_points_per_leaf : int, optional
         The minimum number of data points in a leaf node. 0 if not specified.
@@ -88,31 +89,30 @@ def init(*,
         A dictionary with array values, representing a BART mcmc state. The
         keys are:
 
-        'leaf_trees' : int array (num_trees, 2 ** d)
-            The leaf values of the trees.
+        'leaf_trees' : small_float array (num_trees, 2 ** d)
+            The leaf values.
         'var_trees' : int array (num_trees, 2 ** (d - 1))
-            The variable indices of the trees. The bottom level is missing since
-            it can only contain leaves.
+            The decision axes.
         'split_trees' : int array (num_trees, 2 ** (d - 1))
-            The splitting points.
-        'resid' : large_float_dtype array (n,)
+            The decision boundaries.
+        'resid' : large_float array (n,)
             The residuals (data minus forest value). Large float to avoid
             roundoff.
-        'sigma2' : large_float_dtype
+        'sigma2' : large_float
             The noise variance.
         'grow_prop_count', 'prune_prop_count' : int
             The number of grow/prune proposals made during one full MCMC cycle.
         'grow_acc_count', 'prune_acc_count' : int
             The number of grow/prune moves accepted during one full MCMC cycle.
-        'p_nonterminal' : large_float_dtype array (d - 1,)
+        'p_nonterminal' : large_float array (d - 1,)
             The probability of a nonterminal node at each depth.
-        'sigma2_alpha' : large_float_dtype
+        'sigma2_alpha' : large_float
             The shape parameter of the inverse gamma prior on the noise variance.
-        'sigma2_beta' : large_float_dtype
+        'sigma2_beta' : large_float
             The scale parameter of the inverse gamma prior on the noise variance.
         'max_split' : int array (p,)
             The maximum split index for each variable.
-        'y' : small_float_dtype array (n,)
+        'y' : small_float array (n,)
             The response.
         'X' : int array (p, n)
             The predictors.
@@ -123,7 +123,7 @@ def init(*,
             datapoints. If `min_points_per_leaf` is not specified, this is None.
     """
 
-    p_nonterminal = jnp.asarray(p_nonterminal, large_float_dtype)
+    p_nonterminal = jnp.asarray(p_nonterminal, large_float)
     max_depth = p_nonterminal.size + 1
 
     @functools.partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
@@ -131,20 +131,20 @@ def init(*,
         return grove.make_tree(max_depth, dtype)
 
     bart = dict(
-        leaf_trees=make_forest(max_depth, small_float_dtype),
+        leaf_trees=make_forest(max_depth, small_float),
         var_trees=make_forest(max_depth - 1, grove.minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
-        resid=jnp.asarray(y, large_float_dtype),
-        sigma2=jnp.ones((), large_float_dtype),
+        resid=jnp.asarray(y, large_float),
+        sigma2=jnp.ones((), large_float),
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
         prune_prop_count=jnp.zeros((), int),
         prune_acc_count=jnp.zeros((), int),
         p_nonterminal=p_nonterminal,
-        sigma2_alpha=jnp.asarray(sigma2_alpha, large_float_dtype),
-        sigma2_beta=jnp.asarray(sigma2_beta, large_float_dtype),
+        sigma2_alpha=jnp.asarray(sigma2_alpha, large_float),
+        sigma2_beta=jnp.asarray(sigma2_beta, large_float),
         max_split=max_split,
-        y=jnp.asarray(y, small_float_dtype),
+        y=jnp.asarray(y, small_float),
         X=X,
         min_points_per_leaf=(
             None if min_points_per_leaf is None else
@@ -203,11 +203,39 @@ def sample_trees(bart, key):
     return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
 
 def sample_moves(bart, key):
-    key = random.split(key, bart['var_trees'].shape[0])
-    return sample_move_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], key)
+    """
+    Propose moves for all the trees.
 
-@functools.partial(jax.vmap, in_axes=(0, 0, 0, None, None, 0))
-def sample_move_vmap_trees(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
+    Parameters
+    ----------
+    bart : dict
+        BART mcmc state.
+    key : jax.dtypes.prng_key array
+        A jax random key.
+
+    Returns
+    -------
+    grow_moves, prune_moves : dict
+        The proposals for grow and prune moves, with these fields:
+
+        'allowed' : bool array (num_trees,)
+            Whether the move is possible.
+        'node' : int array (num_trees,)
+            The index of the leaf to grow or node to prune.
+        'var_tree' : int array (num_trees, 2 ** (d - 1),)
+            The new decision axes of the tree.
+        'split_tree' : int array (num_trees, 2 ** (d - 1),)
+            The new decision boundaries of the tree.
+        'partial_ratio' : float array (num_trees,)
+            A factor of the Metropolis-Hastings ratio of the move. It lacks
+            the likelihood ratio, and the probability of proposing the prune
+            move. For the prune move, the ratio is inverted.
+    """
+    key = random.split(key, bart['var_trees'].shape[0])
+    return sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], key)
+
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, 0))
+def sample_moves_vmap_trees(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
     key, key1 = random.split(key)
     args = var_tree, split_tree, affluence_tree, max_split, p_nonterminal
     grow = grow_move(*args, key)
@@ -217,6 +245,10 @@ def sample_move_vmap_trees(var_tree, split_tree, affluence_tree, max_split, p_no
 def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
     """
     Tree structure grow move proposal of BART MCMC.
+
+    This moves picks a leaf node and converts it to a non-terminal node with
+    two leaf children. The move is not possible if all the leaves are already at
+    maximum depth.
 
     Parameters
     ----------
@@ -235,22 +267,21 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
 
     Returns
     -------
-    var_tree : array (2 ** (d - 1),)
-        The new variable indices of the tree.
-    split_tree : array (2 ** (d - 1),)
-        The new splitting points of the tree.
-    affluence_tree : bool array (2 ** (d - 1),) or None
-        The new indicator whether a leaf has enough points to be grown.
-    allowed : bool
-        Whether the move is allowed.
-    ratio : float
-        The Metropolis-Hastings ratio.
+    grow_move : dict
+        A dictionary with fields:
 
-    Notes
-    -----
-    This moves picks a leaf node and converts it to a non-terminal node with
-    two leaf children. The move is not possible if all the leaves are already at
-    maximum depth.
+        'allowed' : bool
+            Whether the move is possible.
+        'node' : int
+            The index of the leaf to grow.
+        'var_tree' : array (2 ** (d - 1),)
+            The new decision axes of the tree.
+        'split_tree' : array (2 ** (d - 1),)
+            The new decision boundaries of the tree.
+        'partial_ratio' : float
+            A factor of the Metropolis-Hastings ratio of the move. It lacks
+            the likelihood ratio and the probability of proposing the prune
+            move.
     """
 
     key, key1, key2 = random.split(key, 3)
@@ -574,7 +605,7 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
 
     trans_ratio = num_growable / (p_grow * num_prunable)
 
-    depth = grove.index_depth(leaf_to_grow, initial_split_tree.size)
+    depth = grove.tree_depths(initial_split_tree.size)[leaf_to_grow]
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
@@ -602,16 +633,21 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
 
     Returns
     -------
-    var_tree : array (2 ** (d - 1),)
-        The new variable indices of the tree.
-    split_tree : array (2 ** (d - 1),)
-        The new splitting points of the tree.
-    affluence_tree : bool array (2 ** (d - 1),) or None
-        The new indicator whether a leaf has enough points to be grown.
-    allowed : bool
-        Whether the move is allowed.
-    ratio : float
-        The Metropolis-Hastings ratio.
+    prune_move : dict
+        A dictionary with fields:
+
+        'allowed' : bool
+            Whether the move is possible.
+        'node' : int
+            The index of the leaf to grow.
+        'var_tree' : array (2 ** (d - 1),)
+            The new decision axes of the tree.
+        'split_tree' : array (2 ** (d - 1),)
+            The new decision boundaries of the tree.
+        'partial_ratio' : float
+            A factor of the Metropolis-Hastings ratio of the move. It lacks
+            the likelihood ratio and the probability of proposing the prune
+            move. This ratio is inverted.
     """
     node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, affluence_tree, key)
     allowed = prune_allowed(split_tree)
@@ -843,6 +879,20 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
 def compute_p_prune_back(new_split_tree, new_affluence_tree):
     """
     Compute the probability of proposing a prune move after doing a grow move.
+
+    Parameters
+    ----------
+    new_split_tree : int array (2 ** (d - 1),)
+        The decision boundaries of the tree, after the grow move.
+    new_affluence_tree : bool array (2 ** (d - 1),)
+        Which leaves have enough points to be grown, after the grow move.
+
+    Returns
+    -------
+    p_prune : float
+        The probability of proposing a prune move after the grow move. This is
+        0.5 if grow is possible again, and 1 if it isn't. It can't be 0 because
+        at least the node just grown can be pruned.
     """
     _, grow_again_allowed = growable_leaves(new_split_tree, new_affluence_tree)
     return jnp.where(grow_again_allowed, 0.5, 1)
@@ -853,6 +903,10 @@ def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_p
 
     Parameters
     ----------
+    resid_tree : float array (2 ** d,)
+        The sum of the residuals at data points in each leaf.
+    count_tree : int array (2 ** d,)
+        The number of data points in each leaf.
     sigma2 : float
         The noise variance.
     node : int
@@ -866,6 +920,12 @@ def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_p
     -------
     ratio : float
         The likelihood ratio P(data | new tree) / P(data | old tree).
+
+    Notes
+    -----
+    The ratio is set to 0 if the grow move would create leaves with not enough
+    datapoints per leaf, although this is part of the prior rather than the
+    likelihood.
     """
 
     left_child = node << 1

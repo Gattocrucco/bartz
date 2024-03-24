@@ -81,11 +81,7 @@ Login to PyPI, create a token, add it to poetry with
 
     $ poetry config pypi-token.pypi <token>
 
-Routine poetry commands
------------------------
+Commands
+--------
 
-.. code-block:: shell
-
-    $ poetry update # updates the lock file to the latest available versions of the dependencies
-    $ poetry build
-    $ poetry publish
+Development commands are defined in a makefile. Run :literal:`make` without arguments to list the targets.

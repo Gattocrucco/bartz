@@ -36,7 +36,7 @@ Import the `bartz` module and use the `~bartz.interface.BART` class:
     bart = bartz.BART(X, y, ...)
     y_pred = bart.predict(X_test)
 
-The interface hews to the R package `BART <https://cran.r-project.org/web/packages/BART/index.html>`_, with a few differences.
+The interface hews to the R package `BART <https://cran.r-project.org/package=BART>`_, with a few differences.
 
 JAX
 ---

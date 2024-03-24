@@ -38,7 +38,7 @@ class BART:
     Nonparametric regression with Bayesian Additive Regression Trees (BART).
 
     Regress `y_train` on `x_train` with a latent mean function represented as
-    a sum of decision trees. The inference is carried out by estimating the
+    a sum of decision trees. The inference is carried out by sampling the
     posterior distribution of the tree ensemble with an MCMC.
 
     Parameters
@@ -86,7 +86,7 @@ class BART:
         predictor is binned such that its distribution in `x_train` is
         approximately uniform across bins. The number of bins is at most the
         number of unique values appearing in `x_train`, or ``numcut + 1``.
-        Before running the algorithm, the predictors are compressed to th
+        Before running the algorithm, the predictors are compressed to the
         smallest integer type that fits the bin indices, so `numcut` is best set
         to the maximum value of an unsigned integer type.
     ndpost : int, default 1000
