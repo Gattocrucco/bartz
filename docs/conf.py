@@ -44,13 +44,16 @@ assert variant in ('dev', 'latest')
 
 if variant == 'dev':
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    modif = subprocess.run(['git', 'diff', '--quiet'], check=False).returncode
+    modif = subprocess.run(['git', 'diff', '--quiet']).returncode
     version = f'{commit[:7]}{"+" if modif else ""}'
 
 elif variant == 'latest':
 
-    # find public versions in git tags
+    # list git tags
     tags = subprocess.check_output(['git', 'tag'], text=True).splitlines()
+    print(f'git tags: {tags}')
+    
+    # find final versions in tags
     versions = []
     for i, t in enumerate(tags):
         try:
@@ -60,13 +63,14 @@ elif variant == 'latest':
         if v.is_prerelease or v.is_devrelease:
             continue
         versions.append((v, t))
+    print(f'tags for releases: {versions}')
 
     # find latest versions
     versions.sort(key=lambda x: x[0])
     version, tag = versions[-1]
     
     # check it out and check it matches the version in the package
-    subprocess.run(['git', 'checkout', tag])
+    subprocess.run(['git', 'checkout', tag], check=True)
     import bartz
     assert packaging.version.parse(bartz.__version__) == version
     
