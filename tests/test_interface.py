@@ -131,8 +131,8 @@ def test_min_points_per_leaf(X, y, key, kw):
     bart = bartz.BART(X, y, **kw, seed=key)
     distr = bart._points_per_leaf_distr()
     distr_marg = distr.sum(axis=0)
-    distr_lim = distr_marg[:5]
-    assert jnp.all(distr_lim == 0)
+    assert jnp.all(distr_marg[:5] == 0)
+    assert jnp.all(distr_marg[-5:-1] == 0)
 
 def test_residuals_accuracy(key):
     key1, key2, key3 = random.split(key, 3)
@@ -219,13 +219,13 @@ def test_comparison_rbart(X, y, key):
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
     rbart = BART.mc_gbart(X.T, y, **kw, usequants=True, rm_const=False, mc_cores=1, seed=seed)
 
-    dist, rank = mahalanobis_distance(bart.yhat_train, rbart.yhat_train)
-    assert dist < rank / 10
+    dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
+    assert dist2 < rank / 10
 
-    dist, rank = mahalanobis_distance(bart.sigma[:, None], rbart.sigma[:, None])
-    assert dist < rank / 10
+    dist2, rank = mahalanobis_distance2(bart.sigma[:, None], rbart.sigma[:, None])
+    assert dist2 < rank / 10
 
-def mahalanobis_distance(x, y):
+def mahalanobis_distance2(x, y):
     avg = (x + y) / 2
     cov = jnp.atleast_2d(jnp.cov(avg, rowvar=False))
     
@@ -238,9 +238,9 @@ def mahalanobis_distance(x, y):
 
     d = x.mean(0) - y.mean(0)
     Od = O.T @ d
-    dist = Od @ (Od / w)
+    dist2 = Od @ (Od / w)
 
-    return dist, rank
+    return dist2, rank
 
 # TODO
 # - test where I jit around the whole interface, returning only a prediction

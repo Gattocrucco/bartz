@@ -83,7 +83,7 @@ def trace_depth_distr(split_trees_trace):
 def points_per_leaf_distr(var_tree, split_tree, X):
     traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
     indices = traverse_tree(X, var_tree, split_tree)
-    count_tree = jnp.arange(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(X.shape[1]))
+    count_tree = jnp.zeros(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(indices.size))
     count_tree = count_tree.at[indices].add(1)
     is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True).view(jnp.uint8)
     return jnp.bincount(count_tree, is_leaf, length=X.shape[1] + 1)
