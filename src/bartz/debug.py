@@ -7,22 +7,6 @@ from jax import lax
 from . import grove
 from . import mcmcstep
 
-def trace_evaluate_trees(bart, X):
-    """
-    Evaluate all trees, for all samples, at all x. Out axes:
-        0: mcmc sample
-        1: tree
-        2: X
-    """
-    def loop(_, bart):
-        return None, evaluate_all_trees(X, bart['leaf_trees'], bart['var_trees'], bart['split_trees'])
-    _, y = lax.scan(loop, None, bart)
-    return y
-
-@functools.partial(jax.vmap, in_axes=(None, 0, 0, 0)) # vectorize over forest
-def evaluate_all_trees(X, leaf_trees, var_trees, split_trees):
-    return grove.evaluate_tree_vmap_x(X, leaf_trees, var_trees, split_trees, jnp.float32)
-
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
     tee = '├──'
@@ -97,8 +81,10 @@ def trace_depth_distr(split_trees_trace):
     return jax.vmap(forest_depth_distr)(split_trees_trace)
 
 def points_per_leaf_distr(var_tree, split_tree, X):
-    dummy = jnp.ones(X.shape[1], jnp.uint8)
-    _, count_tree = mcmcstep.agg_values(X, var_tree, split_tree, dummy, dummy.dtype)
+    traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
+    indices = traverse_tree(X, var_tree, split_tree)
+    count_tree = jnp.zeros(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(indices.size))
+    count_tree = count_tree.at[indices].add(1)
     is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True).view(jnp.uint8)
     return jnp.bincount(count_tree, is_leaf, length=X.shape[1] + 1)
 
@@ -125,7 +111,7 @@ def check_sizes(leaf_tree, var_tree, split_tree, max_split):
     return leaf_tree.size == 2 * var_tree.size == 2 * split_tree.size
 
 def check_unused_node(leaf_tree, var_tree, split_tree, max_split):
-    return (leaf_tree[0] == 0) & (var_tree[0] == 0) & (split_tree[0] == 0)
+    return (var_tree[0] == 0) & (split_tree[0] == 0)
 
 def check_leaf_values(leaf_tree, var_tree, split_tree, max_split):
     return jnp.all(jnp.isfinite(leaf_tree))

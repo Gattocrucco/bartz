@@ -321,7 +321,7 @@ class BART:
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
         sigma2_beta = lamda * sigma2_alpha
-        return mcmcstep.make_bart(
+        return mcmcstep.init(
             X=x_train,
             y=y_train,
             max_split=max_split,
@@ -354,13 +354,6 @@ class BART:
         return scale * jnp.sqrt(trace['sigma2'])
 
     
-    def _predict_debug(self, x_test):
-        from . import debug
-        x_test, x_test_fmt = self._process_predictor_input(x_test)
-        self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
-        x_test = self._bin_predictors(x_test, self._splits)
-        return debug.trace_evaluate_trees(self._main_trace, x_test)
-
     def _show_tree(self, i_sample, i_tree, print_all=False):
         from . import debug
         trace = self._main_trace
@@ -385,7 +378,7 @@ class BART:
     def _compare_resid(self):
         bart = self._mcmc_state
         resid1 = bart['resid']
-        yhat = grove.evaluate_tree_vmap_x(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
+        yhat = grove.evaluate_forest(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
         resid2 = bart['y'] - yhat
         return resid1, resid2
 
@@ -427,7 +420,5 @@ class BART:
 
     def _tree_goes_bad(self):
         bad = self._check_trees().astype(bool)
-        bad_before = bad[:-1]
-        bad_after = bad[1:]
-        goes_bad = bad_after & ~bad_before
-        return jnp.pad(goes_bad, [(1, 0), (0, 0)])
+        bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
+        return bad & ~bad_before
