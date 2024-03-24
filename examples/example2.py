@@ -7,8 +7,8 @@ import bartz
 from tests.rbartpackages import BART
 
 # DGP config
-n = 100 # number of datapoints
-p = 2 # number of covariates
+n = 30 # number of datapoints
+p = 1 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2
@@ -39,7 +39,7 @@ y_test = f(X_test) + sigma * random.normal(key4, (n,))
 # y_test = y_train
 
 # fit with bartz
-kw = dict(ntree=60, nskip=1000, ndpost=1000, numcut=255, printevery=100)
+kw = dict(ntree=100, nskip=1000, ndpost=1000, numcut=255, printevery=100)
 bart1 = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
 
 bad = bart1._check_trees()
@@ -55,15 +55,6 @@ bart2 = BART.mc_gbart(X_train.T, y_train, X_test.T, **kw, usequants=True, rm_con
 
 barts = dict(bartz=bart1, BART=bart2)
 
-# compute RMSE
-print(f'\ndata sdev = {y_test.std():#.2g}')
-for label, bart in barts.items():
-    resid = y_test - bart.yhat_test_mean
-    rmse = jnp.sqrt(resid @ resid / resid.size)
-    sigma_m = jnp.sqrt(jnp.mean(jnp.square(bart.sigma)))
-    print(f'{label}:')
-    print(f'    sigma: {sigma_m:#.2g} (true: {sigma:#.2g})')
-    print(f'    RMSE: {rmse.item():#.2g}')
 # compute RMSE
 print(f'\ndata sdev = {y_test.std():#.2g}')
 for label, bart in barts.items():
