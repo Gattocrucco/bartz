@@ -14,6 +14,8 @@ from tests.rbartpackages import BART
 # BART config
 kw = dict(nskip=100, ndpost=100, numcut=255)
 
+# TODO add comparisons w.r.t. p (at n=1000) and ntree (at n=1000, p=10)
+
 # DGP definition
 nvec = [100, 200, 500, 1000, 2000, 5000, 10000] # number of datapoints
 p = 10 # number of covariates

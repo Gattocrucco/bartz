@@ -36,7 +36,7 @@ all:
 	@echo "release = $(RELEASE_TARGETS) (in order) + build"
 	@echo
 	@echo "Release instructions:"
-	@echo " 1) bump version in pyproject.toml and src/bartz/__init__.py"
+	@echo " 1) $ poetry version <rule>"
 	@echo " 2) describe release in docs/changelog.md"
 	@echo " 3) commit, push and check CI completes"
 	@echo " 4) $$ make release"

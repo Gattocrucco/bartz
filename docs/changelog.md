@@ -29,6 +29,12 @@ SOFTWARE.
 
 # Changelog
 
+## 0.1.0
+
+* Optimize the MCMC step to only traverse each tree once.
+* Now `bartz` runs at the same speed as the R package `BART` (tested at $p=10$, $n=100\ldots 10000$).
+* The MCMC functions are heavily changed, but the interface is the same.
+
 ## 0.0.1
 
 * `BART` has attributes `maxdepth`, `sigest`.
