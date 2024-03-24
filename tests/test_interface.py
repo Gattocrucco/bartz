@@ -125,7 +125,7 @@ def test_scale_shift(X, y, key, kw):
     numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale ** 2)
     numpy.testing.assert_allclose(bart1.yhat_train, (bart2.yhat_train - offset) / scale, atol=1e-5, rtol=1e-5)
     numpy.testing.assert_allclose(bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, atol=1e-5, rtol=1e-5)
-    numpy.testing.assert_allclose(bart1.sigma, bart2.sigma / scale, atol=1e-6, rtol=1e-6)
+    util.assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-6)
     util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
 
 def test_min_points_per_leaf(X, y, key, kw):
