@@ -625,7 +625,7 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
         node=node_to_prune,
         var_tree=var_tree,
         split_tree=new_split_tree,
-        partial_ratio=1 / ratio, # should I use lax.reciprocal for this?
+        partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
     )
 
 def choose_leaf_parent(split_tree, affluence_tree, key):
