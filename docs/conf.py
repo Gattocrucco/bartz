@@ -31,26 +31,61 @@
 import sys
 import inspect
 import pathlib
+import datetime
+import os
+import subprocess
+
+import packaging
+
+# -- Doc variant -------------------------------------------------------------
+
+variant = os.environ.get('BARTZ_DOC_VARIANT', 'dev')
+assert variant in ('dev', 'latest')
+
+if variant == 'dev':
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    modif = subprocess.run(['git', 'diff', '--quiet'], check=False).returncode
+    version = f'{commit[:7]}{"+" if modif else ""}'
+
+elif variant == 'latest':
+
+    # find public versions in git tags
+    tags = subprocess.check_output(['git', 'tag'], text=True).splitlines()
+    versions = []
+    for i, t in enumerate(tags):
+        try:
+            v = packaging.version.parse(t)
+        except packaging.version.InvalidVersion:
+            continue
+        if v.is_prerelease or v.is_devrelease:
+            continue
+        versions.append((v, t))
+
+    # find latest versions
+    versions.sort(key=lambda x: x[0])
+    version, tag = versions[-1]
+    
+    # check it out and check it matches the version in the package
+    subprocess.run(['git', 'checkout', tag])
+    import bartz
+    assert packaging.version.parse(bartz.__version__) == version
+    
+    version = str(version)
+
+import bartz
 
 # -- Project information -----------------------------------------------------
 
-project = 'bartz'
+project = f'bartz {version}'
 author = 'Giacomo Petrillo'
 
-from datetime import datetime
-now = datetime.now()
+now = datetime.datetime.now()
 year = '2024'
 if now.year > int(year):
     year += '-' + str(now.year)
 copyright = year + ', ' + author
 
-
-# # The full version, including alpha/beta/rc tags
-import bartz
-release = bartz.__version__
-version = release
-if 'dev' not in version:
-    project += ' ' + version
+release = version
 
 # -- General configuration ---------------------------------------------------
 
@@ -74,7 +109,7 @@ myst_enable_extensions = [
 ]
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+# templates_path = ['_templates']
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -129,6 +164,8 @@ intersphinx_mapping = dict(
     jax=('https://jax.readthedocs.io/en/latest/', None),
 )
 
+commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+
 def linkcode_resolve(domain, info):
     """
     Determine the URL corresponding to Python object, for extension linkcode
@@ -178,7 +215,6 @@ def linkcode_resolve(domain, info):
         linespec = ''
 
     prefix = 'https://github.com/Gattocrucco/bartz/blob'
-    version = 'master' if 'dev' in release else f'v{release}'
     root = pathlib.Path(bartz.__file__).parent
     path = pathlib.Path(fn).relative_to(root).as_posix()
-    return f'{prefix}/{version}/src/bartz/{path}{linespec}'
+    return f'{prefix}/{commit}/src/bartz/{path}{linespec}'

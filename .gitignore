@@ -11,6 +11,7 @@ dist/
 # Documentation
 docs/_build
 _site/docs
+_site/docs-dev
 _site/coverage
 
 # Tracing

@@ -36,7 +36,7 @@ all:
 	@echo "release = $(RELEASE_TARGETS) (in order) + build"
 	@echo
 	@echo "Release instructions:"
-	@echo " 1) $ poetry version <rule>"
+	@echo " 1) $$ poetry version <rule>"
 	@echo " 2) describe release in docs/changelog.md"
 	@echo " 3) commit, push and check CI completes"
 	@echo " 4) $$ make release"
@@ -71,13 +71,22 @@ EXAMPLES = $(wildcard examples/*.py)
 examples: $(EXAMPLES)
 	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
 
-docs: version
-	make -C docs html
-	echo `python -c 'import re, bartz; print(re.fullmatch(r"(\d+(\.\d+)*)(.dev\d+)?", bartz.__version__).group(1))'` > docs/_build/html/bartzversion.txt
+.PHONY: docs-latest
+docs-latest:
+	BARTZ_DOC_VARIANT=latest make -C docs html
+	git switch -
 	rm -r _site/docs || true
 	mv docs/_build/html _site/docs
+
+.PHONY: docs-dev
+docs-dev:
+	BARTZ_DOC_VARIANT=dev make -C docs html
+	rm -r _site/docs-dev || true
+	mv docs/_build/html _site/docs-dev
+
+docs: version docs-latest docs-dev
 	@echo
-	@echo "Now open _site/docs/index.html"
+	@echo "Now open _site/index.html"
 
 covreport: version
 	coverage combine
@@ -85,4 +94,4 @@ covreport: version
 	rm -r _site/coverage || true
 	mv htmlcov _site/coverage
 	@echo
-	@echo "Now open _site/coverage/index.html"
+	@echo "Now open _site/index.html"
