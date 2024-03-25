@@ -15,39 +15,45 @@ devices = {
 }
 
 # BART config
-ntree = 200
+ntree = 1
 mcmc_iterations = 1
-nchains = 8
+nchains = 1
 
 # DGP definition
 nvec = [ # number of datapoints
-    100,
-    200,
-    500,
-    1000,
-    2000,
-    5000,
-    10_000,
-    20_000,
-    50_000,
-    100_000,
-    200_000,
-    500_000,
-    1000_000,
-    2000_000,
-    5000_000,
-    10_000_000,
-    20_000_000,
-    50_000_000,
     100_000_000,
+    50_000_000,
+    20_000_000,
+    10_000_000,
+    5000_000,
+    2000_000,
+    1000_000,
+    500_000,
+    200_000,
+    100_000,
+    50_000,
+    20_000,
+    10_000,
+    5000,
+    2000,
+    1000,
+    500,
+    200,
+    100,
 ]
 p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
+
+@jax.jit
 def f(x): # conditional mean
     T = 2
     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+
+@functools.partial(jax.jit, static_argnums=(1, 2))
 def gen_X(key, p, n):
-    return random.uniform(key, (p, n), float, -2, 2)
+    return random.uniform(key, (p, n), jnp.bfloat16, -2, 2)
+
+@jax.jit
 def gen_y(key, X):
     return f(X) + sigma * random.normal(key, X.shape[1:])
 
@@ -69,7 +75,7 @@ for n in nvec:
     # generate data
     key, subkey1, subkey2, subkey3 = random.split(key, 4)
     X = gen_X(subkey1, p, n)
-    y = f(X) + sigma * random.normal(subkey2, (n,))
+    y = gen_y(subkey2, X)
 
     # build initial mcmc state
     state = bartz.BART.gbart(X, y, ntree=ntree, nskip=0, ndpost=0, seed=0)._mcmc_state
@@ -84,6 +90,7 @@ for n in nvec:
         # commit inputs to the target device
         keys = random.split(subkey3, nchains)
         state, keys = jax.device_put((state, keys), device)
+        gc.collect()
 
         # pre-compile mcmc loop
         @jax.jit
