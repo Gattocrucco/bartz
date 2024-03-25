@@ -6,6 +6,7 @@ from jax import lax
 
 from . import grove
 from . import mcmcstep
+from . import jaxext
 
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):
 
