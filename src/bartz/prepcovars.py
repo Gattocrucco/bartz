@@ -54,7 +54,11 @@ def quantilized_splits_from_matrix(X, max_bins):
         The number of actually used values in each row of `splits`.
     """
     out_length = min(max_bins, X.shape[1]) - 1
-    return _quantilized_splits_from_matrix(X, out_length)
+    # return _quantilized_splits_from_matrix(X, out_length)
+    @functools.partial(jaxext.autobatch, max_io_nbytes=500_000_000)
+    def func(X):
+        return _quantilized_splits_from_matrix(X, out_length)
+    return func(X)
 
 @functools.partial(jax.vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(x, out_length):

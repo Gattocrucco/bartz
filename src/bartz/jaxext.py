@@ -258,12 +258,12 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
     def batch(tree, nbatches):
         def batch(x):
-            return x.reshape((nbatches, -1) + x.shape[1:])
+            return x.reshape((nbatches, x.shape[0] // nbatches) + x.shape[1:])
         return tree_util.tree_map(batch, tree)
 
     def unbatch(tree):
         def unbatch(x):
-            return x.reshape((-1,) + x.shape[2:])
+            return x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
         return tree_util.tree_map(unbatch, tree)
 
     def check_same(tree1, tree2):
@@ -275,6 +275,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     initial_in_axes = in_axes
     initial_out_axes = out_axes
 
+    @jax.jit
     @functools.wraps(func)
     def batched_func(*args):
         example_result = jax.eval_shape(func, *args)

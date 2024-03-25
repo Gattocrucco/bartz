@@ -59,12 +59,13 @@ def test_unique_empty_output():
 
 @pytest.mark.parametrize('target_nbatches', [1, 7])
 @pytest.mark.parametrize('with_margin', [False, True])
-def test_autobatch(key, target_nbatches, with_margin):
+@pytest.mark.parametrize('additional_size', [3, 0])
+def test_autobatch(key, target_nbatches, with_margin, additional_size):
     
     def func(a, b, c):
         return (a * b[:, None]).sum(1), c * b[None, :]
 
-    atomic_batch_size = 15
+    atomic_batch_size = additional_size + 12
     multiplier = 2
     batch_size = multiplier * atomic_batch_size
     if with_margin:
@@ -72,7 +73,7 @@ def test_autobatch(key, target_nbatches, with_margin):
     size = target_nbatches * multiplier
 
     key = random.split(key, 3)
-    a = random.uniform(key[0], (size, 3))
+    a = random.uniform(key[0], (size, additional_size))
     b = random.uniform(key[1], (size,))
     c = random.uniform(key[2], (5, size))
 
