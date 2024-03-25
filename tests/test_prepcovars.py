@@ -36,6 +36,16 @@ def test_splits_fill(fill_value):
     expected_splits = [[2, 4, fill_value], [2, 4, 6]]
     numpy.testing.assert_array_equal(splits, expected_splits)
 
+def test_max_splits():
+    x = jnp.array([
+        [1, 1, 1, 1],
+        [4, 4, 1, 1],
+        [2, 1, 3, 2],
+        [1, 4, 2, 3],
+    ])
+    _, max_split = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
+    numpy.testing.assert_array_equal(max_split, jnp.arange(4))
+
 def test_integer_splits_overflow():
     x = jnp.array([[-2 ** 31, 2 ** 31 - 2]])
     splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)

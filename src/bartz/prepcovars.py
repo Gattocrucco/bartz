@@ -63,7 +63,8 @@ def _quantilized_splits_from_matrix(x, out_length):
     actual_length -= 1
     if jnp.issubdtype(x.dtype, jnp.integer):
         midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
-        midpoints = jnp.where(jnp.arange(midpoints.size) < actual_length, midpoints, huge)
+        indices = jnp.arange(midpoints.size, dtype=jaxext.minimal_unsigned_dtype(midpoints.size - 1))
+        midpoints = jnp.where(indices < actual_length, midpoints, huge)
     else:
         midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]

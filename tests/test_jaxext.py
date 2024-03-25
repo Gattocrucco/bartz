@@ -42,9 +42,16 @@ def test_unique_short():
     assert out.dtype == x.dtype
     assert length == 1
 
-def test_unique_empty():
+def test_unique_empty_input():
     x = jnp.array([])
     out, length = jaxext.unique(x, 2, 666)
     numpy.testing.assert_array_equal([666, 666], out)
+    assert out.dtype == x.dtype
+    assert length == 0
+
+def test_unique_empty_output():
+    x = jnp.array([1, 1, 1])
+    out, length = jaxext.unique(x, 0, 666)
+    numpy.testing.assert_array_equal([], out)
     assert out.dtype == x.dtype
     assert length == 0

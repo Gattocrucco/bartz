@@ -166,6 +166,8 @@ def unique(x, size, fill_value):
     """
     if x.size == 0:
         return jnp.full(size, fill_value, x.dtype), 0
+    if size == 0:
+        return jnp.empty(0, x.dtype), 0
     x = jnp.sort(x)
     def loop(carry, x):
         i_out, i_in, last, out = carry
