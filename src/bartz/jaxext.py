@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -23,10 +23,13 @@
 # SOFTWARE.
 
 import functools
+import math
 
 from scipy import special
 import jax
 from jax import numpy as jnp
+from jax import tree_util
+from jax import lax
 
 def float_type(*args):
     t = jnp.result_type(*args)
@@ -73,7 +76,7 @@ class scipy:
     class stats:
 
         class invgamma:
-            
+
             def ppf(q, a):
                 return 1 / scipy.special.gammainccinv(a, q)
 
@@ -177,3 +180,141 @@ def unique(x, size, fill_value):
     carry = 0, 0, x[0], jnp.full(size, fill_value, x.dtype)
     (actual_length, _, _, out), _ = jax.lax.scan(loop, carry, x[:size])
     return out, actual_length + 1
+
+def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False):
+    """
+    Batch a function such that each batch is smaller than a threshold.
+
+    Parameters
+    ----------
+    func : callable
+        A jittable function with positional arguments only, with inputs and
+        outputs pytrees of arrays.
+    max_io_nbytes : int
+        The maximum number of input + output bytes in each batch.
+    in_axes : pytree of ints, default 0
+        A tree matching the structure of the function input, indicating along
+        which axes each array should be batched. If a single integer, it is
+        used for all arrays.
+    out_axes : pytree of ints, default 0
+        The same for outputs.
+    return_nbatches : bool, default False
+        If True, the number of batches is returned as a second output.
+
+    Returns
+    -------
+    batched_func : callable
+        A function with the same signature as `func`, but that processes the
+        input and output in batches in a loop.
+    """
+
+    def expand_axes(axes, tree):
+        if isinstance(axes, int):
+            return tree_util.tree_map(lambda _: axes, tree)
+        return tree_util.tree_map(lambda _, axis: axis, tree, axes)
+
+    def extract_size(axes, tree):
+        sizes = tree_util.tree_map(lambda x, axis: x.shape[axis], tree, axes)
+        sizes, _ = tree_util.tree_flatten(sizes)
+        assert all(s == sizes[0] for s in sizes)
+        return sizes[0]
+
+    def sum_nbytes(tree):
+        def nbytes(x):
+            return math.prod(x.shape) * x.dtype.itemsize
+        return tree_util.tree_reduce(lambda size, x: size + nbytes(x), tree, 0)
+
+    def next_divisor_small(dividend, min_divisor):
+        for divisor in range(min_divisor, int(math.sqrt(dividend)) + 1):
+            if dividend % divisor == 0:
+                return divisor
+        return dividend
+
+    def next_divisor_large(dividend, min_divisor):
+        max_inv_divisor = dividend // min_divisor
+        for inv_divisor in range(max_inv_divisor, 0, -1):
+            if dividend % inv_divisor == 0:
+                return dividend // inv_divisor
+        return dividend
+
+    def next_divisor(dividend, min_divisor):
+        if min_divisor * min_divisor <= dividend:
+            return next_divisor_small(dividend, min_divisor)
+        return next_divisor_large(dividend, min_divisor)
+
+    def move_axes_out(axes, tree):
+        def move_axis_out(axis, x):
+            if axis != 0:
+                return jnp.moveaxis(x, axis, 0)
+            return x
+        return tree_util.tree_map(move_axis_out, axes, tree)
+
+    def move_axes_in(axes, tree):
+        def move_axis_in(axis, x):
+            if axis != 0:
+                return jnp.moveaxis(x, 0, axis)
+            return x
+        return tree_util.tree_map(move_axis_in, axes, tree)
+
+    def batch(tree, nbatches):
+        def batch(x):
+            return x.reshape((nbatches, -1) + x.shape[1:])
+        return tree_util.tree_map(batch, tree)
+
+    def unbatch(tree):
+        def unbatch(x):
+            return x.reshape((-1,) + x.shape[2:])
+        return tree_util.tree_map(unbatch, tree)
+
+    def check_same(tree1, tree2):
+        def check_same(x1, x2):
+            assert x1.shape == x2.shape
+            assert x1.dtype == x2.dtype
+        tree_util.tree_map(check_same, tree1, tree2)
+
+    initial_in_axes = in_axes
+    initial_out_axes = out_axes
+
+    @functools.wraps(func)
+    def batched_func(*args):
+        example_result = jax.eval_shape(func, *args)
+
+        in_axes = expand_axes(initial_in_axes, args)
+        out_axes = expand_axes(initial_out_axes, example_result)
+
+        in_size = extract_size(in_axes, args)
+        out_size = extract_size(out_axes, example_result)
+        assert in_size == out_size
+        size = in_size
+
+        total_nbytes = sum_nbytes(args) + sum_nbytes(example_result)
+        min_nbatches = total_nbytes // max_io_nbytes + bool(total_nbytes % max_io_nbytes)
+        nbatches = next_divisor(size, min_nbatches)
+        assert 1 <= nbatches <= size
+        assert size % nbatches == 0
+        assert total_nbytes % nbatches == 0
+
+        batch_nbytes = total_nbytes // nbatches
+        if batch_nbytes > max_io_nbytes:
+            assert size == nbatches
+            raise ValueError(f"batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}")
+
+        def loop(_, args):
+            args = move_axes_in(in_axes, args)
+            result = func(*args)
+            result = move_axes_out(out_axes, result)
+            return None, result
+
+        args = move_axes_out(in_axes, args)
+        args = batch(args, nbatches)
+        _, result = lax.scan(loop, None, args)
+        result = unbatch(result)
+        result = move_axes_in(out_axes, result)
+
+        check_same(example_result, result)
+
+        if return_nbatches:
+            return result, nbatches
+        return result
+
+    return batched_func

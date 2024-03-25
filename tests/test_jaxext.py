@@ -24,6 +24,7 @@
 
 import pytest
 from jax import numpy as jnp
+from jax import random
 import numpy
 
 from bartz import jaxext
@@ -55,3 +56,35 @@ def test_unique_empty_output():
     numpy.testing.assert_array_equal([], out)
     assert out.dtype == x.dtype
     assert length == 0
+
+@pytest.mark.parametrize('target_nbatches', [1, 7])
+@pytest.mark.parametrize('with_margin', [False, True])
+def test_autobatch(key, target_nbatches, with_margin):
+    
+    def func(a, b, c):
+        return (a * b[:, None]).sum(1), c * b[None, :]
+
+    atomic_batch_size = 15
+    multiplier = 2
+    batch_size = multiplier * atomic_batch_size
+    if with_margin:
+        batch_size += 1
+    size = target_nbatches * multiplier
+
+    key = random.split(key, 3)
+    a = random.uniform(key[0], (size, 3))
+    b = random.uniform(key[1], (size,))
+    c = random.uniform(key[2], (5, size))
+
+    assert atomic_batch_size == a.shape[1] + 1 + c.shape[0] + 1 + c.shape[0]
+
+    batch_nbytes = batch_size * a.itemsize
+    batched_func = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1), return_nbatches=True)
+
+    out1 = func(a, b, c)
+    out2, nbatches = batched_func(a, b, c)
+
+    assert nbatches == target_nbatches
+
+    for o1, o2 in zip(out1, out2):
+        numpy.testing.assert_array_max_ulp(o1, o2)
