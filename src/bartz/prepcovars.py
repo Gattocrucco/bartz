@@ -52,10 +52,10 @@ def quantilized_splits_from_matrix(X, max_bins):
         The number of actually used values in each row of `splits`.
     """
     out_length = min(max_bins, X.shape[1]) - 1
-    return quantilized_splits_from_matrix_impl(X, out_length)
+    return _quantilized_splits_from_matrix(X, out_length)
 
 @functools.partial(jax.vmap, in_axes=(0, None))
-def quantilized_splits_from_matrix_impl(x, out_length):
+def _quantilized_splits_from_matrix(x, out_length):
     huge = huge_value(x)
     u = jnp.unique(x, size=x.size, fill_value=huge)
     actual_length = jnp.count_nonzero(u < huge) - 1
@@ -110,9 +110,9 @@ def bin_predictors(X, splits):
         A matrix with `p` predictors and `n` observations, where each predictor
         has been replaced by the index of the bin it falls into.
     """
-    return bin_predictors_impl(X, splits)
+    return _bin_predictors(X, splits)
 
 @jax.vmap
-def bin_predictors_impl(x, splits):
+def _bin_predictors(x, splits):
     dtype = grove.minimal_unsigned_dtype(splits.size)
     return jnp.searchsorted(splits, x).astype(dtype)
