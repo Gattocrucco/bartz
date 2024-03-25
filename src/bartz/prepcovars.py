@@ -27,8 +27,10 @@ import functools
 import jax
 from jax import numpy as jnp
 
+from . import jaxext
 from . import grove
 
+@functools.partial(jax.jit, static_argnums=(1,))
 def quantilized_splits_from_matrix(X, max_bins):
     """
     Determine bins that make the distribution of each predictor uniform.
@@ -56,43 +58,31 @@ def quantilized_splits_from_matrix(X, max_bins):
 
 @functools.partial(jax.vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(x, out_length):
-    huge = huge_value(x)
+    huge = jaxext.huge_value(x)
     u = jnp.unique(x, size=x.size, fill_value=huge)
     actual_length = jnp.count_nonzero(u < huge) - 1
-    midpoints = (u[1:] + u[:-1]) / 2
+    if jnp.issubdtype(x.dtype, jnp.integer):
+        midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
+        midpoints = jnp.where(u[1:] < huge, midpoints, huge)
+    else:
+        midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]
-    indices = jnp.around(indices).astype(grove.minimal_unsigned_dtype(midpoints.size - 1))
+    indices = jnp.around(indices).astype(jaxext.minimal_unsigned_dtype(midpoints.size - 1))
         # indices calculation with float rather than int to avoid potential
         # overflow with int32, and to round to nearest instead of rounding down
     decimated_midpoints = midpoints[indices]
     truncated_midpoints = midpoints[:out_length]
     splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
     max_split = jnp.minimum(actual_length, out_length)
-    max_split = max_split.astype(grove.minimal_unsigned_dtype(out_length))
+    max_split = max_split.astype(jaxext.minimal_unsigned_dtype(out_length))
     return splits, max_split
 
-def huge_value(x):
-    """
-    Return the maximum value that can be stored in `x`.
-
-    Parameters
-    ----------
-    x : array
-        A numerical numpy or jax array.
-
-    Returns
-    -------
-    maxval : scalar
-        The maximum value allowed by `x`'s type (+inf for floats).
-    """
-    if jnp.issubdtype(x.dtype, jnp.integer):
-        return jnp.iinfo(x.dtype).max
-    else:
-        return jnp.inf
-
+@jax.jit
 def bin_predictors(X, splits):
     """
     Bin the predictors according to the given splits.
+
+    A value ``x`` is mapped to bin ``i`` iff ``splits[i - 1] < x <= splits[i]``.
 
     Parameters
     ----------
@@ -114,5 +104,5 @@ def bin_predictors(X, splits):
 
 @jax.vmap
 def _bin_predictors(x, splits):
-    dtype = grove.minimal_unsigned_dtype(splits.size)
+    dtype = jaxext.minimal_unsigned_dtype(splits.size)
     return jnp.searchsorted(splits, x).astype(dtype)

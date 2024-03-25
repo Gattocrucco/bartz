@@ -83,7 +83,7 @@ def trace_depth_distr(split_trees_trace):
 def points_per_leaf_distr(var_tree, split_tree, X):
     traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
     indices = traverse_tree(X, var_tree, split_tree)
-    count_tree = jnp.zeros(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(indices.size))
+    count_tree = jnp.zeros(2 * split_tree.size, dtype=jaxext.minimal_unsigned_dtype(indices.size))
     count_tree = count_tree.at[indices].add(1)
     is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True).view(jnp.uint8)
     return jnp.bincount(count_tree, is_leaf, length=X.shape[1] + 1)
@@ -103,7 +103,7 @@ def trace_points_per_leaf_distr(bart, X):
     return distr
 
 def check_types(leaf_tree, var_tree, split_tree, max_split):
-    expected_var_dtype = grove.minimal_unsigned_dtype(max_split.size - 1)
+    expected_var_dtype = jaxext.minimal_unsigned_dtype(max_split.size - 1)
     expected_split_dtype = max_split.dtype
     return var_tree.dtype == expected_var_dtype and split_tree.dtype == expected_split_dtype
 
@@ -117,7 +117,7 @@ def check_leaf_values(leaf_tree, var_tree, split_tree, max_split):
     return jnp.all(jnp.isfinite(leaf_tree))
 
 def check_stray_nodes(leaf_tree, var_tree, split_tree, max_split):
-    index = jnp.arange(2 * split_tree.size, dtype=grove.minimal_unsigned_dtype(2 * split_tree.size - 1))
+    index = jnp.arange(2 * split_tree.size, dtype=jaxext.minimal_unsigned_dtype(2 * split_tree.size - 1))
     parent_index = index >> 1
     is_not_leaf = split_tree.at[index].get(mode='fill', fill_value=0) != 0
     parent_is_leaf = split_tree[parent_index] == 0
@@ -134,7 +134,7 @@ check_functions = [
 ]
 
 def check_tree(leaf_tree, var_tree, split_tree, max_split):
-    error_type = grove.minimal_unsigned_dtype(2 ** len(check_functions) - 1)
+    error_type = jaxext.minimal_unsigned_dtype(2 ** len(check_functions) - 1)
     error = error_type(0)
     for i, func in enumerate(check_functions):
         ok = func(leaf_tree, var_tree, split_tree, max_split)

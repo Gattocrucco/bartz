@@ -39,8 +39,8 @@ def castto(func, type):
     return newfunc
 
 def pure_callback_ufunc(callback, dtype, *args, excluded=None, **kwargs):
-    """ version of jax.pure_callback that deals correctly with ufuncs,
-    see https://github.com/google/jax/issues/17187 """
+    """ version of `jax.pure_callback` that deals correctly with ufuncs,
+    see `<https://github.com/google/jax/issues/17187>`_ """
     if excluded is None:
         excluded = ()
     shape = jnp.broadcast_shapes(*(
@@ -79,7 +79,65 @@ class scipy:
 
 @functools.wraps(jax.vmap)
 def vmap_nodoc(fun, *args, **kw):
+    """
+    Version of `jax.vmap` that preserves the docstring of the input function.
+    """
     doc = fun.__doc__
     fun = jax.vmap(fun, *args, **kw)
     fun.__doc__ = doc
     return fun
+
+def huge_value(x):
+    """
+    Return the maximum value that can be stored in `x`.
+
+    Parameters
+    ----------
+    x : array
+        A numerical numpy or jax array.
+
+    Returns
+    -------
+    maxval : scalar
+        The maximum value allowed by `x`'s type (+inf for floats).
+    """
+    if jnp.issubdtype(x.dtype, jnp.integer):
+        return jnp.iinfo(x.dtype).max
+    else:
+        return jnp.inf
+
+def minimal_unsigned_dtype(max_value):
+    """
+    Return the smallest unsigned integer dtype that can represent a given
+    maximum value.
+    """
+    if max_value < 2 ** 8:
+        return jnp.uint8
+    if max_value < 2 ** 16:
+        return jnp.uint16
+    if max_value < 2 ** 32:
+        return jnp.uint32
+    return jnp.uint64
+
+def signed_to_unsigned(int_dtype):
+    """
+    Map a signed integer type to its unsigned counterpart. Unsigned types are
+    passed through.
+    """
+    assert jnp.issubdtype(int_dtype, jnp.integer)
+    if jnp.issubdtype(int_dtype, jnp.unsignedinteger):
+        return int_dtype
+    if int_dtype == jnp.int8:
+        return jnp.uint8
+    if int_dtype == jnp.int16:
+        return jnp.uint16
+    if int_dtype == jnp.int32:
+        return jnp.uint32
+    if int_dtype == jnp.int64:
+        return jnp.uint64
+
+def ensure_unsigned(x):
+    """
+    If x has signed integer type, cast it to the unsigned dtype of the same size.
+    """
+    return x.astype(signed_to_unsigned(x.dtype))

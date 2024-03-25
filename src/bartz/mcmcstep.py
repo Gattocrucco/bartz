@@ -132,7 +132,7 @@ def init(*,
 
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
-        var_trees=make_forest(max_depth - 1, grove.minimal_unsigned_dtype(X.shape[0] - 1)),
+        var_trees=make_forest(max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float),
         sigma2=jnp.ones((), large_float),
@@ -464,7 +464,7 @@ def ancestor_variables(var_tree, max_split, node_index):
         the parent. Unused spots are filled with `p`.
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
-    ancestor_vars = jnp.zeros(max_num_ancestors, grove.minimal_unsigned_dtype(max_split.size))
+    ancestor_vars = jnp.zeros(max_num_ancestors, jaxext.minimal_unsigned_dtype(max_split.size))
     carry = ancestor_vars.size - 1, node_index, ancestor_vars
     def loop(carry, _):
         i, index, ancestor_vars = carry
@@ -784,7 +784,7 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
     # aggregate residuals and count units per leaf
     grow_resid_tree = jnp.zeros_like(leaf_tree, sigma2.dtype)
     grow_resid_tree = grow_resid_tree.at[grow_leaf_indices].add(resid)
-    grow_count_tree = jnp.zeros_like(leaf_tree, grove.minimal_unsigned_dtype(resid.size))
+    grow_count_tree = jnp.zeros_like(leaf_tree, jaxext.minimal_unsigned_dtype(resid.size))
     grow_count_tree = grow_count_tree.at[grow_leaf_indices].add(1)
 
     # compute aggregations in starting tree

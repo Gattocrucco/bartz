@@ -107,7 +107,7 @@ def traverse_tree(x, var_tree, split_tree):
 
     carry = (
         jnp.zeros((), bool),
-        jnp.ones((), minimal_unsigned_dtype(2 * var_tree.size - 1)),
+        jnp.ones((), jaxext.minimal_unsigned_dtype(2 * var_tree.size - 1)),
     )
 
     def loop(carry, _):
@@ -155,7 +155,7 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
     """
     indices = _traverse_forest(X, var_trees, split_trees)
     ntree, _ = leaf_trees.shape
-    tree_index = jnp.arange(ntree, dtype=minimal_unsigned_dtype(ntree - 1))[:, None]
+    tree_index = jnp.arange(ntree, dtype=jaxext.minimal_unsigned_dtype(ntree - 1))[:, None]
     leaves = leaf_trees[tree_index, indices]
     return jnp.sum(leaves, axis=0, dtype=dtype)
         # this sum suggests to swap the vmaps, but I think it's better for X copying to keep it that way
@@ -164,19 +164,6 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
 @functools.partial(jax.vmap, in_axes=(1, None, None))
 def _traverse_forest(X, var_trees, split_trees):
     return traverse_tree(X, var_trees, split_trees)
-
-def minimal_unsigned_dtype(max_value):
-    """
-    Return the smallest unsigned integer dtype that can represent a given
-    maximum value.
-    """
-    if max_value < 2 ** 8:
-        return jnp.uint8
-    if max_value < 2 ** 16:
-        return jnp.uint16
-    if max_value < 2 ** 32:
-        return jnp.uint32
-    return jnp.uint64
 
 def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """
@@ -200,7 +187,7 @@ def is_actual_leaf(split_tree, *, add_bottom_level=False):
     if add_bottom_level:
         size *= 2
         is_leaf = jnp.concatenate([is_leaf, jnp.ones_like(is_leaf)])
-    index = jnp.arange(size, dtype=minimal_unsigned_dtype(size - 1))
+    index = jnp.arange(size, dtype=jaxext.minimal_unsigned_dtype(size - 1))
     parent_index = index >> 1
     parent_nonleaf = split_tree[parent_index].astype(bool)
     parent_nonleaf = parent_nonleaf.at[1].set(True)
@@ -220,7 +207,7 @@ def is_leaves_parent(split_tree):
     is_leaves_parent : bool array (2 ** (d - 1),)
         The mask indicating which nodes have leaf children.
     """
-    index = jnp.arange(split_tree.size, dtype=minimal_unsigned_dtype(2 * split_tree.size - 1))
+    index = jnp.arange(split_tree.size, dtype=jaxext.minimal_unsigned_dtype(2 * split_tree.size - 1))
     left_index = index << 1 # left child
     right_index = left_index + 1 # right child
     left_leaf = split_tree.at[left_index].get(mode='fill', fill_value=0) == 0
@@ -252,4 +239,4 @@ def tree_depths(tree_length):
             depth += 1
         depths.append(depth - 1)
     depths[0] = 0
-    return jnp.array(depths, minimal_unsigned_dtype(max(depths)))
+    return jnp.array(depths, jaxext.minimal_unsigned_dtype(max(depths)))
