@@ -30,6 +30,6 @@ See the manual at https://gattocrucco.github.io/bartz/docs
 
 from ._version import __version__
 
-from .interface import BART
+from . import BART
 
 from . import debug

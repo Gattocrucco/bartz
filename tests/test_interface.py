@@ -66,32 +66,32 @@ def kw():
     return dict(ntree=20, ndpost=100, nskip=50)
 
 def test_bad_trees(X, y, key, kw):
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     bad = bart._check_trees()
     bad_count = jnp.count_nonzero(bad)
     assert bad_count == 0
 
 def test_sequential_guarantee(X, y, key, kw):
-    bart1 = bartz.BART(X, y, **kw, seed=key)
+    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
     
     kw['nskip'] -= 1
     kw['ndpost'] += 1
-    bart2 = bartz.BART(X, y, **kw, seed=key)
+    bart2 = bartz.BART.gbart(X, y, **kw, seed=key)
     
     numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
     kw['keepevery'] = 2
-    bart3 = bartz.BART(X, y, **kw, seed=key)
+    bart3 = bartz.BART.gbart(X, y, **kw, seed=key)
     yhat_train = bart2.yhat_train[1::2]
     numpy.testing.assert_array_equal(yhat_train, bart3.yhat_train[:len(yhat_train)])
 
 def test_finite(X, y, key, kw):
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     assert jnp.all(jnp.isfinite(bart.yhat_train))
     assert jnp.all(jnp.isfinite(bart.sigma))
 
 def test_output_shapes(X, y, key, kw):
-    bart = bartz.BART(X, y, x_test=X, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, x_test=X, **kw, seed=key)
 
     ndpost = kw['ndpost']
     nskip = kw['nskip']
@@ -108,16 +108,16 @@ def test_output_shapes(X, y, key, kw):
     assert bart.first_sigma.shape == (nskip,)
 
 def test_predict(X, y, key, kw):
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     yhat_train = bart.predict(X)
     numpy.testing.assert_array_equal(bart.yhat_train, yhat_train)
 
 def test_scale_shift(X, y, key, kw):
-    bart1 = bartz.BART(X, y, **kw, seed=key)
+    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
 
     offset = 0.4703189
     scale = 0.5294714
-    bart2 = bartz.BART(X, offset + y * scale, **kw, seed=key)
+    bart2 = bartz.BART.gbart(X, offset + y * scale, **kw, seed=key)
 
     numpy.testing.assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale)
@@ -129,7 +129,7 @@ def test_scale_shift(X, y, key, kw):
     util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
 
 def test_min_points_per_leaf(X, y, key, kw):
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     distr = bart._points_per_leaf_distr()
     distr_marg = distr.sum(axis=0)
     assert jnp.all(distr_marg[:5] == 0)
@@ -141,14 +141,14 @@ def test_residuals_accuracy(key):
     p = 1
     X = gen_X(key1, p, n)
     y = gen_y(key2, X)
-    bart = bartz.BART(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
+    bart = bartz.BART.gbart(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
     accum_resid, actual_resid = bart._compare_resid()
     util.assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 def test_no_datapoints(X, y, kw, key):
     X = X[:, :0]
     y = y[:0]
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     ndpost = kw['ndpost']
     assert bart.yhat_train.shape == (ndpost, 0)
     assert bart.offset == 0
@@ -158,7 +158,7 @@ def test_no_datapoints(X, y, kw, key):
 def test_one_datapoint(X, y, kw, key):
     X = X[:, :1]
     y = y[:1]
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     ndpost = kw['ndpost']
     assert bart.scale == 1
     assert bart.sigest == 1
@@ -166,7 +166,7 @@ def test_one_datapoint(X, y, kw, key):
 def test_two_datapoints(X, y, kw, key):
     X = X[:, :2]
     y = y[:2]
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     ndpost = kw['ndpost']
     numpy.testing.assert_allclose(bart.sigest, y.std())
 
@@ -174,7 +174,7 @@ def test_two_datapoints(X, y, kw, key):
     "axis, even if it's not actually run")
 def test_no_trees(X, y, kw, key):
     kw.update(ntree=0)
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     
     depth = bart._depth_distr()
     assert depth.shape == (kw['ndpost'], bart.maxdepth)
@@ -186,7 +186,7 @@ def test_no_trees(X, y, kw, key):
     "axis, even if it's not actually run")
 def test_root_trees(X, y, kw, key):
     kw.update(maxdepth=1)
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     
     depth = bart._depth_distr()
     assert jnp.all(depth[:, 0] == depth.sum(axis=1))
@@ -205,7 +205,7 @@ def test_root_trees(X, y, kw, key):
 def test_few_datapoints(X, y, kw, key):
     X = X[:, :9] # < 2 * 5
     y = y[:9]
-    bart = bartz.BART(X, y, **kw, seed=key)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 def test_comparison_rbart(X, y, key):
@@ -216,7 +216,7 @@ def test_comparison_rbart(X, y, key):
         ndpost=1000,
         numcut=255,
     )
-    bart = bartz.BART(X, y, **kw, seed=key1)
+    bart = bartz.BART.gbart(X, y, **kw, seed=key1)
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
     rbart = BART.mc_gbart(X.T, y, **kw, usequants=True, rm_const=False, mc_cores=1, seed=seed)
 

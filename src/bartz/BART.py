@@ -1,4 +1,4 @@
-# bartz/src/bartz/interface.py
+# bartz/src/bartz/BART.py
 #
 # Copyright (c) 2024, Giacomo Petrillo
 #
@@ -33,7 +33,7 @@ from . import mcmcstep
 from . import mcmcloop
 from . import prepcovars
 
-class BART:
+class gbart:
     """
     Nonparametric regression with Bayesian Additive Regression Trees (BART).
 
@@ -133,7 +133,7 @@ class BART:
 
     Notes
     -----
-    This interface imitates the function `wbart` from the R package `BART
+    This interface imitates the function `gbart` from the R package `BART
     <https://cran.r-project.org/package=BART>`_, but with these differences:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
@@ -142,6 +142,7 @@ class BART:
     - `usequants` is always `True`.
     - `rm_const` is always `False`.
     - The default `numcut` is 255 instead of 100.
+    - A lot of functionality is missing (variable selection, discrete response).
     - There are some additional attributes, and some missing.
     """
 

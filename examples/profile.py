@@ -32,5 +32,5 @@ y_test = gen_y(key4, X_test)
 
 # fit with bartz
 with profiler.trace('jax-trace', create_perfetto_trace=True):
-    bart = bartz.BART(X_train, y_train, x_test=X_test, **kw, seed=key5)
+    bart = bartz.BART.gbart(X_train, y_train, x_test=X_test, **kw, seed=key5)
     jax.block_until_ready(bart._mcmc_state)

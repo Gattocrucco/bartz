@@ -44,7 +44,7 @@ class Timer:
 
 # fit with bartz
 with Timer('bartz'):
-    bart = bartz.BART(X_train, y_train, x_test=X_test, ntree=10, nskip=500, ndpost=500, seed=key3)
+    bart = bartz.BART.gbart(X_train, y_train, x_test=X_test, ntree=10, nskip=500, ndpost=500, seed=key3)
 
 # compute RMSE
 resid = y_test - bart.yhat_test_mean

@@ -25,5 +25,5 @@
 Interface
 =========
 
-.. automodule:: bartz.interface
+.. automodule:: bartz.BART
     :members:

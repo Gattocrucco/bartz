@@ -12,7 +12,7 @@ import bartz
 from tests.rbartpackages import BART
 
 # BART config
-kw = dict(nskip=100, ndpost=100, numcut=255)
+kw = dict(nskip=0, ndpost=1, numcut=255)
 
 # TODO add comparisons w.r.t. p (at n=1000) and ntree (at n=1000, p=10)
 
@@ -56,9 +56,9 @@ for n in nvec:
     y = f(X) + sigma * random.normal(key2, (n,))
 
     # fit with bartz
-    bartz.BART(X, y, **kw, seed=key3) # run once for jit
+    bartz.BART.gbart(X, y, **kw, seed=key3) # run once for jit
     with Timer() as t1:
-        bart = bartz.BART(X, y, **kw, seed=key3)
+        bart = bartz.BART.gbart(X, y, **kw, seed=key3)
         jax.block_until_ready(bart._mcmc_state)
 
     # fit with BART
