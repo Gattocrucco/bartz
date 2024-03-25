@@ -7,8 +7,6 @@ from jax import random
 from matplotlib import pyplot as plt
 import bartz
 
-# TODO: I'm timing pre-processing the covariates. I guess it's fast, but to be sure I should time just the MCMC.
-
 # Devices to benchmark on
 devices = {
     'cpu': jax.devices('cpu')[0],
@@ -16,7 +14,7 @@ devices = {
 }
 
 # BART config
-kw = dict(nskip=0, ndpost=100, numcut=255)
+mcmc_iterations = 1
 nchains = 8
 
 # DGP definition
@@ -44,34 +42,42 @@ class Timer:
 times = {}
 for n in nvec:
 
-    print(f'n = {n}')
+    print(f'n = {n}', end='', flush=True)
 
     # generate data
     key, subkey1, subkey2, subkey3 = random.split(key, 4)
     X = gen_X(subkey1, p, n)
     y = f(X) + sigma * random.normal(subkey2, (n,))
 
+    # build initial mcmc state
+    state = bartz.BART.gbart(X, y, nskip=0, ndpost=0, seed=0)._mcmc_state
+
+    # clean up memory
+    del X, y
+
     # repeat for each device
     for label, device in devices.items():
 
+        # commit inputs to the target device
         keys = random.split(subkey3, nchains)
-        X, y, keys = jax.device_put((X, y, keys), device)
+        state, keys = jax.device_put((state, keys), device)
 
-        # pre-compile function
+        # pre-compile mcmc loop
         @jax.jit
-        @functools.partial(jax.vmap, in_axes=(None, None, 0))
-        def task(X, y, key):
-            return bartz.BART.gbart(X, y, **kw, seed=key)._mcmc_state
-        task = task.lower(X, y, keys).compile()
+        @functools.partial(jax.vmap, in_axes=(None, 0))
+        def task(state, key):
+            return bartz.mcmcloop.run_mcmc(state, 0, mcmc_iterations, 1, lambda **_: None, key)
+        task = task.lower(state, keys).compile()
 
         # clock
-        print(label)
         with Timer() as timer:
-            jax.block_until_ready(task(X, y, keys))
+            jax.block_until_ready(task(state, keys))
 
         # save result
         times.setdefault(label, []).append(timer.time)
-        print(f'{timer.time:.2g}s')
+        print(f', {label}: {timer.time:.2g}s', end='', flush=True)
+
+    print()
 
 # plot execution time
 fig, ax = plt.subplots(num='benchmark', clear=True)

@@ -33,3 +33,7 @@ from ._version import __version__
 from . import BART
 
 from . import debug
+from . import grove
+from . import mcmcstep
+from . import mcmcloop
+from . import prepcovars

@@ -52,7 +52,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     n_save : int
         The number of iterations to save.
     n_skip : int
-        The number of iterations to skip between each saved iteration.
+        The number of iterations to skip between each saved iteration, plus 1.
     callback : callable
         An arbitrary function run at each iteration, called with the following
         arguments, passed by keyword:

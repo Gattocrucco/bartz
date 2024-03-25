@@ -12,7 +12,7 @@ import bartz
 from tests.rbartpackages import BART
 
 # BART config
-kw = dict(nskip=0, ndpost=1, numcut=255)
+kw = dict(nskip=0, ndpost=100, numcut=255)
 
 # TODO add comparisons w.r.t. p (at n=1000) and ntree (at n=1000, p=10)
 
