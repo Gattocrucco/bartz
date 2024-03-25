@@ -249,3 +249,4 @@ def mahalanobis_distance2(x, y):
 # - test for prop & acc counts internal consistency:
 #    - acc <= prop (per category)
 #    - prop_total <= ntree
+# - test 0 burnin & ndpost because they are special-cased

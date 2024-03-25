@@ -18,7 +18,7 @@ mcmc_iterations = 1
 nchains = 8
 
 # DGP definition
-nvec = [100, 200, 500, 1000, 2000, 5000, 10000] # number of datapoints
+nvec = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000] # number of datapoints
 p = 10 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
