@@ -16,49 +16,48 @@ devices = {
 
 # BART config
 ntree = 1
-mcmc_iterations = 1
+maxdepth = 6
 nchains = 1
+mcmc_iterations = 1
+dtype = jnp.float32
 
-# DGP definition
-nvec = [ # number of datapoints
-    100_000_000,
-    50_000_000,
-    20_000_000,
-    10_000_000,
-    5000_000,
-    2000_000,
-    1000_000,
-    500_000,
-    200_000,
-    100_000,
-    50_000,
-    20_000,
-    10_000,
-    5000,
-    2000,
-    1000,
-    500,
-    200,
-    100,
-]
+# DGP config
 p = 10 # number of covariates
-sigma = 0.1 # noise standard deviation
-
-@jax.jit
-def f(x): # conditional mean
-    T = 2
-    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+nvec = [ # number of datapoints
+    100,
+    200,
+    500,
+    1000,
+    2000,
+    5000,
+    10_000,
+    20_000,
+    50_000,
+    100_000,
+    200_000,
+    500_000,
+    1000_000,
+    2000_000,
+    5000_000,
+    10_000_000,
+    20_000_000,
+    50_000_000,
+    100_000_000,
+    200_000_000,
+    500_000_000,
+    1000_000_000,
+]
 
 @functools.partial(jax.jit, static_argnums=(1, 2))
-def gen_X(key, p, n):
-    return random.uniform(key, (p, n), jnp.bfloat16, -2, 2)
-
-@jax.jit
-def gen_y(key, X):
-    return f(X) + sigma * random.normal(key, X.shape[1:])
+def gen_data(key, p, n):
+    key, subkey = random.split(key)
+    X = random.randint(subkey, (p, n), 0, 256, jnp.uint8)
+    max_split = jnp.full(p, 255, jnp.uint8)
+    y = random.uniform(key, (n,), dtype)
+    return X, y, max_split
 
 # random seed
-key = random.key(202403241634)
+key = random.key(202403251819)
 
 class Timer:
     def __enter__(self):
@@ -74,15 +73,20 @@ for n in nvec:
 
     # generate data
     key, subkey1, subkey2, subkey3 = random.split(key, 4)
-    X = gen_X(subkey1, p, n)
-    y = gen_y(subkey2, X)
+    X, y, max_split = gen_data(subkey1, p, n)
 
     # build initial mcmc state
-    state = bartz.BART.gbart(X, y, ntree=ntree, nskip=0, ndpost=0, seed=0)._mcmc_state
-
-    # clean up memory
-    del X, y
-    gc.collect()
+    state = bartz.mcmcstep.init(
+        X=X,
+        y=y,
+        max_split=max_split,
+        num_trees=ntree,
+        p_nonterminal=jnp.ones(maxdepth - 1),
+        sigma2_alpha=1,
+        sigma2_beta=1,
+        small_float=dtype,
+        min_points_per_leaf=1,
+    )
 
     # repeat for each device
     for label, device in devices.items():
@@ -106,10 +110,6 @@ for n in nvec:
         # save result
         times.setdefault(label, []).append(timer.time)
         print(f', {label}: {timer.time:.2g}s', end='', flush=True)
-
-        # clean up memory
-        del state
-        gc.collect()
 
     print()
 
@@ -183,7 +183,9 @@ ax.grid(which='minor', linestyle=':')
 textbox(ax, f"""\
 p = {p}
 ntree = {ntree}
+maxdepth = {maxdepth}
 nchains = {nchains}
-mcmc_iterations = {mcmc_iterations}""", loc='lower right')
+mcmc_iterations = {mcmc_iterations}
+dtype = {dtype.dtype}""", loc='lower right')
 
 fig.show()

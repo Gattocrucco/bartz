@@ -143,9 +143,9 @@ def init(*,
         p_nonterminal=p_nonterminal,
         sigma2_alpha=jnp.asarray(sigma2_alpha, large_float),
         sigma2_beta=jnp.asarray(sigma2_beta, large_float),
-        max_split=max_split,
+        max_split=jnp.asarray(max_split),
         y=jnp.asarray(y, small_float),
-        X=X,
+        X=jnp.asarray(X),
         min_points_per_leaf=(
             None if min_points_per_leaf is None else
             jnp.asarray(min_points_per_leaf)
