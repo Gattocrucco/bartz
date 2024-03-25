@@ -141,3 +141,37 @@ def ensure_unsigned(x):
     If x has signed integer type, cast it to the unsigned dtype of the same size.
     """
     return x.astype(signed_to_unsigned(x.dtype))
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def unique(x, size, fill_value):
+    """
+    Restricted version of `jax.numpy.unique` that uses less memory.
+
+    Parameters
+    ----------
+    x : 1d array
+        The input array.
+    size : int
+        The length of the output.
+    fill_value : scalar
+        The value to fill the output with if `size` is greater than the number
+        of unique values in `x`.
+
+    Returns
+    -------
+    out : array (size,)
+        The unique values in `x`, sorted, and right-padded with `fill_value`.
+    actual_length : int
+        The number of used values in `out`.
+    """
+    if x.size == 0:
+        return jnp.full(size, fill_value, x.dtype), 0
+    x = jnp.sort(x)
+    def loop(carry, x):
+        i_out, i_in, last, out = carry
+        i_out = jnp.where(x == last, i_out, i_out + 1)
+        out = out.at[i_out].set(x)
+        return (i_out, i_in + 1, x, out), None
+    carry = 0, 0, x[0], jnp.full(size, fill_value, x.dtype)
+    (actual_length, _, _, out), _ = jax.lax.scan(loop, carry, x[:size])
+    return out, actual_length + 1

@@ -59,11 +59,11 @@ def quantilized_splits_from_matrix(X, max_bins):
 @functools.partial(jax.vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(x, out_length):
     huge = jaxext.huge_value(x)
-    u = jnp.unique(x, size=x.size, fill_value=huge)
-    actual_length = jnp.count_nonzero(u < huge) - 1
+    u, actual_length = jaxext.unique(x, size=x.size, fill_value=huge)
+    actual_length -= 1
     if jnp.issubdtype(x.dtype, jnp.integer):
         midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
-        midpoints = jnp.where(u[1:] < huge, midpoints, huge)
+        midpoints = jnp.where(jnp.arange(midpoints.size) < actual_length, midpoints, huge)
     else:
         midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]

@@ -24,13 +24,9 @@
 
 import pytest
 from jax import numpy as jnp
-from jax import random
 import numpy
 
 import bartz
-
-from .rbartpackages import BART
-from . import util
 
 @pytest.mark.parametrize('fill_value', [jnp.inf, 2 ** 31 - 1])
 def test_splits_fill(fill_value):
