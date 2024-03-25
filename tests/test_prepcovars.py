@@ -32,16 +32,12 @@ import bartz
 from .rbartpackages import BART
 from . import util
 
-def test_float_splits_fill():
-    x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], float)
+@pytest.mark.parametrize('fill_value', [jnp.inf, 2 ** 31 - 1])
+def test_splits_fill(fill_value):
+    fill_value = jnp.array(fill_value)
+    x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], fill_value.dtype)
     splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
-    expected_splits = [[2, 4, jnp.inf], [2, 4, 6]]
-    numpy.testing.assert_array_equal(splits, expected_splits)
-
-def test_integer_splits_fill():
-    x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]])
-    splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
-    expected_splits = [[2, 4, 2 ** 31 - 1], [2, 4, 6]]
+    expected_splits = [[2, 4, fill_value], [2, 4, 6]]
     numpy.testing.assert_array_equal(splits, expected_splits)
 
 def test_integer_splits_overflow():
@@ -50,8 +46,9 @@ def test_integer_splits_overflow():
     expected_splits = [[-1]]
     numpy.testing.assert_array_equal(splits, expected_splits)
 
-def test_integer_splits_type():
-    x = jnp.arange(10)[None, :]
+@pytest.mark.parametrize('dtype', [int, float])
+def test_splits_type(dtype):
+    x = jnp.arange(10, dtype=dtype)[None, :]
     splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
     assert splits.dtype == x.dtype
 
@@ -83,3 +80,9 @@ def test_binner_right_boundary():
     x = jnp.array([[2 ** 31 - 1]])
     b = bartz.prepcovars.bin_predictors(x, splits)
     numpy.testing.assert_array_equal(b, [[3]])
+
+def test_quantilize_round_trip():
+    x = jnp.arange(10)[None, :]
+    splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
+    b = bartz.prepcovars.bin_predictors(x, splits)
+    numpy.testing.assert_array_equal(x, b)
