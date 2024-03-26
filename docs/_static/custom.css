@@ -57,3 +57,21 @@ dl.field-list .field-even:last-child {
 p + dl.simple {
     margin-top: 0.7em;
 }
+
+/* viewcode extension */
+
+span.linenos {
+    padding-right: 2ex;
+}
+
+div.viewcode-block:target {
+    margin: 0;
+}
+
+div.highlight pre {
+    padding-left: 1ex;
+    padding-right: 1ex;
+    font-size: 0.73em;
+    background: #f4f4f4;
+    margin-bottom: 2em;
+}

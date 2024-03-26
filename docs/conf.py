@@ -43,10 +43,12 @@ variant = os.environ.get('BARTZ_DOC_VARIANT', 'dev')
 assert variant in ('dev', 'latest')
 
 if variant == 'dev':
+
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     modif = subprocess.run(['git', 'diff', '--quiet']).returncode
     modif_staged = subprocess.run(['git', 'diff', '--quiet', '--staged']).returncode
-    version = f'{commit[:7]}{"+" if modif or modif_staged else ""}'
+    uncommitted_stuff = modif or modif_staged
+    version = f'{commit[:7]}{"+" if uncommitted_stuff else ""}'
 
 elif variant == 'latest':
 
@@ -76,6 +78,7 @@ elif variant == 'latest':
     assert packaging.version.parse(bartz.__version__) == version
     
     version = str(version)
+    uncommitted_stuff = False
 
 import bartz
 
@@ -98,15 +101,17 @@ release = version
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    # 'sphinx.ext.napoleon', # alternative to numpydoc, broken last time I tried
     'sphinx.ext.autodoc',
     'sphinx.ext.mathjax',
-    'numpydoc',
-    'sphinx.ext.intersphinx',
-    # 'sphinx.ext.viewcode', # local version of linkcode
-    'sphinx.ext.linkcode', # [source] links to code on github
+    'numpydoc', # process numpy format docstrings
+    'sphinx.ext.intersphinx', # link to other documentations automatically
     'myst_parser', # markdown support
 ]
+
+if uncommitted_stuff:
+    extensions.append('sphinx.ext.viewcode') # local version of linkcode
+else:
+    extensions.append('sphinx.ext.linkcode') # [source] links to code on github
 
 myst_enable_extensions = [
     # "amsmath",
@@ -148,7 +153,6 @@ html_static_path = ['_static']
 
 master_doc = 'index'
 
-
 # -- Other options -------------------------------------------------
 
 autoclass_content = 'both' # concatenate the class and __init__ docstrings
@@ -168,6 +172,8 @@ intersphinx_mapping = dict(
     numpy=('https://numpy.org/doc/stable', None),
     jax=('https://jax.readthedocs.io/en/latest/', None),
 )
+
+viewcode_line_numbers = True # for 'viewcode' extension
 
 commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 
