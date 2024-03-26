@@ -161,11 +161,12 @@ def make_simple_print_callback(printevery):
         grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
         prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
         n_total = n_burn + n_save * n_skip
-        debug.callback(simple_print_callback_impl, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery)
+        printcond = (i_total + 1) % printevery == 0
+        debug.callback(_simple_print_callback, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond)
     return callback
 
-def simple_print_callback_impl(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printevery):
-    if (i_total + 1) % printevery == 0:
+def _simple_print_callback(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond):
+    if printcond:
         burnin_flag = ' (burnin)' if burnin else ''
         total_str = str(n_total)
         ndigits = len(total_str)
