@@ -150,7 +150,8 @@ maxdepth = {kw_bartz['maxdepth']}
 ndpost = {kw_shared['ndpost']}
 nskip = {kw_shared['nskip']}
 train predictions included
-serial""", loc='lower right')
+serial
+jax compilation not included""", loc='lower right')
 
 fig.show()
 

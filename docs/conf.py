@@ -45,7 +45,8 @@ assert variant in ('dev', 'latest')
 if variant == 'dev':
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     modif = subprocess.run(['git', 'diff', '--quiet']).returncode
-    version = f'{commit[:7]}{"+" if modif else ""}'
+    modif_staged = subprocess.run(['git', 'diff', '--quiet', '--staged']).returncode
+    version = f'{commit[:7]}{"+" if modif or modif_staged else ""}'
 
 elif variant == 'latest':
 
