@@ -299,6 +299,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         if batch_nbytes > max_io_nbytes:
             assert size == nbatches
             raise ValueError(f"batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}")
+            # TODO make this a warning
 
         def loop(_, args):
             args = move_axes_in(in_axes, args)

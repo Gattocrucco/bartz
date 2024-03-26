@@ -138,7 +138,7 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
     ----------
     X : array (p, n)
         The coordinates to evaluate the trees at.
-    leaf_trees : (m, 2 ** d)
+    leaf_trees : array (m, 2 ** d)
         The leaf values of the tree or forest. If the input is a forest, the
         first axis is the tree index, and the values are summed.
     var_trees : array (m, 2 ** (d - 1))
