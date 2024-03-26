@@ -12,6 +12,12 @@ import bartz
 
 from tests.rbartpackages import BART
 
+# TODO This benchmark is unfair because BART uses 1 core while bartz uses 1.5
+# during the mcmc and 4 during prediction. I should somehow limit it to use
+# only 1 core, but it's not possible on macOS. I tried
+# https://github.com/google/jax/issues/743#issuecomment-1401890124 but it does
+# not work.
+
 # BART config
 kw_shared = dict(ntree=200, nskip=0, ndpost=1000, numcut=255)
 kw_bartz = dict(maxdepth=6)

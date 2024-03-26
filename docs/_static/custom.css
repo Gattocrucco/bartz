@@ -69,7 +69,7 @@ div.viewcode-block:target {
     padding-bottom: 2em;
 }
 
-div.highlight pre {
+:not(.highlight-python) > div.highlight pre {
     padding-left: 1ex;
     padding-right: 1ex;
     font-size: 0.73em;
