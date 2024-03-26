@@ -11,18 +11,17 @@ import bartz
 # Devices to benchmark on
 devices = {
     'cpu': jax.devices('cpu')[0],
-    # 'gpu': jax.devices('gpu')[0],
+    'gpu': jax.devices('gpu')[0],
 }
 
 # BART config
 ntree = 1
 maxdepth = 6
 nchains = 1
-mcmc_iterations = 1
 dtype = jnp.float32
 
 # DGP config
-p = 10 # number of covariates
+p = 1 # number of predictors
 nvec = [ # number of datapoints
     100,
     200,
@@ -48,12 +47,11 @@ nvec = [ # number of datapoints
     1000_000_000,
 ]
 
-@functools.partial(jax.jit, static_argnums=(1, 2))
-def gen_data(key, p, n):
-    key, subkey = random.split(key)
-    X = random.randint(subkey, (p, n), 0, 256, jnp.uint8)
+@functools.partial(jax.jit, static_argnums=(0, 1))
+def gen_data(p, n):
+    X = jnp.arange(p * n, dtype=jnp.uint8).reshape(p, n)
     max_split = jnp.full(p, 255, jnp.uint8)
-    y = random.uniform(key, (n,), dtype)
+    y = jnp.arange(n, dtype=jnp.int8) / dtype(255)
     return X, y, max_split
 
 # random seed
@@ -72,8 +70,7 @@ for n in nvec:
     print(f'n = {n}', end='', flush=True)
 
     # generate data
-    key, subkey1, subkey2, subkey3 = random.split(key, 4)
-    X, y, max_split = gen_data(subkey1, p, n)
+    X, y, max_split = gen_data(p, n)
 
     # build initial mcmc state
     state = bartz.mcmcstep.init(
@@ -87,20 +84,21 @@ for n in nvec:
         small_float=dtype,
         min_points_per_leaf=1,
     )
+    del X, y
 
     # repeat for each device
     for label, device in devices.items():
 
         # commit inputs to the target device
-        keys = random.split(subkey3, nchains)
+        keys = random.split(key, nchains)
         state, keys = jax.device_put((state, keys), device)
-        gc.collect()
+        gc.collect() # to delete copy of state on previous device
 
         # pre-compile mcmc loop
         @jax.jit
         @functools.partial(jax.vmap, in_axes=(None, 0))
         def task(state, key):
-            return bartz.mcmcloop.run_mcmc(state, 0, mcmc_iterations, 1, lambda **_: None, key)
+            return bartz.mcmcstep.sample_trees(state, key)
         task = task.lower(state, keys).compile()
 
         # clock
@@ -110,6 +108,9 @@ for n in nvec:
         # save result
         times.setdefault(label, []).append(timer.time)
         print(f', {label}: {timer.time:.2g}s', end='', flush=True)
+
+    del state
+    gc.collect()
 
     print()
 
@@ -177,7 +178,13 @@ fig, ax = plt.subplots(num='benchmark-device', clear=True, layout='constrained')
 times_array = jnp.array(list(times.values())).T
 ax.plot(nvec, times_array, label=list(times.keys()))
 ax.legend(loc='upper left')
-ax.set(xlabel='n', ylabel='time (s)', xscale='log', yscale='log')
+ax.set(
+    title='bartz tree sampling step',
+    xlabel='n',
+    ylabel='time (s)',
+    xscale='log',
+    yscale='log',
+)
 ax.grid(linestyle='--')
 ax.grid(which='minor', linestyle=':')
 textbox(ax, f"""\
@@ -185,7 +192,6 @@ p = {p}
 ntree = {ntree}
 maxdepth = {maxdepth}
 nchains = {nchains}
-mcmc_iterations = {mcmc_iterations}
-dtype = {dtype.dtype}""", loc='lower right')
+"small" float = {dtype.dtype}""", loc='lower right')
 
 fig.show()
