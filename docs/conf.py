@@ -108,10 +108,14 @@ extensions = [
     'myst_parser', # markdown support
 ]
 
-if uncommitted_stuff:
-    extensions.append('sphinx.ext.viewcode') # local version of linkcode
-else:
-    extensions.append('sphinx.ext.linkcode') # [source] links to code on github
+# decide whether to use viewcode or linkcode extension
+ext = 'viewcode' # copy source code in static website
+if not uncommitted_stuff:
+    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    commit_on_github = subprocess.check_output(['git', 'branch', '--remotes', '--contains', commit], text=True)
+    if commit_on_github.strip():
+        ext = 'linkcode' # links to code on github
+extensions.append(f'sphinx.ext.{ext}')
 
 myst_enable_extensions = [
     # "amsmath",
@@ -174,8 +178,6 @@ intersphinx_mapping = dict(
 )
 
 viewcode_line_numbers = True # for 'viewcode' extension
-
-commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 
 def linkcode_resolve(domain, info):
     """

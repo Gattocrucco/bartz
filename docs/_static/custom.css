@@ -66,6 +66,7 @@ span.linenos {
 
 div.viewcode-block:target {
     margin: 0;
+    padding-bottom: 2em;
 }
 
 div.highlight pre {
