@@ -84,14 +84,14 @@ docs-latest:
 	rm -r _site/docs || true
 	mv docs/_build/html _site/docs
 
-.PHONY: docs-dev
-docs-dev:
+.PHONY: docs
+docs:
 	BARTZ_DOC_VARIANT=dev make -C docs html
 	rm -r _site/docs-dev || true
 	mv docs/_build/html _site/docs-dev
 
-.PHONY: docs
-docs: version docs-latest docs-dev
+.PHONY: docs-all
+docs-all: version docs-latest docs
 	@echo
 	@echo "Now open _site/index.html"
 

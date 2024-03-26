@@ -121,7 +121,7 @@ jobs:
       - name: Generate documentation
         run: |
           source package-venv/bin/activate
-          make docs
+          make docs-all
 
       - name: Save documentation
         uses: actions/upload-artifact@v4
