@@ -81,7 +81,7 @@ def traverse_tree_1(x, var_tree, split_tree):
 # new traverse implementation
 @functools.partial(jax.vmap, in_axes=(None, 0, 0))
 @functools.partial(jax.vmap, in_axes=(1, None, None))
-def traverse_tree_2(x, var_tree, split_tree):
+def traverse_tree_2a(x, var_tree, split_tree):
     carry = (
         jnp.zeros((), bool),
         jnp.ones((), jaxext.minimal_unsigned_dtype(2 * var_tree.size - 1)),
@@ -99,15 +99,39 @@ def traverse_tree_2(x, var_tree, split_tree):
 
         return (leaf_found, index), None
 
-        # TODO
-        # - check if while loop with actual condition works better
-        #     I expect this may be useful in acceptance phase, where I only have
-        #     one tree, so I'm not parallelizing across cases where the loop
-        #     takes a different time to run. If I vmap chains, then it's a
-        #     problem.
-
     depth = tree_depth(var_tree)
     (_, index), _ = lax.scan(loop, carry, None, depth, unroll=5)
+    return index
+
+# new traverse implementation
+@functools.partial(jax.vmap, in_axes=(None, 0, 0))
+@functools.partial(jax.vmap, in_axes=(1, None, None))
+def traverse_tree_2(x, var_tree, split_tree):
+    depth = tree_depth(var_tree)
+
+    carry = (
+        jnp.zeros((), bool),
+        jnp.ones((), jaxext.minimal_unsigned_dtype(2 * var_tree.size - 1)),
+        jnp.zeros((), jaxext.minimal_unsigned_dtype(depth)),
+    )
+
+    def cond(carry):
+        leaf_found, _, level = carry
+        return (level < depth) & ~leaf_found
+
+    def loop(carry):
+        leaf_found, index, level = carry
+
+        split = split_tree[index]
+        var = var_tree[index]
+        
+        leaf_found |= split == 0
+        child_index = (index << 1) + (x[var] >= split)
+        index = jnp.where(leaf_found, index, child_index)
+
+        return leaf_found, index, level + 1
+
+    _, index, _ = lax.while_loop(cond, loop, carry)
     return index
 
 # prepare pre-compiled tasks to run

@@ -113,8 +113,8 @@ def traverse_tree(x, var_tree, split_tree):
     def loop(carry, _):
         leaf_found, index = carry
 
-        split = split_tree.at[index].get(mode='fill', fill_value=0)
-        var = var_tree.at[index].get(mode='fill', fill_value=0)
+        split = split_tree[index]
+        var = var_tree[index]
         
         leaf_found |= split == 0
         child_index = (index << 1) + (x[var] >= split)
@@ -122,18 +122,8 @@ def traverse_tree(x, var_tree, split_tree):
 
         return (leaf_found, index), None
 
-        # TODO
-        # - unroll (how much? 5?)
-        # - separate and special-case the last iteration
-        #     I also don't need to use .at.get in the previous loops
-        # - check if while loop with actual condition works better
-        #     I expect this may be useful in acceptance phase, where I only have
-        #     one tree, so I'm not parallelizing across cases where the loop
-        #     takes a different time to run. If I vmap chains, then it's a
-        #     problem.
-
-    depth = 1 + tree_depth(var_tree)
-    (_, index), _ = lax.scan(loop, carry, None, depth)
+    depth = tree_depth(var_tree)
+    (_, index), _ = lax.scan(loop, carry, None, depth, unroll=16)
     return index
 
 @functools.partial(jax.vmap, in_axes=(None, 0, 0))
