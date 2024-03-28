@@ -200,7 +200,8 @@ def sample_trees(bart, key):
     """
     key, subkey = random.split(key)
     grow_moves, prune_moves = sample_moves(bart, subkey)
-    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
+    grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
+    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key)
 
 def sample_moves(bart, key):
     """
@@ -718,7 +719,7 @@ def prune_allowed(split_tree):
     """
     return split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
 
-def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
+def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key):
     bart = bart.copy()
     def loop(carry, item):
         resid = carry.pop('resid')
@@ -745,6 +746,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart['affluence_trees'],
         grow_moves,
         prune_moves,
+        grow_leaf_indices,
         random.split(key, len(bart['leaf_trees'])),
     )
     carry, trees = lax.scan(loop, carry, items)
@@ -752,11 +754,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart.update(trees)
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, var_tree, split_tree, affluence_tree, grow_move, prune_move, key):
-    
-    # compute leaf indices according to grow move tree
-    traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
-    grow_leaf_indices = traverse_tree(X, grow_move['var_tree'], grow_move['split_tree'])
+def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, var_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
     
     # compute leaf indices in starting tree
     grow_node = grow_move['node']

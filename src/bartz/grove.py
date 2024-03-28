@@ -136,6 +136,11 @@ def traverse_tree(x, var_tree, split_tree):
     (_, index), _ = lax.scan(loop, carry, None, depth)
     return index
 
+@functools.partial(jax.vmap, in_axes=(None, 0, 0))
+@functools.partial(jax.vmap, in_axes=(1, None, None))
+def traverse_forest(X, var_trees, split_trees):
+    return traverse_tree(X, var_trees, split_trees)
+
 def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
     """
     Evaluate a ensemble of trees at an array of points.
@@ -159,17 +164,13 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
     out : array (n,)
         The sum of the values of the trees at the points in `X`.
     """
-    indices = _traverse_forest(X, var_trees, split_trees)
+    indices = traverse_forest(X, var_trees, split_trees)
     ntree, _ = leaf_trees.shape
     tree_index = jnp.arange(ntree, dtype=jaxext.minimal_unsigned_dtype(ntree - 1))[:, None]
     leaves = leaf_trees[tree_index, indices]
     return jnp.sum(leaves, axis=0, dtype=dtype)
-        # this sum suggests to swap the vmaps, but I think it's better for X copying to keep it that way
-
-@functools.partial(jax.vmap, in_axes=(None, 0, 0))
-@functools.partial(jax.vmap, in_axes=(1, None, None))
-def _traverse_forest(X, var_trees, split_trees):
-    return traverse_tree(X, var_trees, split_trees)
+        # this sum suggests to swap the vmaps, but I think it's better for X
+        # copying to keep it that way
 
 def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """
