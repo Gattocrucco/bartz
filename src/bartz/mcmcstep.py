@@ -196,10 +196,12 @@ def sample_trees(bart, key):
 
     Notes
     -----
-    This function zeroes the proposal counters.
+    This function zeroes the proposal counters before using them.
     """
+    bart = bart.copy()
     key, subkey = random.split(key)
     grow_moves, prune_moves = sample_moves(bart, subkey)
+    bart['var_trees'] = grow_moves['var_tree']
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
     return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key)
 
@@ -217,20 +219,7 @@ def sample_moves(bart, key):
     Returns
     -------
     grow_moves, prune_moves : dict
-        The proposals for grow and prune moves, with these fields:
-
-        'allowed' : bool array (num_trees,)
-            Whether the move is possible.
-        'node' : int array (num_trees,)
-            The index of the leaf to grow or node to prune.
-        'var_tree' : int array (num_trees, 2 ** (d - 1),)
-            The new decision axes of the tree.
-        'split_tree' : int array (num_trees, 2 ** (d - 1),)
-            The new decision boundaries of the tree.
-        'partial_ratio' : float array (num_trees,)
-            A factor of the Metropolis-Hastings ratio of the move. It lacks
-            the likelihood ratio, and the probability of proposing the prune
-            move. For the prune move, the ratio is inverted.
+        The proposals for grow and prune moves. See `grow_move` and `prune_move`.
     """
     key = random.split(key, bart['var_trees'].shape[0])
     return sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], key)
@@ -295,7 +284,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
     new_split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, split_tree, new_split_tree)
+    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree)
 
     return dict(
         allowed=allowed,
@@ -570,7 +559,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, initial_split_tree, new_split_tree):
+def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree):
     """
     Compute the product of the transition and prior ratios of a grow move.
 
@@ -585,8 +574,6 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
         The probability of a nonterminal node at each depth.
     leaf_to_grow : int
         The index of the leaf to grow.
-    initial_split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree, before the leaf is grown.
     new_split_tree : array (2 ** (d - 1),)
         The splitting points of the tree, after the leaf is grown.
 
@@ -601,14 +588,19 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
     # the two ratios also contain factors num_available_split *
     # num_available_var, but they cancel out
 
-    prune_was_allowed = prune_allowed(initial_split_tree)
-    p_grow = jnp.where(prune_was_allowed, 0.5, 1)
+    prune_allowed = leaf_to_grow != 1
+        # prune allowed  <--->  the initial tree is not a root
+        # leaf to grow is root  -->  the tree can only be a root
+        # tree is a root  -->  the only leaf I can grow is root
+
+    p_grow = jnp.where(prune_allowed, 0.5, 1)
 
     trans_ratio = num_growable / (p_grow * num_prunable)
 
-    depth = grove.tree_depths(initial_split_tree.size)[leaf_to_grow]
+    depth = grove.tree_depths(new_split_tree.size)[leaf_to_grow]
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
+        # TODO filling is slow, I can pad p_nonterminal when I initialize
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
 
     return trans_ratio * tree_ratio
@@ -640,28 +632,20 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
         'allowed' : bool
             Whether the move is possible.
         'node' : int
-            The index of the leaf to grow.
-        'var_tree' : array (2 ** (d - 1),)
-            The new decision axes of the tree.
-        'split_tree' : array (2 ** (d - 1),)
-            The new decision boundaries of the tree.
+            The index of the node to prune.
         'partial_ratio' : float
             A factor of the Metropolis-Hastings ratio of the move. It lacks
             the likelihood ratio and the probability of proposing the prune
             move. This ratio is inverted.
     """
     node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, affluence_tree, key)
-    allowed = prune_allowed(split_tree)
+    allowed = split_tree[1].astype(bool) # allowed iff the tree is not a root
 
-    new_split_tree = split_tree.at[node_to_prune].set(0)
-
-    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, node_to_prune, new_split_tree, split_tree)
+    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, node_to_prune, split_tree)
 
     return dict(
         allowed=allowed,
         node=node_to_prune,
-        var_tree=var_tree,
-        split_tree=new_split_tree,
         partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
     )
 
@@ -703,22 +687,6 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
 
     return node_to_prune, num_prunable, num_growable
 
-def prune_allowed(split_tree):
-    """
-    Return whether a prune move is allowed.
-
-    Parameters
-    ----------
-    split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree.
-
-    Returns
-    -------
-    allowed : bool
-        Whether a prune move is allowed.
-    """
-    return split_tree.at[1].get(mode='fill', fill_value=0).astype(bool)
-
 def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key):
     bart = bart.copy()
     def loop(carry, item):
@@ -741,7 +709,6 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     carry['resid'] = bart['resid']
     items = (
         bart['leaf_trees'],
-        bart['var_trees'],
         bart['split_trees'],
         bart['affluence_trees'],
         grow_moves,
@@ -754,7 +721,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     bart.update(trees)
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, var_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
+def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
     
     # compute leaf indices in starting tree
     grow_node = grow_move['node']
@@ -831,10 +798,10 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
 
     # pick trees for chosen move
     trees = {}
-    var_tree = jnp.where(do_grow, grow_move['var_tree'], var_tree)
     split_tree = jnp.where(do_grow, grow_move['split_tree'], split_tree)
-    var_tree = jnp.where(do_prune, prune_move['var_tree'], var_tree)
-    split_tree = jnp.where(do_prune, prune_move['split_tree'], split_tree)
+    # the prune var tree is equal to the initial one, because I leave garbage values behind
+    split_tree = split_tree.at[prune_node].set(
+        jnp.where(do_prune, 0, split_tree[prune_node]))
     if min_points_per_leaf is not None:
         affluence_tree = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
         affluence_tree = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
@@ -867,7 +834,6 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
     # pack trees
     trees = {
         'leaf_trees': leaf_tree,
-        'var_trees': var_tree,
         'split_trees': split_tree,
         'affluence_trees': affluence_tree,
     }

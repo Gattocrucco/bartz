@@ -7,8 +7,8 @@ import bartz
 from tests.rbartpackages import BART
 
 # DGP config
-n = 10000 # number of datapoints
-p = 100 # number of covariates
+n = 1000 # number of datapoints
+p = 2 # number of covariates
 sigma = 0.1 # noise standard deviation
 def f(x): # conditional mean
     T = 2

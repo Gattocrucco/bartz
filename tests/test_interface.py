@@ -170,28 +170,28 @@ def test_two_datapoints(X, y, kw, key):
     ndpost = kw['ndpost']
     numpy.testing.assert_allclose(bart.sigest, y.std())
 
-@pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
-    "axis, even if it's not actually run")
-def test_no_trees(X, y, kw, key):
-    kw.update(ntree=0)
-    bart = bartz.BART.gbart(X, y, **kw, seed=key)
+# @pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
+#     "axis, even if it's not actually run")
+# def test_no_trees(X, y, kw, key):
+#     kw.update(ntree=0)
+#     bart = bartz.BART.gbart(X, y, **kw, seed=key)
     
-    depth = bart._depth_distr()
-    assert depth.shape == (kw['ndpost'], bart.maxdepth)
-    assert jnp.all(depth == 0)
+#     depth = bart._depth_distr()
+#     assert depth.shape == (kw['ndpost'], bart.maxdepth)
+#     assert jnp.all(depth == 0)
 
-    assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
+#     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
-@pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
-    "axis, even if it's not actually run")
-def test_root_trees(X, y, kw, key):
-    kw.update(maxdepth=1)
-    bart = bartz.BART.gbart(X, y, **kw, seed=key)
+# @pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
+#     "axis, even if it's not actually run")
+# def test_root_trees(X, y, kw, key):
+#     kw.update(maxdepth=1)
+#     bart = bartz.BART.gbart(X, y, **kw, seed=key)
     
-    depth = bart._depth_distr()
-    assert jnp.all(depth[:, 0] == depth.sum(axis=1))
+#     depth = bart._depth_distr()
+#     assert jnp.all(depth[:, 0] == depth.sum(axis=1))
 
-    assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
+#     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
     # TODO to make this (and test_no_trees) work I have to work around the jax
     # error. I could make a version of scan that does not actually trace the
@@ -200,7 +200,8 @@ def test_root_trees(X, y, kw, key):
     # inconsistent with the general jax behavior of clipping/dropping. Since
     # the default is clipping, it makes sense to raise on a naked access like
     # a[i] or a.at[i].get(). But the default behavior of set is to drop, and
-    # yet a.at[i].set(...) raises.
+    # yet a.at[i].set(...) raises. I should make a bug report; testing the code
+    # through corner cases is a valid rationale.
 
 def test_few_datapoints(X, y, kw, key):
     X = X[:, :9] # < 2 * 5
