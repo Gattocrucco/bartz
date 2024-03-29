@@ -17,8 +17,5 @@ _site/coverage
 # Tracing
 jax-trace
 
-# Personal
-note.txt
-
 # Output
 *.png

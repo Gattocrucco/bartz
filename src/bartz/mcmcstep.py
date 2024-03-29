@@ -284,16 +284,16 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
     
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
-    new_split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
+    split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree)
+    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
 
     return dict(
         allowed=allowed,
         node=leaf_to_grow,
-        var_tree=var_tree,
-        split_tree=new_split_tree,
         partial_ratio=ratio,
+        var_tree=var_tree,
+        split_tree=split_tree,
     )
 
 def choose_leaf(split_tree, affluence_tree, key):
