@@ -104,8 +104,9 @@ def init(*,
             The number of grow/prune proposals made during one full MCMC cycle.
         'grow_acc_count', 'prune_acc_count' : int
             The number of grow/prune moves accepted during one full MCMC cycle.
-        'p_nonterminal' : large_float array (d - 1,)
-            The probability of a nonterminal node at each depth.
+        'p_nonterminal' : large_float array (d,)
+            The probability of a nonterminal node at each depth, padded with a
+            zero.
         'sigma2_alpha' : large_float
             The shape parameter of the inverse gamma prior on the noise variance.
         'sigma2_beta' : large_float
@@ -124,7 +125,8 @@ def init(*,
     """
 
     p_nonterminal = jnp.asarray(p_nonterminal, large_float)
-    max_depth = p_nonterminal.size + 1
+    p_nonterminal = jnp.pad(p_nonterminal, (0, 1))
+    max_depth = p_nonterminal.size
 
     @functools.partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
     def make_forest(max_depth, dtype):
@@ -250,7 +252,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
         Whether a leaf has enough points to be grown.
     max_split : array (p,)
         The maximum split index for each variable.
-    p_nonterminal : array (d - 1,)
+    p_nonterminal : array (d,)
         The probability of a nonterminal node at each depth.
     key : jax.dtypes.prng_key array
         A jax random key.
@@ -570,7 +572,7 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         leaf to be grown to a non-terminal node.
-    p_nonterminal : array (d - 1,)
+    p_nonterminal : array (d,)
         The probability of a nonterminal node at each depth.
     leaf_to_grow : int
         The index of the leaf to grow.
@@ -599,8 +601,7 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
 
     depth = grove.tree_depths(new_split_tree.size)[leaf_to_grow]
     p_parent = p_nonterminal[depth]
-    cp_children = 1 - p_nonterminal.at[depth + 1].get(mode='fill', fill_value=0)
-        # TODO filling is slow, I can pad p_nonterminal when I initialize
+    cp_children = 1 - p_nonterminal[depth + 1]
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
 
     return trans_ratio * tree_ratio
@@ -619,7 +620,7 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
         Whether a leaf has enough points to be grown.
     max_split : array (p,)
         The maximum split index for each variable.
-    p_nonterminal : array (d - 1,)
+    p_nonterminal : array (d,)
         The probability of a nonterminal node at each depth.
     key : jax.dtypes.prng_key array
         A jax random key.
