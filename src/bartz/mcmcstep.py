@@ -176,14 +176,14 @@ def init(*,
 
 def _choose_suffstat_batch_size(size, y):
     if size == 'auto':
-        device_kind = y.devices().pop().device_kind
-        if device_kind == 'cpu':
+        platform = y.devices().pop().platform
+        if platform == 'cpu':
             return None
-        elif device_kind == 'gpu':
+        elif platform == 'gpu':
             return 128 # 128 is good on A100, and V100 at high n
                                       # 512 is good on T4, and V100 at low n
         else:
-            raise KeyError(f'Unknown device kind: {device_kind}')
+            raise KeyError(f'Unknown platform: {platform}')
     elif size is not None:
         return int(size)
     return size
