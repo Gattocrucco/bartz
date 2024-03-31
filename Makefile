@@ -34,9 +34,10 @@ all:
 	@echo "- covreport: build html coverage report"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
-	@echo "- version: update version in package from version in config file"
+	@echo "- copy-version: update version in package from version in config file"
 	@echo "- examples: run example scripts, saving figures"
 	@echo "- version-tag: tag the current commit with a version number"
+	@echo "- version-tag-override: tag the current commit with a version number, removing a pre-existing tag for the same version"
 	@echo
 	@echo "Release instructions:"
 	@echo "- $$ poetry version <rule>"
@@ -55,8 +56,8 @@ release: tests docs
 	test ! -d dist || rm -r dist
 	poetry build
 
-.PHONY: version
-version: src/bartz/_version.py
+.PHONY: copy-version
+copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
 	python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
@@ -65,7 +66,7 @@ TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$
 EXAMPLESPY = COVERAGE_FILE=.coverage.examples$(COVERAGE_SUFFIX) $(PY) --context=examples$(COVERAGE_SUFFIX)
 
 .PHONY: tests
-tests: version
+tests: copy-version
 	$(TESTSPY) -m pytest tests
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
@@ -97,12 +98,12 @@ docs:
 	mv docs/_build/html _site/docs-dev
 
 .PHONY: docs-all
-docs-all: version docs-latest docs
+docs-all: copy-version docs-latest docs
 	@echo
 	@echo "Now open _site/index.html"
 
 .PHONY: covreport
-covreport: version
+covreport: copy-version
 	coverage combine
 	coverage html
 	rm -r _site/coverage || true
@@ -111,7 +112,28 @@ covreport: version
 	@echo "Now open _site/index.html"
 
 .PHONY: version-tag
-version-tag: version
+version-tag: copy-version
 	git fetch --tags
-	git tag v$(shell python -c 'import bartz; print(bartz.__version__)')
+	$(eval TAG := v$(shell python -c 'import bartz; print(bartz.__version__)'))
+	git tag $(TAG)
+	git push --tags
+
+.PHONY: version-tag-override
+version-tag-override: version
+	git fetch --tags
+	$(eval TAG := v$(shell python -c 'import bartz; print(bartz.__version__)'))
+	$(eval TAG_EXISTS_LOCALLY := $(shell git tag --list $(TAG)))
+	$(eval TAG_EXISTS_REMOTELY := $(shell git ls-remote --exit-code --tags origin refs/tags/$(TAG); echo $$?))
+	@if [ "$(TAG_EXISTS_REMOTELY)" != "0" ] && [ "$(TAG_EXISTS_REMOTELY)" != "2" ]; then \
+		echo "Error: Unexpected status code from 'git ls-remote' command: $(TAG_EXISTS_REMOTELY)"; \
+		exit 1; \
+	elif [ "$(TAG_EXISTS_REMOTELY)" = "0" ]; then \
+		echo "Removing existing remote tag $(TAG)..."; \
+		git push origin :refs/tags/$(TAG); \
+	fi
+	@if [ "$(TAG_EXISTS_LOCALLY)" ]; then \
+		echo "Removing existing local tag $(TAG)..."; \
+		git tag -d $(TAG); \
+	fi
+	git tag $(TAG)
 	git push --tags

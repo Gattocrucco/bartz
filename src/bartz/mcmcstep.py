@@ -84,7 +84,8 @@ def init(*,
         The minimum number of data points in a leaf node. 0 if not specified.
     suffstat_batch_size : int, None, str, default 'auto'
         The batch size for computing sufficient statistics. `None` for no
-        batching. If 'auto', pick a value based on the device of `y`.
+        batching. If 'auto', pick a value based on the device of `y`, or the
+        default device.
 
     Returns
     -------
@@ -188,7 +189,12 @@ def init(*,
 
 def _choose_suffstat_batch_size(size, y):
     if size == 'auto':
-        platform = y.devices().pop().platform
+        try:
+            device = y.devices().pop()
+        except jax.errors.ConcretizationTypeError:
+            device = jax.devices()[0]
+        platform = device.platform
+
         if platform == 'cpu':
             return None
                 # maybe I should batch residuals (not counts) for numerical
@@ -198,8 +204,10 @@ def _choose_suffstat_batch_size(size, y):
                        # 512 is good on T4, and V100 at low n
         else:
             raise KeyError(f'Unknown platform: {platform}')
+    
     elif size is not None:
         return int(size)
+    
     return size
 
 def step(bart, key):

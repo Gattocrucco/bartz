@@ -23,6 +23,7 @@
 # SOFTWARE.
 
 import pytest
+import jax
 from jax import numpy as jnp
 from jax import random
 import numpy
@@ -244,8 +245,20 @@ def mahalanobis_distance2(x, y):
 
     return dist2, rank
 
+def test_jit(X, y, key, kw):
+    """ test that jitting around the whole interface works """
+    
+    def task(X, y, key):
+        bart = bartz.BART.gbart(X, y, **kw, seed=key)
+        return bart._mcmc_state, bart.yhat_train
+    task_compiled = jax.jit(task)
+    
+    state1, pred1 = task(X, y, key)
+    state2, pred2 = task_compiled(X, y, key)
+    
+    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 3)
+
 # TODO
-# - test where I jit around the whole interface, returning only a prediction
 # - test where I count how many trees have changes, and check it's equal to total acc count
 # - test for prop & acc counts internal consistency:
 #    - acc <= prop (per category)
