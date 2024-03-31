@@ -1,4 +1,4 @@
-.. bartz/docs/index.rst
+.. bartz/docs/quickstart.rst
 ..
 .. Copyright (c) 2024, Giacomo Petrillo
 ..
@@ -22,30 +22,32 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. module:: bartz
+Quickstart
+==========
 
-bartz
-=====
+Basics
+------
 
-Contents
+Import the `bartz` module and use the `~bartz.BART.gbart` class:
+
+.. code-block:: python
+    
+    import bartz
+    bart = bartz.BART.gbart(X, y, ...)
+    y_pred = bart.predict(X_test)
+
+The interface hews to the R package `BART <https://cran.r-project.org/package=BART>`_, with a few differences.
+
+JAX
+---
+
+`bartz` is implemented using `jax`, a Google library for machine learning. It allows to run the code on GPU or TPU and do various other things.
+
+For basic usage, JAX is just an alternative implementation of `numpy`. The arrays returned by `~bartz.BART.gbart` are "jax arrays" instead of "numpy arrays", but there is no perceived difference in their functionality. If you pass numpy arrays to `bartz`, they will be converted automatically. You don't have to deal with `jax` in any way.
+
+For advanced usage, refer to the `jax documentation <https://jax.readthedocs.io/>`_.
+
+Advanced
 --------
 
-.. toctree::
-    :maxdepth: 1
-
-    readme.md
-
-.. toctree::
-    :maxdepth: 2
-    
-    guide/index.rst
-    reference/index.rst
-
-.. toctree::
-    :maxdepth: 1
-
-    changelog.md
-    development.rst
-    
-* :ref:`genindex`
-* :ref:`search`
+`bartz` exposes the various functions that implement the MCMC of BART. You can use those yourself to try to make your own variant of BART. See the rest of the documentation for reference.

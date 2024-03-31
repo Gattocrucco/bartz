@@ -34,22 +34,14 @@ all:
 	@echo "- covreport: build html coverage report"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
-	@echo "- copy-version: update version in package from version in config file"
 	@echo "- examples: run example scripts, saving figures"
-	@echo "- version-tag: tag the current commit with a version number"
-	@echo "- version-tag-override: tag the current commit with a version number, removing a pre-existing tag for the same version"
 	@echo
 	@echo "Release instructions:"
 	@echo "- $$ poetry version <rule>"
 	@echo "- describe release in docs/changelog.md"
 	@echo "- $$ make release (repeat until it goes smoothly)"
-	@echo "- commit and $$ make version-tag"
 	@echo "- push and check CI completes"
 	@echo "- $$ make upload"
-
-.PHONY: upload
-upload:
-	poetry publish
 
 .PHONY: release
 release: tests docs
@@ -113,27 +105,12 @@ covreport: copy-version
 
 .PHONY: version-tag
 version-tag: copy-version
+	git diff --quiet
+	git diff --quiet --staged
 	git fetch --tags
-	$(eval TAG := v$(shell python -c 'import bartz; print(bartz.__version__)'))
-	git tag $(TAG)
+	git tag v$(shell python -c 'import bartz; print(bartz.__version__)')
 	git push --tags
 
-.PHONY: version-tag-override
-version-tag-override: version
-	git fetch --tags
-	$(eval TAG := v$(shell python -c 'import bartz; print(bartz.__version__)'))
-	$(eval TAG_EXISTS_LOCALLY := $(shell git tag --list $(TAG)))
-	$(eval TAG_EXISTS_REMOTELY := $(shell git ls-remote --exit-code --tags origin refs/tags/$(TAG); echo $$?))
-	@if [ "$(TAG_EXISTS_REMOTELY)" != "0" ] && [ "$(TAG_EXISTS_REMOTELY)" != "2" ]; then \
-		echo "Error: Unexpected status code from 'git ls-remote' command: $(TAG_EXISTS_REMOTELY)"; \
-		exit 1; \
-	elif [ "$(TAG_EXISTS_REMOTELY)" = "0" ]; then \
-		echo "Removing existing remote tag $(TAG)..."; \
-		git push origin :refs/tags/$(TAG); \
-	fi
-	@if [ "$(TAG_EXISTS_LOCALLY)" ]; then \
-		echo "Removing existing local tag $(TAG)..."; \
-		git tag -d $(TAG); \
-	fi
-	git tag $(TAG)
-	git push --tags
+.PHONY: upload
+upload: version-tag
+	poetry publish
