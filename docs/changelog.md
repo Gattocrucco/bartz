@@ -24,10 +24,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
 
-<!-- This changelog is written in Markdown and without line splits to make it
-  copy-pastable to github releases. -->
-
 # Changelog
+
+## 0.2.1
+
+* Fix a bug that prevented using bart in a compiled function.
 
 ## 0.2.0
 
