@@ -203,7 +203,7 @@ def linkcode_resolve(domain, info):
             return None
 
     # Use the original function object if it is wrapped.
-    obj = getattr(obj, "__wrapped__", obj)
+    obj = inspect.unwrap(obj)
     
     try:
         fn = inspect.getsourcefile(obj)
