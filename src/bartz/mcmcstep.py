@@ -34,7 +34,6 @@ range of possible values.
 """
 
 import functools
-import math
 
 import jax
 from jax import random
@@ -55,6 +54,7 @@ def init(*,
     small_float=jnp.float32,
     large_float=jnp.float32,
     min_points_per_leaf=None,
+    suffstat_batch_size='auto',
     ):
     """
     Make a BART posterior sampling MCMC initial state.
@@ -82,6 +82,9 @@ def init(*,
         The dtype for scalars, small arrays, and arrays which require accuracy.
     min_points_per_leaf : int, optional
         The minimum number of data points in a leaf node. 0 if not specified.
+    suffstat_batch_size : int, None, str, default 'auto'
+        The batch size for computing sufficient statistics. `None` for no
+        batching. If 'auto', pick a value based on the device of `y`.
 
     Returns
     -------
@@ -132,6 +135,11 @@ def init(*,
     def make_forest(max_depth, dtype):
         return grove.make_tree(max_depth, dtype)
 
+    small_float = jnp.dtype(small_float)
+    large_float = jnp.dtype(large_float)
+    y = jnp.asarray(y, small_float)
+    suffstat_batch_size = _choose_suffstat_batch_size(suffstat_batch_size, y)
+
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
         var_trees=make_forest(max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)),
@@ -146,7 +154,7 @@ def init(*,
         sigma2_alpha=jnp.asarray(sigma2_alpha, large_float),
         sigma2_beta=jnp.asarray(sigma2_beta, large_float),
         max_split=jnp.asarray(max_split),
-        y=jnp.asarray(y, small_float),
+        y=y,
         X=jnp.asarray(X),
         min_points_per_leaf=(
             None if min_points_per_leaf is None else
@@ -156,9 +164,29 @@ def init(*,
             None if min_points_per_leaf is None else
             make_forest(max_depth - 1, bool).at[:, 1].set(y.size >= 2 * min_points_per_leaf)
         ),
+        opt=jaxext.LeafDict(
+            suffstat_batch_size=suffstat_batch_size,
+            small_float=small_float,
+            large_float=large_float,
+            require_min_points=min_points_per_leaf is not None,
+        ),
     )
 
     return bart
+
+def _choose_suffstat_batch_size(size, y):
+    if size == 'auto':
+        device_kind = y.devices().pop().device_kind
+        if device_kind == 'cpu':
+            return None
+        elif device_kind == 'gpu':
+            return 128 # 128 is good on A100, and V100 at high n
+                                      # 512 is good on T4, and V100 at low n
+        else:
+            raise KeyError(f'Unknown device kind: {device_kind}')
+    elif size is not None:
+        return int(size)
+    return size
 
 def step(bart, key):
     """
@@ -695,6 +723,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         resid, carry, trees = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
+            bart['opt']['suffstat_batch_size'],
             resid,
             bart['sigma2'],
             bart['min_points_per_leaf'],
@@ -722,7 +751,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     bart.update(trees)
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
     
     # compute leaf indices in starting tree
     grow_node = grow_move['node']
@@ -748,10 +777,7 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
     resid += leaf_tree[leaf_indices]
 
     # aggregate residuals and count units per leaf
-    grow_resid_tree = jnp.zeros_like(leaf_tree, sigma2.dtype)
-    grow_resid_tree = grow_resid_tree.at[grow_leaf_indices].add(resid)
-    grow_count_tree = jnp.zeros_like(leaf_tree, jaxext.minimal_unsigned_dtype(resid.size))
-    grow_count_tree = grow_count_tree.at[grow_leaf_indices].add(1)
+    grow_resid_tree, grow_count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
 
     # compute aggregations in starting tree
     # I do not zero the children because garbage there does not matter
@@ -840,6 +866,32 @@ def accept_move_and_sample_leaves(X, ntree, resid, sigma2, min_points_per_leaf, 
     }
 
     return resid, counts, trees
+
+def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
+    if batch_size is None:
+        aggr_func = _aggregate_scatter
+    else:
+        aggr_func = functools.partial(_aggregate_batched, batch_size=batch_size)
+    resid_tree = aggr_func(resid, leaf_indices, tree_size, jnp.float32)
+    count_tree = aggr_func(1, leaf_indices, tree_size, jnp.uint32)
+    return resid_tree, count_tree
+
+def _aggregate_scatter(values, indices, size, dtype):
+    return (jnp
+        .zeros(size, dtype)
+        .at[indices]
+        .add(values)
+    )
+
+def _aggregate_batched(values, indices, size, dtype, batch_size):
+    nbatches = indices.size // batch_size + bool(indices.size % batch_size)
+    batch_indices = jnp.arange(indices.size) // batch_size
+    return (jnp
+        .zeros((nbatches, size), dtype)
+        .at[batch_indices, indices]
+        .add(values)
+        .sum(axis=0)
+    )
 
 def compute_p_prune_back(new_split_tree, new_affluence_tree):
     """

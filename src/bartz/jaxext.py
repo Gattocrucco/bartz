@@ -320,3 +320,15 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         return result
 
     return batched_func
+
+@tree_util.register_pytree_node_class
+class LeafDict(dict):
+    """ dictionary that acts as a leaf in jax pytrees, to store compile-time
+    values """
+
+    def tree_flatten(self):
+        return (), self
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return aux_data
