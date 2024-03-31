@@ -1,4 +1,4 @@
-.. bartz/docs/index.rst
+.. bartz/docs/reference/index.rst
 ..
 .. Copyright (c) 2024, Giacomo Petrillo
 ..
@@ -22,30 +22,15 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. module:: bartz
-
-bartz
-=====
-
-Contents
---------
+Reference
+=========
 
 .. toctree::
     :maxdepth: 1
-
-    installation.rst
-    usage.rst
-
-.. toctree::
-    :maxdepth: 2
     
-    reference/index.rst
-
-.. toctree::
-    :maxdepth: 1
-
-    changelog.md
-    development.rst
-    
-* :ref:`genindex`
-* :ref:`search`
+    interface.rst
+    grove.rst
+    mcmcstep.rst
+    mcmcloop.rst
+    prepcovars.rst
+    jaxext.rst
