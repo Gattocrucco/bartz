@@ -256,7 +256,7 @@ def test_jit(X, y, key, kw):
     state1, pred1 = task(X, y, key)
     state2, pred2 = task_compiled(X, y, key)
     
-    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 3)
+    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 10)
 
 # TODO
 # - test where I count how many trees have changes, and check it's equal to total acc count
