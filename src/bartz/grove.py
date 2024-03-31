@@ -44,7 +44,6 @@ import functools
 import math
 
 import jax
-
 from jax import numpy as jnp
 from jax import lax
 
