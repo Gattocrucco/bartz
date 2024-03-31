@@ -128,6 +128,23 @@ def traverse_tree(x, var_tree, split_tree):
 @functools.partial(jaxext.vmap_nodoc, in_axes=(None, 0, 0))
 @functools.partial(jaxext.vmap_nodoc, in_axes=(1, None, None))
 def traverse_forest(X, var_trees, split_trees):
+    """
+    Find the leaves where points fall into.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        The coordinates to evaluate the trees at.
+    var_trees : array (m, 2 ** (d - 1))
+        The decision axes of the trees.
+    split_trees : array (m, 2 ** (d - 1))
+        The decision boundaries of the trees.
+
+    Returns
+    -------
+    indices : array (m, n)
+        The indices of the leaves.
+    """
     return traverse_tree(X, var_trees, split_trees)
 
 def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):

@@ -125,6 +125,18 @@ def init(*,
         'affluence_trees' : bool array (num_trees, 2 ** (d - 1)) or None
             Whether a non-bottom leaf nodes contains twice `min_points_per_leaf`
             datapoints. If `min_points_per_leaf` is not specified, this is None.
+        'opt' : LeafDict
+            A dictionary with config values:
+
+            'suffstat_batch_size' : int or None
+                The batch size for computing sufficient statistics.
+            'small_float' : dtype
+                The dtype for large arrays used in the algorithm.
+            'large_float' : dtype
+                The dtype for scalars, small arrays, and arrays which require
+                accuracy.
+            'require_min_points' : bool
+                Whether the `min_points_per_leaf` parameter is specified.
     """
 
     p_nonterminal = jnp.asarray(p_nonterminal, large_float)
@@ -179,9 +191,11 @@ def _choose_suffstat_batch_size(size, y):
         platform = y.devices().pop().platform
         if platform == 'cpu':
             return None
+                # maybe I should batch residuals (not counts) for numerical
+                # accuracy, even if it's slower
         elif platform == 'gpu':
             return 128 # 128 is good on A100, and V100 at high n
-                                      # 512 is good on T4, and V100 at low n
+                       # 512 is good on T4, and V100 at low n
         else:
             raise KeyError(f'Unknown platform: {platform}')
     elif size is not None:
@@ -717,6 +731,29 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
     return node_to_prune, num_prunable, num_growable
 
 def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key):
+    """
+    Accept or reject the proposed moves and sample the new leaf values.
+
+    Parameters
+    ----------
+    bart : dict
+        A BART mcmc state.
+    grow_moves : dict
+        The proposals for grow moves, batched over the first axis. See
+        `grow_move`.
+    prune_moves : dict
+        The proposals for prune moves, batched over the first axis. See
+        `prune_move`.
+    grow_leaf_indices : int array (num_trees, n)
+        The leaf indices of the trees proposed by the grow move.
+    key : jax.dtypes.prng_key array
+        A jax random key.
+
+    Returns
+    -------
+    bart : dict
+        The new BART mcmc state.
+    """
     bart = bart.copy()
     def loop(carry, item):
         resid = carry.pop('resid')
@@ -752,6 +789,49 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     return bart
 
 def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
+    """
+    Accept or reject a proposed move and sample the new leaf values.
+
+    Parameters
+    ----------
+    X : int array (p, n)
+        The predictors.
+    ntree : int
+        The number of trees in the forest.
+    suffstat_batch_size : int, None
+        The batch size for computing sufficient statistics.
+    resid : float array (n,)
+        The residuals (data minus forest value).
+    sigma2 : float
+        The noise variance.
+    min_points_per_leaf : int or None
+        The minimum number of data points in a leaf node.
+    counts : dict
+        The acceptance counts from the mcmc state dict.
+    leaf_tree : float array (2 ** d,)
+        The leaf values of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The decision boundaries of the tree.
+    affluence_tree : bool array (2 ** (d - 1),) or None
+        Whether a leaf has enough points to be grown.
+    grow_move : dict
+        The proposal for the grow move. See `grow_move`.
+    prune_move : dict
+        The proposal for the prune move. See `prune_move`.
+    grow_leaf_indices : int array (n,)
+        The leaf indices of the tree proposed by the grow move.
+    key : jax.dtypes.prng_key array
+        A jax random key.
+
+    Returns
+    -------
+    resid : float array (n,)
+        The updated residuals (data minus forest value).
+    counts : dict
+        The updated acceptance counts.
+    trees : dict
+        The updated tree arrays.
+    """
     
     # compute leaf indices in starting tree
     grow_node = grow_move['node']
@@ -868,6 +948,28 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     return resid, counts, trees
 
 def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
+    """
+    Compute the sufficient statistics for the likelihood ratio of a tree move.
+
+    Parameters
+    ----------
+    resid : float array (n,)
+        The residuals (data minus forest value).
+    leaf_indices : int array (n,)
+        The leaf indices of the tree (in which leaf each data point falls into).
+    tree_size : int
+        The size of the tree array (2 ** d).
+    batch_size : int, None
+        The batch size for the aggregation. Batching increases numerical
+        accuracy and parallelism.
+
+    Returns
+    -------
+    resid_tree : float array (2 ** d,)
+        The sum of the residuals at data points in each leaf.
+    count_tree : int array (2 ** d,)
+        The number of data points in each leaf.
+    """
     if batch_size is None:
         aggr_func = _aggregate_scatter
     else:

@@ -32,6 +32,9 @@ from jax import tree_util
 from jax import lax
 
 def float_type(*args):
+    """
+    Determine the jax floating point result type given operands/types.
+    """
     t = jnp.result_type(*args)
     return jnp.sin(jnp.empty(0, t)).dtype
 
@@ -66,6 +69,7 @@ class scipy:
 
     class special:
 
+        @functools.wraps(special.gammainccinv)
         def gammainccinv(a, y):
             a = jnp.asarray(a)
             y = jnp.asarray(y)
@@ -332,3 +336,6 @@ class LeafDict(dict):
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         return aux_data
+
+    def __repr__(self):
+        return f'{__class__.__name__}({super().__repr__()})'
