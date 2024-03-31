@@ -37,3 +37,4 @@ from . import grove
 from . import mcmcstep
 from . import mcmcloop
 from . import prepcovars
+from . import jaxext

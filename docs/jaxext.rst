@@ -1,4 +1,4 @@
-.. bartz/docs/index.rst
+.. bartz/docs/jaxext.rst
 ..
 .. Copyright (c) 2024, Giacomo Petrillo
 ..
@@ -22,27 +22,8 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. module:: bartz
+JAX extensions
+==============
 
-bartz
-=====
-
-Contents
---------
-
-.. toctree::
-    :maxdepth: 1
-    
-    installation.rst
-    usage.rst
-    interface.rst
-    grove.rst
-    mcmcstep.rst
-    mcmcloop.rst
-    prepcovars.rst
-    jaxext.rst
-    changelog.md
-    development.rst
-    
-* :ref:`genindex`
-* :ref:`search`
+.. automodule:: bartz.jaxext
+    :members:

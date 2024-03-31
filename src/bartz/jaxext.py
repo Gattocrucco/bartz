@@ -116,7 +116,7 @@ def huge_value(x):
 def minimal_unsigned_dtype(max_value):
     """
     Return the smallest unsigned integer dtype that can represent a given
-    maximum value.
+    maximum value (inclusive).
     """
     if max_value < 2 ** 8:
         return jnp.uint8
