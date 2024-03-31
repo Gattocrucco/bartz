@@ -125,8 +125,8 @@ def traverse_tree(x, var_tree, split_tree):
     (_, index), _ = lax.scan(loop, carry, None, depth, unroll=16)
     return index
 
-@functools.partial(jax.vmap, in_axes=(None, 0, 0))
-@functools.partial(jax.vmap, in_axes=(1, None, None))
+@functools.partial(jaxext.vmap_nodoc, in_axes=(None, 0, 0))
+@functools.partial(jaxext.vmap_nodoc, in_axes=(1, None, None))
 def traverse_forest(X, var_trees, split_trees):
     return traverse_tree(X, var_trees, split_trees)
 
