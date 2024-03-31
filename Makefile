@@ -42,8 +42,8 @@ all:
 	@echo "- $$ poetry version <rule>"
 	@echo "- describe release in docs/changelog.md"
 	@echo "- $$ make release (repeat until it goes smoothly)"
-	@echo "- $$ make version-tag"
-	@echo "- commit, push and check CI completes"
+	@echo "- commit and $$ make version-tag"
+	@echo "- push and check CI completes"
 	@echo "- $$ make upload"
 
 .PHONY: upload

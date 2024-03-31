@@ -28,7 +28,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "bartz"
-version = "0.1.0"
+version = "0.2.0"
 description = "A JAX implementation of BART"
 authors = ["Giacomo Petrillo <info@giacomopetrillo.com>"]
 license = "MIT"

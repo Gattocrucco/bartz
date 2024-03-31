@@ -29,6 +29,15 @@ SOFTWARE.
 
 # Changelog
 
+## 0.2.0
+
+* Rename `bartz.BART` to `bartz.BART.gbart`.
+* Expose submodule `bartz.jaxext` with auxiliary functions for jax.
+* Shorter compilation time if no burnin or saved samples are drawn. This is useful when using the interface only to create the initial MCMC state, or when saving all samples to inspect the warm-up phase.
+* 20x faster on GPU.
+* 2x faster on CPU.
+* Use less temporary memory to quantilize covariates, avoiding out-of-memory errors on GPU.
+
 ## 0.1.0
 
 * Optimize the MCMC step to only traverse each tree once.
