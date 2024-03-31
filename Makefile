@@ -77,6 +77,12 @@ EXAMPLES := $(filter-out examples/runexamples.py, $(EXAMPLES)) # runner script
 examples: $(EXAMPLES)
 	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
 
+.PHONY: readme
+readme: docs/README.md
+
+docs/README.md: README.md
+	cp $< $@
+
 .PHONY: docs-latest
 docs-latest:
 	BARTZ_DOC_VARIANT=latest make -C docs html

@@ -33,6 +33,7 @@ Contents
 .. toctree::
     :maxdepth: 1
 
+    readme.md
     installation.rst
     usage.rst
 
