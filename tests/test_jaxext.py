@@ -89,3 +89,11 @@ def test_autobatch(key, target_nbatches, with_margin, additional_size):
 
     for o1, o2 in zip(out1, out2):
         numpy.testing.assert_array_max_ulp(o1, o2)
+
+def test_autobatch_warning():
+    x = jnp.arange(10_000).reshape(10, 1000)
+    def f(x):
+        return x
+    g = jaxext.autobatch(f, 100)
+    with pytest.warns(UserWarning, match=' > max_io_nbytes = '):
+        g(x)

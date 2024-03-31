@@ -24,6 +24,7 @@
 
 import functools
 import math
+import warnings
 
 from scipy import special
 import jax
@@ -302,8 +303,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         batch_nbytes = total_nbytes // nbatches
         if batch_nbytes > max_io_nbytes:
             assert size == nbatches
-            raise ValueError(f"batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}")
-            # TODO make this a warning
+            warnings.warn(f'batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}')
 
         def loop(_, args):
             args = move_axes_in(in_axes, args)
