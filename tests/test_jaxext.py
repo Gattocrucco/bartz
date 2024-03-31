@@ -97,3 +97,7 @@ def test_autobatch_warning():
     g = jaxext.autobatch(f, 100)
     with pytest.warns(UserWarning, match=' > max_io_nbytes = '):
         g(x)
+
+def test_leaf_dict_repr():
+    x = jaxext.LeafDict(a=1)
+    assert repr(x) == str(x) == "LeafDict({'a': 1})"
