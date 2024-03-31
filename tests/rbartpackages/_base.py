@@ -32,6 +32,8 @@ try:
     import jax
     def jax_to_r(x):
         x = np.asarray(x)
+        if x.ndim == 0:
+            x = x[()]
         return numpy2ri.py2rpy(x)
     jax_converter.py2rpy.register(jax.Array, jax_to_r)
 except ImportError:
