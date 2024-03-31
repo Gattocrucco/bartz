@@ -29,4 +29,12 @@ Install and set up Python. There are various ways to do it; my favorite one is t
 
 .. code-block:: sh
 
-    $ pip install bartz
+    pip install bartz
+
+To install the latest development version, do instead
+
+.. code-block:: sh
+
+    pip install git+https://github.com/Gattocrucco/bartz.git
+
+To use on GPU on a system that doesn't provide `jax` pre-installed, read how to install jax `in its manual <https://jax.readthedocs.io/en/latest/installation.html>`_.
