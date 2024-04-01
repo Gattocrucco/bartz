@@ -62,23 +62,17 @@ tests: copy-version
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
 
-.PHONY: readme
-readme: docs/README.md
-
-docs/README.md: README.md
-	cp $< $@
-
 .PHONY: docs-latest
 docs-latest:
 	BARTZ_DOC_VARIANT=latest make -C docs html
 	git switch -
-	rm -r _site/docs || true
+	test ! -d _site/docs || rm -r _site/docs
 	mv docs/_build/html _site/docs
 
 .PHONY: docs
 docs:
-	BARTZ_DOC_VARIANT=dev make -C docs html
-	rm -r _site/docs-dev || true
+	make -C docs html
+	test ! -d _site/docs-dev || rm -r _site/docs-dev
 	mv docs/_build/html _site/docs-dev
 
 .PHONY: docs-all
@@ -87,10 +81,10 @@ docs-all: copy-version docs-latest docs
 	@echo "Now open _site/index.html"
 
 .PHONY: covreport
-covreport: copy-version
+covreport:
 	coverage combine
 	coverage html
-	rm -r _site/coverage || true
+	test ! -d _site/coverage || rm -r _site/coverage
 	mv htmlcov _site/coverage
 	@echo
 	@echo "Now open _site/index.html"
