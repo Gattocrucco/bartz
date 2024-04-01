@@ -253,9 +253,7 @@ def sample_trees(bart, key):
     bart = bart.copy()
     key, subkey = random.split(key)
     grow_moves, prune_moves = sample_moves(bart, subkey)
-    bart['var_trees'] = grow_moves['var_tree']
-    grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
-    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key)
+    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
 
 def sample_moves(bart, key):
     """
@@ -738,7 +736,7 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
 
     return node_to_prune, num_prunable, num_growable
 
-def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indices, key):
+def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     """
     Accept or reject the proposed moves and sample the new leaf values.
 
@@ -752,8 +750,6 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     prune_moves : dict
         The proposals for prune moves, batched over the first axis. See
         `prune_move`.
-    grow_leaf_indices : int array (num_trees, n)
-        The leaf indices of the trees proposed by the grow move.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -764,8 +760,25 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     """
     bart = bart.copy()
     
+    bart['var_trees'] = grow_moves['var_tree']
+        # Since var_tree can contain garbage, I can set the var of leaf to be
+        # grown irrespectively of what move I'm gonna accept in the end.
+    if bart['opt']['require_min_points']:
+        tree_indices = jnp.arange(
+            len(bart['leaf_trees']),
+            dtype=jaxext.minimal_unsigned_dtype(len(bart['leaf_trees']) - 1),
+        )
+        bart['affluence_trees'] = (
+            bart['affluence_trees']
+            .at[tree_indices, prune_moves['node']]
+            .set(True)
+        )
+        # I can set to True the affluence of the node to prune irrespectively.
+
+    indices = traverse_trees(bart['X'], grow_moves, prune_moves)
+
     def loop(resid, item):
-        resid, trees, counts = accept_move_and_sample_leaves(
+        resid, trees, aux_trees, counts = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['suffstat_batch_size'],
@@ -774,30 +787,60 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
             bart['min_points_per_leaf'],
             *item,
         )
-        return resid, (trees, counts)
+        return resid, (trees, aux_trees, counts)
         
     key, subkey = random.split(key)
+    u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
+    z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
+
     items = (
         bart['leaf_trees'],
         bart['split_trees'],
         bart['affluence_trees'],
         grow_moves,
         prune_moves,
-        grow_leaf_indices,
-        random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float']),
-        random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float']),
+        *indices,
+        u,
+        z,
     )
     
-    resid, (trees, counts) = lax.scan(loop, bart['resid'], items)
+    resid, (trees, aux_trees, counts) = lax.scan(loop, bart['resid'], items)
     
     bart['resid'] = resid
     bart.update(trees)
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
+    if bart['opt']['require_min_points']:
+        bart['affluence_trees'] = jnp.where(
+            counts['grow_acc_count'][:, None],
+            aux_trees['grow_affluence_trees'],
+            bart['affluence_trees'],
+        )
     
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, u, z):
+def traverse_trees(X, grow_moves, prune_moves):
+
+    # compute leaf indices in grow tree
+    grow_leaf_indices = grove.traverse_forest(X, grow_moves['var_tree'], grow_moves['split_tree'])
+
+    # compute leaf indices in initial tree
+    grow_node = grow_moves['node'][:, None]
+    grow_left = grow_node << 1
+    grow_right = grow_left + 1
+    cond = (grow_leaf_indices == grow_left) | (grow_leaf_indices == grow_right)
+    leaf_indices = jnp.where(cond, grow_node, grow_leaf_indices)
+
+    # compute leaf indices in prune tree
+    prune_node = prune_moves['node'][:, None]
+    prune_left = prune_node << 1
+    prune_right = prune_left + 1
+    cond = (leaf_indices == prune_left) | (leaf_indices == prune_right)
+    prune_leaf_indices = jnp.where(cond, prune_node, leaf_indices)
+
+    return leaf_indices, grow_leaf_indices, prune_leaf_indices
+
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, leaf_indices, grow_leaf_indices, prune_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -840,26 +883,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The updated tree arrays.
     """
     
-    # compute leaf indices in starting tree
-    grow_node = grow_move['node']
-    grow_left = grow_node << 1
-    grow_right = grow_left + 1
-    leaf_indices = jnp.where(
-        (grow_leaf_indices == grow_left) | (grow_leaf_indices == grow_right),
-        grow_node,
-        grow_leaf_indices,
-    )
-
-    # compute leaf indices in prune tree
-    prune_node = prune_move['node']
-    prune_left = prune_node << 1
-    prune_right = prune_left + 1
-    prune_leaf_indices = jnp.where(
-        (leaf_indices == prune_left) | (leaf_indices == prune_right),
-        prune_node,
-        leaf_indices,
-    )
-
     # subtract starting tree from function
     resid += leaf_tree[leaf_indices]
 
@@ -868,12 +891,18 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
 
     # compute aggregations in starting tree
     # I do not zero the children because garbage there does not matter
+    grow_node = grow_move['node']
+    grow_left = grow_node << 1
+    grow_right = grow_left + 1
     resid_tree = (grow_resid_tree.at[grow_node]
         .set(grow_resid_tree[grow_left] + grow_resid_tree[grow_right]))
     count_tree = (grow_count_tree.at[grow_node]
         .set(grow_count_tree[grow_left] + grow_count_tree[grow_right]))
 
     # compute aggregations in prune tree
+    prune_node = prune_move['node']
+    prune_left = prune_node << 1
+    prune_right = prune_left + 1
     prune_resid_tree = (resid_tree.at[prune_node]
         .set(resid_tree[prune_left] + resid_tree[prune_right]))
     prune_count_tree = (count_tree.at[prune_node]
@@ -882,7 +911,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     # compute affluence trees
     if min_points_per_leaf is not None:
         grow_affluence_tree = grow_count_tree[:grow_count_tree.size // 2] >= 2 * min_points_per_leaf
-        prune_affluence_tree = affluence_tree.at[prune_node].set(True)
 
     # compute probability of proposing prune
     grow_p_prune = compute_p_prune_back(grow_move['split_tree'], grow_affluence_tree)
@@ -907,17 +935,13 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     do_prune = try_prune & (u[1] < prune_ratio)
 
     # pick trees for chosen move
-    trees = {}
     split_tree = jnp.where(do_grow, grow_move['split_tree'], split_tree)
-    # the prune var tree is equal to the initial one, because I leave garbage values behind
     split_tree = split_tree.at[prune_node].set(
         jnp.where(do_prune, 0, split_tree[prune_node]))
-    if min_points_per_leaf is not None:
-        affluence_tree = jnp.where(do_grow, grow_affluence_tree, affluence_tree)
-        affluence_tree = jnp.where(do_prune, prune_affluence_tree, affluence_tree)
+    # the prune var tree is equal to the initial one, because I leave garbage values behind
     resid_tree = jnp.where(do_grow, grow_resid_tree, resid_tree)
-    count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
     resid_tree = jnp.where(do_prune, prune_resid_tree, resid_tree)
+    count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
     count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
 
     # compute leaves posterior and sample leaves
@@ -937,7 +961,10 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         'split_trees': split_tree,
         'affluence_trees': affluence_tree,
     }
-
+    aux_trees = dict(
+        grow_affluence_trees=grow_affluence_tree,
+    )
+    
     # pack proposal and acceptance indicators
     counts = dict(
         grow_prop_count=try_grow,
@@ -946,7 +973,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         prune_acc_count=do_prune,
     )
 
-    return resid, trees, counts
+    return resid, trees, aux_trees, counts
 
 def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
     """
