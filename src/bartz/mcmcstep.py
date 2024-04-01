@@ -808,11 +808,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart[k] = jnp.sum(v, axis=0)
     if bart['opt']['require_min_points']:
         tree_halfsize = bart['split_trees'].shape[1]
-        bart['affluence_trees'] = jnp.where(
-            counts['grow_acc_count'][:, None],
-            aux_trees['grow_count_trees'][:, :tree_halfsize] >= 2 * bart['min_points_per_leaf'],
-            bart['affluence_trees'],
-        )
+        bart['affluence_trees'] = aux_trees['count_trees'][:, :tree_halfsize] >= 2 * bart['min_points_per_leaf']
     
     return bart
 
@@ -878,37 +874,42 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     # subtract starting tree from function
     resid += leaf_tree[leaf_indices]
 
-    # aggregate residuals and count units per leaf
-    grow_resid_tree, grow_count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
+    # sum residuals and count units per leaf, in tree proposed by grow move
+    resid_tree, count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
 
-    # compute aggregations in starting tree
-    # I do not zero the children because garbage there does not matter
+    # compute indices of grow move
     grow_node = grow_move['node']
     grow_left = grow_node << 1
     grow_right = grow_left + 1
     
-    grow_resid_left = grow_resid_tree[grow_left]
-    grow_resid_right = grow_resid_tree[grow_right]
+    # sum residuals in leaf to grow
+    grow_resid_left = resid_tree[grow_left]
+    grow_resid_right = resid_tree[grow_right]
     grow_resid_total = grow_resid_left + grow_resid_right
-    resid_tree = grow_resid_tree.at[grow_node].set(grow_resid_total)
+    resid_tree = resid_tree.at[grow_node].set(grow_resid_total)
     
-    grow_count_left = grow_count_tree[grow_left]
-    grow_count_right = grow_count_tree[grow_right]
+    # count datapoints in leaf to grow
+    grow_count_left = count_tree[grow_left]
+    grow_count_right = count_tree[grow_right]
     grow_count_total = grow_count_left + grow_count_right
-    count_tree = grow_count_tree.at[grow_node].set(grow_count_total)
+    count_tree = count_tree.at[grow_node].set(grow_count_total)
 
-    # compute aggregations in prune tree
+    # compute indices of prune move
     prune_node = prune_move['node']
     prune_left = prune_node << 1
     prune_right = prune_left + 1
 
+    # sum residuals in node to prune
     prune_resid_left = resid_tree[prune_left]
     prune_resid_right = resid_tree[prune_right]
     prune_resid_total = prune_resid_left + prune_resid_right
+    resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
     
+    # count datapoints in node to prune
     prune_count_left = count_tree[prune_left]
     prune_count_right = count_tree[prune_right]
     prune_count_total = prune_count_left + prune_count_right
+    count_tree = count_tree.at[prune_node].set(prune_count_total)
 
     # compute probability of proposing prune
     grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
@@ -940,13 +941,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         .set(jnp.where(do_grow, grow_move['split_tree'][grow_node], 0)))
     split_tree = split_tree.at[prune_node].set(
         jnp.where(do_prune, 0, split_tree[prune_node]))
-    # the prune var tree is equal to the initial one, because I leave garbage values behind
-    resid_tree = jnp.where(do_grow, grow_resid_tree, resid_tree)
-    resid_tree = resid_tree.at[prune_node].set(
-        jnp.where(do_prune, prune_resid_total, 0))
-    count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
-    count_tree = count_tree.at[prune_node].set(
-        jnp.where(do_prune, prune_count_total, 0))
+    # I can leave garbage in var_tree, resid_tree, count_tree
 
     # compute leaves posterior and sample leaves
     prec_lk = count_tree / sigma2
@@ -965,7 +960,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         'split_trees': split_tree,
     }
     aux_trees = dict(
-        grow_count_trees=grow_count_tree,
+        count_trees=count_tree,
     )
     
     # pack proposal and acceptance indicators
