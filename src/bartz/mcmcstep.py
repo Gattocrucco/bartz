@@ -367,13 +367,11 @@ def choose_leaf(split_tree, affluence_tree, key):
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         selected leaf to a non-terminal node.
-    allowed : bool
-        Whether the grow move is allowed.
     """
     is_growable = growable_leaves(split_tree, affluence_tree)
     num_growable = jnp.count_nonzero(is_growable)
     leaf_to_grow = randint_masked(key, is_growable)
-    leaf_to_grow = jnp.where(num_growable > 0, leaf_to_grow, 2 * split_tree.size)
+    leaf_to_grow = jnp.where(num_growable, leaf_to_grow, 2 * split_tree.size)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, num_prunable
@@ -713,7 +711,7 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
     -------
     node_to_prune : int
         The index of the node to prune. If ``num_prunable == 0``, return
-        ``split_tree.size``.
+        ``2 ** d``.
     num_prunable : int
         The number of leaf parents that could be pruned.
     num_growable : int
@@ -721,8 +719,9 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
         node.
     """
     is_prunable = grove.is_leaves_parent(split_tree)
-    node_to_prune = randint_masked(key, is_prunable)
     num_prunable = jnp.count_nonzero(is_prunable)
+    node_to_prune = randint_masked(key, is_prunable)
+    node_to_prune = jnp.where(num_prunable, node_to_prune, 2 * split_tree.size)
 
     pruned_split_tree = split_tree.at[node_to_prune].set(0)
     pruned_affluence_tree = (
@@ -936,7 +935,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     do_grow = try_grow & (u[1] < grow_ratio)
     do_prune = try_prune & (u[1] < prune_ratio)
 
-    # pick trees for chosen move
+    # pick split tree for chosen move
     split_tree = (grow_move['split_tree'].at[grow_node]
         .set(jnp.where(do_grow, grow_move['split_tree'][grow_node], 0)))
     split_tree = split_tree.at[prune_node].set(
@@ -953,7 +952,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
     leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
     resid -= leaf_tree[leaf_indices]
-    
+
     # pack proposal and acceptance indicators
     counts = dict(
         grow_prop_count=try_grow,
