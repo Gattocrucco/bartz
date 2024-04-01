@@ -1018,8 +1018,8 @@ def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per
     other_growable_leaves = grow_move['num_growable'] >= 2
     new_leaves_growable = grow_move['node'] < grow_move['split_tree'].size // 2
     if min_points_per_leaf is not None:
-        any_above_threshold = grow_left_count >= min_points_per_leaf
-        any_above_threshold |= grow_right_count >= min_points_per_leaf
+        any_above_threshold = grow_left_count >= 2 * min_points_per_leaf
+        any_above_threshold |= grow_right_count >= 2 * min_points_per_leaf
         new_leaves_growable &= any_above_threshold
     grow_again_allowed = other_growable_leaves | new_leaves_growable
     grow_p_prune = jnp.where(grow_again_allowed, 0.5, 1)
