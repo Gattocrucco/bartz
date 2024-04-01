@@ -776,7 +776,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     indices = traverse_trees(bart['X'], grow_moves, prune_moves)
 
     def loop(resid, item):
-        resid, trees, aux_trees, counts = accept_move_and_sample_leaves(
+        resid, leaf_tree, split_tree, count_half_tree, counts = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['suffstat_batch_size'],
@@ -785,7 +785,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
             bart['min_points_per_leaf'],
             *item,
         )
-        return resid, (trees, aux_trees, counts)
+        return resid, (leaf_tree, split_tree, count_half_tree, counts)
         
     key, subkey = random.split(key)
     u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
@@ -800,15 +800,15 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         z,
     )
     
-    resid, (trees, aux_trees, counts) = lax.scan(loop, bart['resid'], items)
+    resid, (leaf_trees, split_trees, count_half_trees, counts) = lax.scan(loop, bart['resid'], items)
     
     bart['resid'] = resid
-    bart.update(trees)
+    bart['leaf_trees'] = leaf_trees
+    bart['split_trees'] = split_trees
+    if bart['opt']['require_min_points']:
+        bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
-    if bart['opt']['require_min_points']:
-        tree_halfsize = bart['split_trees'].shape[1]
-        bart['affluence_trees'] = aux_trees['count_trees'][:, :tree_halfsize] >= 2 * bart['min_points_per_leaf']
     
     return bart
 
@@ -953,15 +953,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
     leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
     resid -= leaf_tree[leaf_indices]
-
-    # pack trees
-    trees = {
-        'leaf_trees': leaf_tree,
-        'split_trees': split_tree,
-    }
-    aux_trees = dict(
-        count_trees=count_tree,
-    )
     
     # pack proposal and acceptance indicators
     counts = dict(
@@ -971,7 +962,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         prune_acc_count=do_prune,
     )
 
-    return resid, trees, aux_trees, counts
+    return resid, leaf_tree, split_tree, count_tree[:split_tree.size], counts
 
 def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
     """
