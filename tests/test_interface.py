@@ -266,3 +266,5 @@ def test_jit(X, y, key, kw):
 # - test 0 burnin & ndpost because they are special-cased
 # - parametrize the comparison with the R package
 #    - maxdepth 8 and 9 (more likely to see problems at the boundary)
+#    - numcut = 1
+#    - p = 1
