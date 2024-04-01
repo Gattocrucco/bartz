@@ -936,10 +936,9 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
 
     # compute leaves posterior and sample leaves
-    inv_sigma2 = lax.reciprocal(sigma2)
-    prec_lk = count_tree * inv_sigma2
+    prec_lk = count_tree / sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
-    mean_post = resid_tree * inv_sigma2 * var_post # = mean_lk * prec_lk * var_post
+    mean_post = resid_tree / sigma2 * var_post # = mean_lk * prec_lk * var_post
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
     # add new tree to function
