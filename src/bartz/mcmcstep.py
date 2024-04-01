@@ -827,15 +827,14 @@ def traverse_trees(X, grow_moves, prune_moves):
     # compute leaf indices in initial tree
     grow_node = grow_moves['node'][:, None]
     grow_left = grow_node << 1
-    grow_right = grow_left + 1
-    cond = (grow_leaf_indices == grow_left) | (grow_leaf_indices == grow_right)
+    mask = ~jnp.array(1, grow_node.dtype)
+    cond = (grow_leaf_indices & mask) == grow_left
     leaf_indices = jnp.where(cond, grow_node, grow_leaf_indices)
 
     # compute leaf indices in prune tree
     prune_node = prune_moves['node'][:, None]
     prune_left = prune_node << 1
-    prune_right = prune_left + 1
-    cond = (leaf_indices == prune_left) | (leaf_indices == prune_right)
+    cond = (leaf_indices & mask) == prune_left
     prune_leaf_indices = jnp.where(cond, prune_node, leaf_indices)
 
     return leaf_indices, grow_leaf_indices, prune_leaf_indices
