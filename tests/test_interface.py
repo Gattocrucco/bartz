@@ -264,3 +264,5 @@ def test_jit(X, y, key, kw):
 #    - acc <= prop (per category)
 #    - prop_total <= ntree
 # - test 0 burnin & ndpost because they are special-cased
+# - parametrize the comparison with the R package
+#    - maxdepth 8 and 9 (more likely to see problems at the boundary)

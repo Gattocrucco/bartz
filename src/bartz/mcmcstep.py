@@ -326,7 +326,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
 
     key, key1, key2 = random.split(key, 3)
     
-    leaf_to_grow, num_growable, num_prunable, allowed = choose_leaf(split_tree, affluence_tree, key)
+    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, affluence_tree, key)
 
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
@@ -337,7 +337,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
 
     return dict(
-        allowed=allowed,
+        num_growable=num_growable,
         node=leaf_to_grow,
         partial_ratio=ratio,
         var_tree=var_tree,
@@ -370,13 +370,13 @@ def choose_leaf(split_tree, affluence_tree, key):
     allowed : bool
         Whether the grow move is allowed.
     """
-    is_growable, allowed = growable_leaves(split_tree, affluence_tree)
-    leaf_to_grow = randint_masked(key, is_growable)
-    leaf_to_grow = jnp.where(allowed, leaf_to_grow, 2 * split_tree.size)
+    is_growable = growable_leaves(split_tree, affluence_tree)
     num_growable = jnp.count_nonzero(is_growable)
+    leaf_to_grow = randint_masked(key, is_growable)
+    leaf_to_grow = jnp.where(num_growable > 0, leaf_to_grow, 2 * split_tree.size)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
-    return leaf_to_grow, num_growable, num_prunable, allowed
+    return leaf_to_grow, num_growable, num_prunable
 
 def growable_leaves(split_tree, affluence_tree):
     """
@@ -395,13 +395,11 @@ def growable_leaves(split_tree, affluence_tree):
         The mask indicating the leaf nodes that can be proposed to grow, i.e.,
         that are not at the bottom level and have at least two times the number
         of minimum points per leaf.
-    allowed : bool
-        Whether the grow move is allowed, i.e., there are growable leaves.
     """
     is_growable = grove.is_actual_leaf(split_tree)
     if affluence_tree is not None:
         is_growable &= affluence_tree
-    return is_growable, jnp.any(is_growable)
+    return is_growable
 
 def randint_masked(key, mask):
     """
@@ -731,7 +729,7 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
         None if affluence_tree is None else
         affluence_tree.at[node_to_prune].set(True)
     )
-    is_growable_leaf, _ = growable_leaves(pruned_split_tree, pruned_affluence_tree)
+    is_growable_leaf = growable_leaves(pruned_split_tree, pruned_affluence_tree)
     num_growable = jnp.count_nonzero(is_growable_leaf)
 
     return node_to_prune, num_prunable, num_growable
@@ -795,8 +793,6 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
 
     items = (
         bart['leaf_trees'],
-        bart['split_trees'],
-        bart['affluence_trees'],
         grow_moves,
         prune_moves,
         *indices,
@@ -811,9 +807,10 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
     if bart['opt']['require_min_points']:
+        tree_halfsize = bart['split_trees'].shape[1]
         bart['affluence_trees'] = jnp.where(
             counts['grow_acc_count'][:, None],
-            aux_trees['grow_affluence_trees'],
+            aux_trees['grow_count_trees'][:, :tree_halfsize] >= 2 * bart['min_points_per_leaf'],
             bart['affluence_trees'],
         )
     
@@ -839,7 +836,7 @@ def traverse_trees(X, grow_moves, prune_moves):
 
     return leaf_indices, grow_leaf_indices, prune_leaf_indices
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, leaf_indices, grow_leaf_indices, prune_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, grow_move, prune_move, leaf_indices, grow_leaf_indices, prune_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -861,10 +858,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The acceptance counts from the mcmc state dict.
     leaf_tree : float array (2 ** d,)
         The leaf values of the tree.
-    split_tree : int array (2 ** (d - 1),)
-        The decision boundaries of the tree.
-    affluence_tree : bool array (2 ** (d - 1),) or None
-        Whether a leaf has enough points to be grown.
     grow_move : dict
         The proposal for the grow move. See `grow_move`.
     prune_move : dict
@@ -895,8 +888,10 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     grow_right = grow_left + 1
     resid_tree = (grow_resid_tree.at[grow_node]
         .set(grow_resid_tree[grow_left] + grow_resid_tree[grow_right]))
+    grow_count_left = grow_count_tree[grow_left]
+    grow_count_right = grow_count_tree[grow_right]
     count_tree = (grow_count_tree.at[grow_node]
-        .set(grow_count_tree[grow_left] + grow_count_tree[grow_right]))
+        .set(grow_count_left + grow_count_right))
 
     # compute aggregations in prune tree
     prune_node = prune_move['node']
@@ -907,13 +902,8 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_count_tree = (count_tree.at[prune_node]
         .set(count_tree[prune_left] + count_tree[prune_right]))
 
-    # compute affluence trees
-    if min_points_per_leaf is not None:
-        grow_affluence_tree = grow_count_tree[:grow_count_tree.size // 2] >= 2 * min_points_per_leaf
-
     # compute probability of proposing prune
-    grow_p_prune = compute_p_prune_back(grow_move['split_tree'], grow_affluence_tree)
-    prune_p_prune = compute_p_prune_back(split_tree, affluence_tree)
+    grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
 
     # compute likelihood ratios
     grow_lk_ratio = compute_likelihood_ratio(grow_resid_tree, grow_count_tree, sigma2, grow_node, ntree, min_points_per_leaf)
@@ -925,7 +915,8 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_ratio = lax.reciprocal(prune_ratio)
 
     # determine what move to propose (not proposing anything is an option)
-    p_grow = jnp.where(grow_move['allowed'] & prune_move['allowed'], 0.5, grow_move['allowed'])
+    grow_allowed = grow_move['num_growable'].astype(bool)
+    p_grow = jnp.where(grow_allowed & prune_move['allowed'], 0.5, grow_allowed)
     try_grow = u[0] < p_grow # use < instead of <= because coins are in [0, 1)
     try_prune = prune_move['allowed'] & ~try_grow
 
@@ -934,7 +925,8 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     do_prune = try_prune & (u[1] < prune_ratio)
 
     # pick trees for chosen move
-    split_tree = jnp.where(do_grow, grow_move['split_tree'], split_tree)
+    split_tree = (grow_move['split_tree'].at[grow_node]
+        .set(jnp.where(do_grow, grow_move['split_tree'][grow_node], 0)))
     split_tree = split_tree.at[prune_node].set(
         jnp.where(do_prune, 0, split_tree[prune_node]))
     # the prune var tree is equal to the initial one, because I leave garbage values behind
@@ -944,9 +936,10 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
 
     # compute leaves posterior and sample leaves
-    prec_lk = count_tree / sigma2
+    inv_sigma2 = lax.reciprocal(sigma2)
+    prec_lk = count_tree * inv_sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
-    mean_post = resid_tree / sigma2 * var_post # = mean_lk * prec_lk * var_post
+    mean_post = resid_tree * inv_sigma2 * var_post # = mean_lk * prec_lk * var_post
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
     # add new tree to function
@@ -958,10 +951,9 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     trees = {
         'leaf_trees': leaf_tree,
         'split_trees': split_tree,
-        'affluence_trees': affluence_tree,
     }
     aux_trees = dict(
-        grow_affluence_trees=grow_affluence_tree,
+        grow_count_trees=grow_count_tree,
     )
     
     # pack proposal and acceptance indicators
@@ -1022,26 +1014,17 @@ def _aggregate_batched(values, indices, size, dtype, batch_size):
         .sum(axis=0)
     )
 
-def compute_p_prune_back(new_split_tree, new_affluence_tree):
-    """
-    Compute the probability of proposing a prune move after doing a grow move.
-
-    Parameters
-    ----------
-    new_split_tree : int array (2 ** (d - 1),)
-        The decision boundaries of the tree, after the grow move.
-    new_affluence_tree : bool array (2 ** (d - 1),)
-        Which leaves have enough points to be grown, after the grow move.
-
-    Returns
-    -------
-    p_prune : float
-        The probability of proposing a prune move after the grow move. This is
-        0.5 if grow is possible again, and 1 if it isn't. It can't be 0 because
-        at least the node just grown can be pruned.
-    """
-    _, grow_again_allowed = growable_leaves(new_split_tree, new_affluence_tree)
-    return jnp.where(grow_again_allowed, 0.5, 1)
+def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):
+    other_growable_leaves = grow_move['num_growable'] >= 2
+    new_leaves_growable = grow_move['node'] < grow_move['split_tree'].size // 2
+    if min_points_per_leaf is not None:
+        any_above_threshold = grow_left_count >= min_points_per_leaf
+        any_above_threshold |= grow_right_count >= min_points_per_leaf
+        new_leaves_growable &= any_above_threshold
+    grow_again_allowed = other_growable_leaves | new_leaves_growable
+    grow_p_prune = jnp.where(grow_again_allowed, 0.5, 1)
+    prune_p_prune = jnp.where(grow_move['num_growable'], 0.5, 1)
+    return grow_p_prune, prune_p_prune
 
 def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_points_per_leaf):
     """
