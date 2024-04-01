@@ -34,7 +34,6 @@ all:
 	@echo "- covreport: build html coverage report"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
-	@echo "- examples: run example scripts, saving figures"
 	@echo
 	@echo "Release instructions:"
 	@echo "- $$ poetry version <rule>"
@@ -55,7 +54,6 @@ src/bartz/_version.py: pyproject.toml
 
 PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
-EXAMPLESPY = COVERAGE_FILE=.coverage.examples$(COVERAGE_SUFFIX) $(PY) --context=examples$(COVERAGE_SUFFIX)
 
 .PHONY: tests
 tests: copy-version
@@ -63,12 +61,6 @@ tests: copy-version
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
-
-EXAMPLES = $(wildcard examples/*.py)
-EXAMPLES := $(filter-out examples/runexamples.py, $(EXAMPLES)) # runner script
-.PHONY: $(EXAMPLES)
-examples: $(EXAMPLES)
-	$(EXAMPLESPY) examples/runexamples.py $(EXAMPLES)
 
 .PHONY: readme
 readme: docs/README.md
