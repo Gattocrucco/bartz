@@ -772,7 +772,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         )
         # I can set to True the affluence of the node to prune irrespectively.
 
-    indices = traverse_trees(bart['X'], grow_moves, prune_moves)
+    grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
     def loop(resid, item):
         resid, leaf_tree, split_tree, count_half_tree, counts = accept_move_and_sample_leaves(
@@ -794,7 +794,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart['leaf_trees'],
         grow_moves,
         prune_moves,
-        *indices,
+        grow_leaf_indices,
         u,
         z,
     )
@@ -811,27 +811,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     
     return bart
 
-def traverse_trees(X, grow_moves, prune_moves):
-
-    # compute leaf indices in grow tree
-    grow_leaf_indices = grove.traverse_forest(X, grow_moves['var_tree'], grow_moves['split_tree'])
-
-    # compute leaf indices in initial tree
-    grow_node = grow_moves['node'][:, None]
-    grow_left = grow_node << 1
-    mask = ~jnp.array(1, grow_node.dtype)
-    cond = (grow_leaf_indices & mask) == grow_left
-    leaf_indices = jnp.where(cond, grow_node, grow_leaf_indices)
-
-    # compute leaf indices in prune tree
-    prune_node = prune_moves['node'][:, None]
-    prune_left = prune_node << 1
-    cond = (leaf_indices & mask) == prune_left
-    prune_leaf_indices = jnp.where(cond, prune_node, leaf_indices)
-
-    return leaf_indices, grow_leaf_indices, prune_leaf_indices
-
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, grow_move, prune_move, leaf_indices, grow_leaf_indices, prune_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, grow_move, prune_move, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -870,17 +850,25 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The updated tree arrays.
     """
     
-    # subtract starting tree from function
-    resid += leaf_tree[leaf_indices]
-
-    # sum residuals and count units per leaf, in tree proposed by grow move
-    resid_tree, count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
-
     # compute indices of grow move
     grow_node = grow_move['node']
     grow_left = grow_node << 1
     grow_right = grow_left + 1
     
+    # copy leaves around such that grow leaf indices work on the original tree
+    leaf_tree = (leaf_tree
+        .at[grow_left]
+        .set(leaf_tree[grow_node])
+        .at[grow_right]
+        .set(leaf_tree[grow_node])
+    )
+
+    # subtract starting tree from function
+    resid += leaf_tree[grow_leaf_indices]
+
+    # sum residuals and count units per leaf, in tree proposed by grow move
+    resid_tree, count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
+
     # sum residuals in leaf to grow
     grow_resid_left = resid_tree[grow_left]
     grow_resid_right = resid_tree[grow_right]
@@ -943,15 +931,28 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     # I can leave garbage in var_tree, resid_tree, count_tree
 
     # compute leaves posterior and sample leaves
-    prec_lk = count_tree / sigma2
+    inv_sigma2 = lax.reciprocal(sigma2)
+    prec_lk = count_tree * inv_sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
-    mean_post = resid_tree / sigma2 * var_post # = mean_lk * prec_lk * var_post
+    mean_post = resid_tree * inv_sigma2 * var_post # = mean_lk * prec_lk * var_post
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
+    # copy leaves around such that the grow leaf indices select the right leaf
+    leaf_tree = (leaf_tree
+        .at[prune_left]
+        .set(jnp.where(do_prune, leaf_tree[prune_node], leaf_tree[prune_left]))
+        .at[prune_right]
+        .set(jnp.where(do_prune, leaf_tree[prune_node], leaf_tree[prune_right]))
+    )
+    leaf_tree = (leaf_tree
+        .at[grow_left]
+        .set(jnp.where(do_grow, leaf_tree[grow_left], leaf_tree[grow_node]))
+        .at[grow_right]
+        .set(jnp.where(do_grow, leaf_tree[grow_right], leaf_tree[grow_node]))
+    )
+
     # add new tree to function
-    leaf_indices = jnp.where(do_grow, grow_leaf_indices, leaf_indices)
-    leaf_indices = jnp.where(do_prune, prune_leaf_indices, leaf_indices)
-    resid -= leaf_tree[leaf_indices]
+    resid -= leaf_tree[grow_leaf_indices]
 
     # pack proposal and acceptance indicators
     counts = dict(
