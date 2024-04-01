@@ -793,8 +793,8 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         grow_moves,
         prune_moves,
         grow_leaf_indices,
+        random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float']),
         random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float']),
-        random.split(key, len(bart['leaf_trees'])),
     )
     
     carry, trees = lax.scan(loop, carry, items)
@@ -803,7 +803,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, z, key):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -835,8 +835,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The proposal for the prune move. See `prune_move`.
     grow_leaf_indices : int array (n,)
         The leaf indices of the tree proposed by the grow move.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -905,17 +903,14 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_ratio = prune_p_prune * prune_move['partial_ratio'] * prune_lk_ratio
     prune_ratio = lax.reciprocal(prune_ratio)
 
-    # random coins in [0, 1) for proposal and acceptance
-    u0, u1 = random.uniform(key, (2,))
-
     # determine what move to propose (not proposing anything is an option)
     p_grow = jnp.where(grow_move['allowed'] & prune_move['allowed'], 0.5, grow_move['allowed'])
-    try_grow = u0 < p_grow
+    try_grow = u[0] < p_grow # use < instead of <= because coins are in [0, 1)
     try_prune = prune_move['allowed'] & ~try_grow
 
     # determine whether to accept the move
-    do_grow = try_grow & (u1 < grow_ratio)
-    do_prune = try_prune & (u1 < prune_ratio)
+    do_grow = try_grow & (u[1] < grow_ratio)
+    do_prune = try_prune & (u[1] < prune_ratio)
 
     # pick trees for chosen move
     trees = {}
