@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -204,10 +204,10 @@ def _choose_suffstat_batch_size(size, y):
                        # 512 is good on T4, and V100 at low n
         else:
             raise KeyError(f'Unknown platform: {platform}')
-    
+
     elif size is not None:
         return int(size)
-    
+
     return size
 
 def step(bart, key):
@@ -325,12 +325,12 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     """
 
     key, key1, key2 = random.split(key, 3)
-    
+
     leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, affluence_tree, key)
 
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
-    
+
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
     split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
@@ -473,7 +473,7 @@ def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
         filled with `p`. The fill values are not guaranteed to be placed in any
         particular order. Variables may appear more than once.
     """
-    
+
     var_to_ignore = ancestor_variables(var_tree, max_split, leaf_index)
     split_range_vec = jax.vmap(split_range, in_axes=(None, None, None, None, 0))
     l, r = split_range_vec(var_tree, split_tree, max_split, leaf_index, var_to_ignore)
@@ -756,7 +756,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         The new BART mcmc state.
     """
     bart = bart.copy()
-    
+
     bart['var_trees'] = grow_moves['var_tree']
         # Since var_tree can contain garbage, I can set the var of leaf to be
         # grown irrespectively of what move I'm gonna accept in the end.
@@ -785,7 +785,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
             *item,
         )
         return resid, (leaf_tree, split_tree, count_half_tree, counts)
-        
+
     key, subkey = random.split(key)
     u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
     z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
@@ -798,9 +798,9 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         u,
         z,
     )
-    
+
     resid, (leaf_trees, split_trees, count_half_trees, counts) = lax.scan(loop, bart['resid'], items)
-    
+
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
     bart['split_trees'] = split_trees
@@ -808,7 +808,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
-    
+
     return bart
 
 def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, grow_move, prune_move, grow_leaf_indices, u, z):
@@ -849,12 +849,12 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     trees : dict
         The updated tree arrays.
     """
-    
+
     # compute indices of grow move
     grow_node = grow_move['node']
     grow_left = grow_node << 1
     grow_right = grow_left + 1
-    
+
     # copy leaves around such that grow leaf indices work on the original tree
     leaf_tree = (leaf_tree
         .at[grow_left]
@@ -874,7 +874,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     grow_resid_right = resid_tree[grow_right]
     grow_resid_total = grow_resid_left + grow_resid_right
     resid_tree = resid_tree.at[grow_node].set(grow_resid_total)
-    
+
     # count datapoints in leaf to grow
     grow_count_left = count_tree[grow_left]
     grow_count_right = count_tree[grow_right]
@@ -891,7 +891,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_resid_right = resid_tree[prune_right]
     prune_resid_total = prune_resid_left + prune_resid_right
     resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
-    
+
     # count datapoints in node to prune
     prune_count_left = count_tree[prune_left]
     prune_count_right = count_tree[prune_right]
@@ -924,10 +924,9 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     do_prune = try_prune & (u[1] < prune_ratio)
 
     # pick split tree for chosen move
-    split_tree = (grow_move['split_tree'].at[grow_node]
-        .set(jnp.where(do_grow, grow_move['split_tree'][grow_node], 0)))
-    split_tree = split_tree.at[prune_node].set(
-        jnp.where(do_prune, 0, split_tree[prune_node]))
+    split_tree = grow_move['split_tree']
+    split_tree = split_tree.at[jnp.where(do_grow, split_tree.size, grow_node)].set(0)
+    split_tree = split_tree.at[jnp.where(do_prune, prune_node, split_tree.size)].set(0)
     # I can leave garbage in var_tree, resid_tree, count_tree
 
     # compute leaves posterior and sample leaves
@@ -939,16 +938,16 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
 
     # copy leaves around such that the grow leaf indices select the right leaf
     leaf_tree = (leaf_tree
-        .at[prune_left]
-        .set(jnp.where(do_prune, leaf_tree[prune_node], leaf_tree[prune_left]))
-        .at[prune_right]
-        .set(jnp.where(do_prune, leaf_tree[prune_node], leaf_tree[prune_right]))
+        .at[jnp.where(do_prune, prune_left, leaf_tree.size)]
+        .set(leaf_tree[prune_node])
+        .at[jnp.where(do_prune, prune_right, leaf_tree.size)]
+        .set(leaf_tree[prune_node])
     )
     leaf_tree = (leaf_tree
-        .at[grow_left]
-        .set(jnp.where(do_grow, leaf_tree[grow_left], leaf_tree[grow_node]))
-        .at[grow_right]
-        .set(jnp.where(do_grow, leaf_tree[grow_right], leaf_tree[grow_node]))
+        .at[jnp.where(do_grow, leaf_tree.size, grow_left)]
+        .set(leaf_tree[grow_node])
+        .at[jnp.where(do_grow, leaf_tree.size, grow_right)]
+        .set(leaf_tree[grow_node])
     )
 
     # add new tree to function
