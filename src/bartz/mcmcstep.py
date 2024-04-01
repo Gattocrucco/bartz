@@ -905,12 +905,10 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_resid_left = resid_tree[prune_left]
     prune_resid_right = resid_tree[prune_right]
     prune_resid_total = prune_resid_left + prune_resid_right
-    prune_resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
     
     prune_count_left = count_tree[prune_left]
     prune_count_right = count_tree[prune_right]
     prune_count_total = prune_count_left + prune_count_right
-    prune_count_tree = count_tree.at[prune_node].set(prune_count_total)
 
     # compute probability of proposing prune
     grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
@@ -944,9 +942,11 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         jnp.where(do_prune, 0, split_tree[prune_node]))
     # the prune var tree is equal to the initial one, because I leave garbage values behind
     resid_tree = jnp.where(do_grow, grow_resid_tree, resid_tree)
-    resid_tree = jnp.where(do_prune, prune_resid_tree, resid_tree)
+    resid_tree = resid_tree.at[prune_node].set(
+        jnp.where(do_prune, prune_resid_total, 0))
     count_tree = jnp.where(do_grow, grow_count_tree, count_tree)
-    count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
+    count_tree = count_tree.at[prune_node].set(
+        jnp.where(do_prune, prune_count_total, 0))
 
     # compute leaves posterior and sample leaves
     prec_lk = count_tree / sigma2
