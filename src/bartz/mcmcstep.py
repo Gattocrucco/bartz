@@ -763,6 +763,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         The new BART mcmc state.
     """
     bart = bart.copy()
+    
     def loop(carry, item):
         resid = carry.pop('resid')
         resid, carry, trees = accept_move_and_sample_leaves(
@@ -777,11 +778,14 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         )
         carry['resid'] = resid
         return carry, trees
+    
     carry = {
         k: jnp.zeros_like(bart[k]) for k in
         ['grow_prop_count', 'prune_prop_count', 'grow_acc_count', 'prune_acc_count']
     }
     carry['resid'] = bart['resid']
+    
+    key, subkey = random.split(key)
     items = (
         bart['leaf_trees'],
         bart['split_trees'],
@@ -789,14 +793,17 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         grow_moves,
         prune_moves,
         grow_leaf_indices,
+        random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float']),
         random.split(key, len(bart['leaf_trees'])),
     )
+    
     carry, trees = lax.scan(loop, carry, items)
     bart.update(carry)
     bart.update(trees)
+    
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, key):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, z, key):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -899,8 +906,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_ratio = lax.reciprocal(prune_ratio)
 
     # random coins in [0, 1) for proposal and acceptance
-    key, subkey = random.split(key)
-    u0, u1 = random.uniform(subkey, (2,))
+    u0, u1 = random.uniform(key, (2,))
 
     # determine what move to propose (not proposing anything is an option)
     p_grow = jnp.where(grow_move['allowed'] & prune_move['allowed'], 0.5, grow_move['allowed'])
@@ -932,13 +938,10 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     counts['prune_prop_count'] += try_prune
     counts['prune_acc_count'] += do_prune
 
-    # compute leaves posterior
+    # compute leaves posterior and sample leaves
     prec_lk = count_tree / sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
     mean_post = resid_tree / sigma2 * var_post # = mean_lk * prec_lk * var_post
-
-    # sample leaves
-    z = random.normal(key, mean_post.shape, mean_post.dtype)
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
     # add new tree to function
