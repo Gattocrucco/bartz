@@ -886,31 +886,44 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     grow_node = grow_move['node']
     grow_left = grow_node << 1
     grow_right = grow_left + 1
-    resid_tree = (grow_resid_tree.at[grow_node]
-        .set(grow_resid_tree[grow_left] + grow_resid_tree[grow_right]))
+    
+    grow_resid_left = grow_resid_tree[grow_left]
+    grow_resid_right = grow_resid_tree[grow_right]
+    grow_resid_total = grow_resid_left + grow_resid_right
+    resid_tree = grow_resid_tree.at[grow_node].set(grow_resid_total)
+    
     grow_count_left = grow_count_tree[grow_left]
     grow_count_right = grow_count_tree[grow_right]
-    count_tree = (grow_count_tree.at[grow_node]
-        .set(grow_count_left + grow_count_right))
+    grow_count_total = grow_count_left + grow_count_right
+    count_tree = grow_count_tree.at[grow_node].set(grow_count_total)
 
     # compute aggregations in prune tree
     prune_node = prune_move['node']
     prune_left = prune_node << 1
     prune_right = prune_left + 1
-    prune_resid_tree = (resid_tree.at[prune_node]
-        .set(resid_tree[prune_left] + resid_tree[prune_right]))
-    prune_count_tree = (count_tree.at[prune_node]
-        .set(count_tree[prune_left] + count_tree[prune_right]))
+
+    prune_resid_left = resid_tree[prune_left]
+    prune_resid_right = resid_tree[prune_right]
+    prune_resid_total = prune_resid_left + prune_resid_right
+    prune_resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
+    
+    prune_count_left = count_tree[prune_left]
+    prune_count_right = count_tree[prune_right]
+    prune_count_total = prune_count_left + prune_count_right
+    prune_count_tree = count_tree.at[prune_node].set(prune_count_total)
 
     # compute probability of proposing prune
     grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
 
     # compute likelihood ratios
-    grow_lk_ratio = compute_likelihood_ratio(grow_resid_tree, grow_count_tree, sigma2, grow_node, ntree, min_points_per_leaf)
-    prune_lk_ratio = compute_likelihood_ratio(resid_tree, count_tree, sigma2, prune_node, ntree, min_points_per_leaf)
+    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, grow_count_total, grow_count_left, grow_count_right, sigma2, ntree)
+    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prune_count_total, prune_count_left, prune_count_right, sigma2, ntree)
 
     # compute acceptance ratios
     grow_ratio = grow_p_prune * grow_move['partial_ratio'] * grow_lk_ratio
+    if min_points_per_leaf is not None:
+        grow_ratio = jnp.where(grow_count_left >= min_points_per_leaf, grow_ratio, 0)
+        grow_ratio = jnp.where(grow_count_right >= min_points_per_leaf, grow_ratio, 0)
     prune_ratio = prune_p_prune * prune_move['partial_ratio'] * prune_lk_ratio
     prune_ratio = lax.reciprocal(prune_ratio)
 
@@ -1025,7 +1038,7 @@ def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per
     prune_p_prune = jnp.where(grow_move['num_growable'], 0.5, 1)
     return grow_p_prune, prune_p_prune
 
-def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_points_per_leaf):
+def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, left_count, right_count, sigma2, n_tree):
     """
     Compute the likelihood ratio of a grow move.
 
@@ -1056,17 +1069,6 @@ def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_p
     likelihood.
     """
 
-    left_child = node << 1
-    right_child = left_child + 1
-
-    left_resid = resid_tree[left_child]
-    right_resid = resid_tree[right_child]
-    total_resid = left_resid + right_resid
-
-    left_count = count_tree[left_child]
-    right_count = count_tree[right_child]
-    total_count = left_count + right_count
-
     sigma_mu2 = 1 / n_tree
     sigma2_left = sigma2 + left_count * sigma_mu2
     sigma2_right = sigma2 + right_count * sigma_mu2
@@ -1080,13 +1082,7 @@ def compute_likelihood_ratio(resid_tree, count_tree, sigma2, node, n_tree, min_p
         total_resid * total_resid / sigma2_total
     )
 
-    ratio = jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
-
-    if min_points_per_leaf is not None:
-        ratio = jnp.where(right_count >= min_points_per_leaf, ratio, 0)
-        ratio = jnp.where(left_count >= min_points_per_leaf, ratio, 0)
-
-    return ratio
+    return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
 
 def sample_sigma(bart, key):
     """
