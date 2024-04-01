@@ -764,27 +764,18 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
     """
     bart = bart.copy()
     
-    def loop(carry, item):
-        resid = carry.pop('resid')
-        resid, carry, trees = accept_move_and_sample_leaves(
+    def loop(resid, item):
+        resid, trees, counts = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['suffstat_batch_size'],
             resid,
             bart['sigma2'],
             bart['min_points_per_leaf'],
-            carry,
             *item,
         )
-        carry['resid'] = resid
-        return carry, trees
-    
-    carry = {
-        k: jnp.zeros_like(bart[k]) for k in
-        ['grow_prop_count', 'prune_prop_count', 'grow_acc_count', 'prune_acc_count']
-    }
-    carry['resid'] = bart['resid']
-    
+        return resid, (trees, counts)
+        
     key, subkey = random.split(key)
     items = (
         bart['leaf_trees'],
@@ -797,13 +788,16 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, grow_leaf_indi
         random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float']),
     )
     
-    carry, trees = lax.scan(loop, carry, items)
-    bart.update(carry)
+    resid, (trees, counts) = lax.scan(loop, bart['resid'], items)
+    
+    bart['resid'] = resid
     bart.update(trees)
+    for k, v in counts.items():
+        bart[k] = jnp.sum(v, axis=0)
     
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, counts, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, split_tree, affluence_tree, grow_move, prune_move, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -926,13 +920,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     resid_tree = jnp.where(do_prune, prune_resid_tree, resid_tree)
     count_tree = jnp.where(do_prune, prune_count_tree, count_tree)
 
-    # update acceptance counts
-    counts = counts.copy()
-    counts['grow_prop_count'] += try_grow
-    counts['grow_acc_count'] += do_grow
-    counts['prune_prop_count'] += try_prune
-    counts['prune_acc_count'] += do_prune
-
     # compute leaves posterior and sample leaves
     prec_lk = count_tree / sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
@@ -951,7 +938,15 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         'affluence_trees': affluence_tree,
     }
 
-    return resid, counts, trees
+    # pack proposal and acceptance indicators
+    counts = dict(
+        grow_prop_count=try_grow,
+        grow_acc_count=do_grow,
+        prune_prop_count=try_prune,
+        prune_acc_count=do_prune,
+    )
+
+    return resid, trees, counts
 
 def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
     """
