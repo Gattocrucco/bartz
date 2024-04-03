@@ -764,17 +764,6 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart['var_trees'] = grow_moves['var_tree']
         # Since var_tree can contain garbage, I can set the var of leaf to be
         # grown irrespectively of what move I'm gonna accept in the end.
-    if bart['opt']['require_min_points']:
-        tree_indices = jnp.arange(
-            len(bart['leaf_trees']),
-            dtype=jaxext.minimal_unsigned_dtype(len(bart['leaf_trees']) - 1),
-        )
-        bart['affluence_trees'] = (
-            bart['affluence_trees']
-            .at[tree_indices, prune_moves['node']]
-            .set(True)
-        )
-        # I can set to True the affluence of the node to prune irrespectively.
 
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
@@ -907,6 +896,9 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_count_right = count_tree[prune_right]
     prune_count_total = prune_count_left + prune_count_right
     count_tree = count_tree.at[prune_node].set(prune_count_total)
+
+    # Now resid_tree and count_tree contain correct values whatever move is
+    # accepted.
 
     # compute probability of proposing prune
     grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
