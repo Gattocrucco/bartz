@@ -268,3 +268,10 @@ def test_jit(X, y, key, kw):
 #    - maxdepth 8 and 9 (more likely to see problems at the boundary)
 #    - numcut = 1
 #    - p = 1
+# - some test with min leaves None
+# - prior sampling tests, run with no data
+#    - p(nonterminal|depth) matches the distribution in the chain
+#         - I need an effective sample size to tune the test
+#         - use variables with many splits to avoid problems with disallowed variables
+# - diff trees
+#    - at each iteration, the trees differ at most in two split nodes

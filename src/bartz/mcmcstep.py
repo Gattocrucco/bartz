@@ -310,10 +310,11 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     grow_move : dict
         A dictionary with fields:
 
-        'allowed' : bool
-            Whether the move is possible.
+        'num_growable' : int
+            The number of growable leaves.
         'node' : int
-            The index of the leaf to grow.
+            The index of the leaf to grow. ``2 ** d`` if there are no growable
+            leaves.
         'var_tree' : array (2 ** (d - 1),)
             The new decision axes of the tree.
         'split_tree' : array (2 ** (d - 1),)
@@ -634,6 +635,9 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
     # the two ratios also contain factors num_available_split *
     # num_available_var, but they cancel out
 
+    # p_prune can't be computed here because it needs the new affluence trees,
+    # which are computed in the acceptance phase
+
     prune_allowed = leaf_to_grow != 1
         # prune allowed  <--->  the initial tree is not a root
         # leaf to grow is root  -->  the tree can only be a root
@@ -656,15 +660,15 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
 
     Parameters
     ----------
-    var_tree : array (2 ** (d - 1),)
+    var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
-    split_tree : array (2 ** (d - 1),)
+    split_tree : int array (2 ** (d - 1),)
         The splitting points of the tree.
     affluence_tree : bool array (2 ** (d - 1),) or None
         Whether a leaf has enough points to be grown.
-    max_split : array (p,)
+    max_split : int array (p,)
         The maximum split index for each variable.
-    p_nonterminal : array (d,)
+    p_nonterminal : float array (d,)
         The probability of a nonterminal node at each depth.
     key : jax.dtypes.prng_key array
         A jax random key.
@@ -677,7 +681,7 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
         'allowed' : bool
             Whether the move is possible.
         'node' : int
-            The index of the node to prune.
+            The index of the node to prune. ``2 ** d`` if no node can be pruned.
         'partial_ratio' : float
             A factor of the Metropolis-Hastings ratio of the move. It lacks
             the likelihood ratio and the probability of proposing the prune
@@ -829,8 +833,6 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The noise variance.
     min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
-    counts : dict
-        The acceptance counts from the mcmc state dict.
     leaf_tree : float array (2 ** d,)
         The leaf values of the tree.
     grow_move : dict
@@ -839,15 +841,23 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The proposal for the prune move. See `prune_move`.
     grow_leaf_indices : int array (n,)
         The leaf indices of the tree proposed by the grow move.
+    u : float array (2,)
+        Two uniform random values in [0, 1).
+    z : float array (2 ** d,)
+        Standard normal random values.
 
     Returns
     -------
     resid : float array (n,)
         The updated residuals (data minus forest value).
+    leaf_tree : float array (2 ** d,)
+        The new leaf values of the tree.
+    split_tree : int array (2 ** (d - 1),)
+        The updated decision boundaries of the tree.
+    count_half_tree : int array (2 ** (d - 1),)
+        The number of data points in each leaf node.
     counts : dict
-        The updated acceptance counts.
-    trees : dict
-        The updated tree arrays.
+        The indicators of proposals and acceptances for grow and prune moves.
     """
 
     # compute indices of grow move
@@ -992,6 +1002,7 @@ def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
         aggr_func = functools.partial(_aggregate_batched, batch_size=batch_size)
     resid_tree = aggr_func(resid, leaf_indices, tree_size, jnp.float32)
     count_tree = aggr_func(1, leaf_indices, tree_size, jnp.uint32)
+        # uint16 is super-slow on gpu, don't use it even if n < 2^16
     return resid_tree, count_tree
 
 def _aggregate_scatter(values, indices, size, dtype):
@@ -1029,29 +1040,23 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, 
 
     Parameters
     ----------
-    resid_tree : float array (2 ** d,)
-        The sum of the residuals at data points in each leaf.
-    count_tree : int array (2 ** d,)
-        The number of data points in each leaf.
+    total_resid : float
+        The sum of the residuals in the leaf to grow.
+    left_resid, right_resid : float
+        The sum of the residuals in the left/right child of the leaf to grow.
+    total_count : int
+        The number of datapoints in the leaf to grow.
+    left_count, right_count : int
+        The number of datapoints in the left/right child of the leaf to grow.
     sigma2 : float
         The noise variance.
-    node : int
-        The index of the leaf that has been grown.
     n_tree : int
         The number of trees in the forest.
-    min_points_per_leaf : int or None
-        The minimum number of data points in a leaf node.
 
     Returns
     -------
     ratio : float
         The likelihood ratio P(data | new tree) / P(data | old tree).
-
-    Notes
-    -----
-    The ratio is set to 0 if the grow move would create leaves with not enough
-    datapoints per leaf, although this is part of the prior rather than the
-    likelihood.
     """
 
     sigma_mu2 = 1 / n_tree
