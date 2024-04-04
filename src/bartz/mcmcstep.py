@@ -55,6 +55,7 @@ def init(*,
     large_float=jnp.float32,
     min_points_per_leaf=None,
     suffstat_batch_size='auto',
+    save_ratios=False,
     ):
     """
     Make a BART posterior sampling MCMC initial state.
@@ -184,6 +185,18 @@ def init(*,
             require_min_points=min_points_per_leaf is not None,
         ),
     )
+    
+    if save_ratios:
+        bart['ratios'] = dict(
+            grow=dict(
+                trans_prior=jnp.full(num_trees, jnp.nan),
+                likelihood=jnp.full(num_trees, jnp.nan),
+            ),
+            prune=dict(
+                trans_prior=jnp.full(num_trees, jnp.nan),
+                likelihood=jnp.full(num_trees, jnp.nan),
+            ),
+        )
 
     return bart
 
@@ -768,16 +781,17 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
     def loop(resid, item):
-        resid, leaf_tree, split_tree, count_half_tree, counts = accept_move_and_sample_leaves(
+        resid, leaf_tree, split_tree, count_half_tree, counts, ratios = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['suffstat_batch_size'],
             resid,
             bart['sigma2'],
             bart['min_points_per_leaf'],
+            'ratios' in bart,
             *item,
         )
-        return resid, (leaf_tree, split_tree, count_half_tree, counts)
+        return resid, (leaf_tree, split_tree, count_half_tree, counts, ratios)
 
     key, subkey = random.split(key)
     u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
@@ -792,7 +806,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         z,
     )
 
-    resid, (leaf_trees, split_trees, count_half_trees, counts) = lax.scan(loop, bart['resid'], items)
+    resid, (leaf_trees, split_trees, count_half_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
@@ -801,10 +815,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
+    bart['ratios'].update(ratios)
 
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, leaf_tree, grow_move, prune_move, grow_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, grow_move, prune_move, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -851,6 +866,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
 
     # compute indices of grow move
     grow_node = grow_move['node']
+    assert grow_node.dtype == jnp.int32
     grow_left = grow_node << 1
     grow_right = grow_left + 1
 
@@ -882,6 +898,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
 
     # compute indices of prune move
     prune_node = prune_move['node']
+    assert prune_node.dtype == jnp.int32
     prune_left = prune_node << 1
     prune_right = prune_left + 1
 
@@ -908,12 +925,28 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prune_count_total, prune_count_left, prune_count_right, sigma2, ntree)
 
     # compute acceptance ratios
-    grow_ratio = grow_p_prune * grow_move['partial_ratio'] * grow_lk_ratio
+    grow_trans_prior_ratio =grow_p_prune * grow_move['partial_ratio']
+    grow_ratio = grow_trans_prior_ratio * grow_lk_ratio
     if min_points_per_leaf is not None:
         grow_ratio = jnp.where(grow_count_left >= min_points_per_leaf, grow_ratio, 0)
         grow_ratio = jnp.where(grow_count_right >= min_points_per_leaf, grow_ratio, 0)
-    prune_ratio = prune_p_prune * prune_move['partial_ratio'] * prune_lk_ratio
+    prune_trans_prior_ratio = prune_p_prune * prune_move['partial_ratio']
+    prune_ratio = prune_trans_prior_ratio * prune_lk_ratio
     prune_ratio = lax.reciprocal(prune_ratio)
+
+    # save acceptance ratios
+    ratios = {}
+    if save_ratios:
+        ratios.update(
+            grow=dict(
+                trans_prior=grow_trans_prior_ratio,
+                likelihood=grow_lk_ratio,
+            ),
+            prune=dict(
+                trans_prior=lax.reciprocal(prune_trans_prior_ratio),
+                likelihood=lax.reciprocal(prune_lk_ratio),
+            ),
+        )
 
     # determine what move to propose (not proposing anything is an option)
     grow_allowed = grow_move['num_growable'].astype(bool)
@@ -963,7 +996,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         prune_acc_count=do_prune,
     )
 
-    return resid, leaf_tree, split_tree, count_tree[:split_tree.size], counts
+    return resid, leaf_tree, split_tree, count_tree[:split_tree.size], counts, ratios
 
 def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
     """

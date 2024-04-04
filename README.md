@@ -26,7 +26,8 @@ This Python module provides an implementation of BART that runs on GPU, to proce
 - [flexBART](https://github.com/skdeshpande91/flexBART) Fast R package, supports categorical predictors
 - [flexBCF](https://github.com/skdeshpande91/flexBCF) R package, version of bcf optimized for large datasets
 - [XBART](https://github.com/JingyuHe/XBART) R/Python package, XBART is a faster variant of BART
-- [BART](https://github.com/JingyuHe/BART)
+- [BART](https://github.com/JingyuHe/BART) R package, BART warm-started with XBART
+- [XBCF](https://github.com/socket778/XBCF)
 - [BayesTree](https://cran.r-project.org/package=BayesTree) R package, original BART implementation
 - [bartCause](https://github.com/vdorie/bartCause) R package, pre-made BART-based workflows for causal inference
 - [stan4bart](https://github.com/vdorie/stan4bart)
@@ -48,3 +49,4 @@ This Python module provides an implementation of BART that runs on GPU, to proce
 - [bartpy](https://github.com/JakeColtman/bartpy)
 - [BayesTreePrior](https://github.com/AlexiaJM/BayesTreePrior)
 - [BayesTree.jl](https://github.com/mathcg/BayesTree.jl)
+- [longbet](https://github.com/google/longbet)

@@ -164,6 +164,7 @@ class gbart:
         keepevery=1,
         printevery=100,
         seed=0,
+        initkw={},
         ):
 
         x_train, x_train_fmt = self._process_predictor_input(x_train)
@@ -181,7 +182,7 @@ class gbart:
         y_train = self._transform_input(y_train, offset, scale)
         lamda_scaled = lamda / (scale * scale)
 
-        mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree)
+        mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree, initkw)
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         sigma = self._extract_sigma(main_trace, scale)
@@ -317,12 +318,12 @@ class gbart:
         return (y - offset) / scale
 
     @staticmethod
-    def _setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree):
+    def _setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree, initkw):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
         sigma2_beta = lamda * sigma2_alpha
-        return mcmcstep.init(
+        kw = dict(
             X=x_train,
             y=y_train,
             max_split=max_split,
@@ -332,6 +333,8 @@ class gbart:
             sigma2_beta=sigma2_beta,
             min_points_per_leaf=5,
         )
+        kw.update(initkw)
+        return mcmcstep.init(**kw)
 
     @staticmethod
     def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed):

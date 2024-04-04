@@ -91,7 +91,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         the fields in `burnin_trace`.
     """
 
-    tracelist_burnin = 'sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count'
+    tracelist_burnin = 'sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count', 'ratios'
 
     tracelist_main = tracelist_burnin + ('leaf_trees', 'var_trees', 'split_trees')
 
@@ -102,14 +102,11 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         key, subkey = random.split(key)
         bart = mcmcstep.step(bart, subkey)
         callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw)
-        output = {key: bart[key] for key in tracelist}
+        output = {key: bart[key] for key in tracelist if key in bart}
         return (bart, i_total + 1, i_skip + 1, key), output
 
     def empty_trace(bart, tracelist):
-        return {
-            key: jnp.empty((0,) + bart[key].shape, bart[key].dtype)
-            for key in tracelist
-        }
+        return jax.vmap(lambda x: x, in_axes=None, out_axes=0, axis_size=0)(bart)
 
     if n_burn > 0:
         carry = bart, 0, 0, key
@@ -124,7 +121,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         main_loop = functools.partial(inner_loop, tracelist=[], burnin=False)
         inner_carry = bart, i_total, 0, key
         (bart, i_total, _, key), _ = lax.scan(main_loop, inner_carry, None, n_skip)
-        output = {key: bart[key] for key in tracelist_main}
+        output = {key: bart[key] for key in tracelist_main if key in bart}
         return (bart, i_total, key), output
 
     if n_save > 0:
