@@ -822,9 +822,16 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
     count_trees, move_counts = compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, bart['opt']['count_batch_size'])
+    
     if bart['opt']['require_min_points']:
         count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
+    
+    leaf_trees = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
+
+    key, subkey = random.split(key)
+    u = random.uniform(subkey, (len(leaf_trees), 2), bart['opt']['large_float'])
+    z = random.normal(key, leaf_trees.shape, bart['opt']['large_float'])
 
     def loop(resid, item):
         resid, leaf_tree, split_tree, counts, ratios = accept_move_and_sample_leaves(
@@ -839,19 +846,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         )
         return resid, (leaf_tree, split_tree, counts, ratios)
 
-    key, subkey = random.split(key)
-    u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
-    z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
-
     items = (
-        bart['leaf_trees'],
-        count_trees,
-        grow_moves,
-        prune_moves,
+        leaf_trees, count_trees,
+        grow_moves, prune_moves, move_counts,
         grow_leaf_indices,
-        move_counts,
-        u,
-        z,
+        u, z,
     )
 
     resid, (leaf_trees, split_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
@@ -865,7 +864,76 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
 
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, grow_leaf_indices, move_counts, u, z):
+def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
+    
+    ntree, tree_size = grow_moves['split_tree'].shape
+    tree_size *= 2
+    counts = dict(grow=dict(), prune=dict())
+    tree_indices = jnp.arange(ntree)
+
+    count_trees = count_datapoints_per_leaf(grow_leaf_indices, tree_size, batch_size)
+
+    # count datapoints in leaf to grow
+    counts['grow']['left'] = count_trees[tree_indices, grow_moves['left']]
+    counts['grow']['right'] = count_trees[tree_indices, grow_moves['right']]
+    counts['grow']['total'] = counts['grow']['left'] + counts['grow']['right']
+    count_trees = count_trees.at[tree_indices, grow_moves['node']].set(counts['grow']['total'])
+
+    # count datapoints in node to prune
+    counts['prune']['left'] = count_trees[tree_indices, prune_moves['left']]
+    counts['prune']['right'] = count_trees[tree_indices, prune_moves['right']]
+    counts['prune']['total'] = counts['prune']['left'] + counts['prune']['right']
+    count_trees = count_trees.at[tree_indices, prune_moves['node']].set(counts['prune']['total'])
+
+    return count_trees, counts
+
+def count_datapoints_per_leaf(leaf_indices, tree_size, batch_size):
+    if batch_size is None:
+        return _count_scan(leaf_indices, tree_size)
+    else:
+        return _count_vec(leaf_indices, tree_size, batch_size)
+
+def _count_scan(leaf_indices, tree_size):
+    def loop(_, leaf_indices):
+        return None, _aggregate_scatter(1, leaf_indices, tree_size, jnp.uint32)
+    _, count_trees = lax.scan(loop, None, leaf_indices)
+    return count_trees
+
+def _aggregate_scatter(values, indices, size, dtype):
+    return (jnp
+        .zeros(size, dtype)
+        .at[indices]
+        .add(values)
+    )
+
+def _count_vec(leaf_indices, tree_size, batch_size):
+    return _aggregate_batched_alltrees(1, leaf_indices, tree_size, jnp.uint32, batch_size)
+        # uint16 is super-slow on gpu, don't use it even if n < 2^16
+
+def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
+    ntree, n = indices.shape
+    tree_indices = jnp.arange(ntree)
+    nbatches = n // batch_size + bool(n % batch_size)
+    batch_indices = jnp.arange(n) % nbatches
+    return (jnp
+        .zeros((ntree, size, nbatches), dtype)
+        .at[tree_indices[:, None], indices, batch_indices]
+        .add(values)
+        .sum(axis=2)
+    )
+
+def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
+    ntree, _ = leaf_trees.shape
+    tree_indices = jnp.arange(ntree)
+    values_at_node = leaf_trees[tree_indices, grow_moves['node']]
+    return (leaf_trees
+        .at[tree_indices, grow_moves['left']]
+        .set(values_at_node)
+        .at[tree_indices, grow_moves['right']]
+        .set(values_at_node)
+    )
+
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -908,25 +976,17 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
         The indicators of proposals and acceptances for grow and prune moves.
     """
 
-    # get indices of grow move
-    grow_node = grow_move['node']
-    assert grow_node.dtype == jnp.int32
-    grow_left = grow_move['left']
-    grow_right = grow_move['right']
-
-    # copy leaves around such that grow leaf indices work on the original tree
-    leaf_tree = (leaf_tree
-        .at[grow_left]
-        .set(leaf_tree[grow_node])
-        .at[grow_right]
-        .set(leaf_tree[grow_node])
-    )
-
     # subtract starting tree from function
     resid += leaf_tree[grow_leaf_indices]
 
     # sum residuals and count units per leaf, in tree proposed by grow move
     resid_tree = sum_resid(resid, grow_leaf_indices, leaf_tree.size, resid_batch_size)
+
+    # get indices of grow move
+    grow_node = grow_move['node']
+    assert grow_node.dtype == jnp.int32
+    grow_left = grow_move['left']
+    grow_right = grow_move['right']
 
     # sum residuals in leaf to grow
     grow_resid_left = resid_tree[grow_left]
@@ -957,7 +1017,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, move_counts['prune']['total'], move_counts['prune']['left'], move_counts['prune']['right'], sigma2, ntree)
 
     # compute acceptance ratios
-    grow_trans_prior_ratio =grow_p_prune * grow_move['partial_ratio']
+    grow_trans_prior_ratio = grow_p_prune * grow_move['partial_ratio']
     grow_ratio = grow_trans_prior_ratio * grow_lk_ratio
     if min_points_per_leaf is not None:
         grow_ratio = jnp.where(move_counts['grow']['left'] >= min_points_per_leaf, grow_ratio, 0)
@@ -1059,13 +1119,6 @@ def sum_resid(resid, leaf_indices, tree_size, batch_size):
         aggr_func = functools.partial(_aggregate_batched_onetree, batch_size=batch_size)
     return aggr_func(resid, leaf_indices, tree_size, jnp.float32)
 
-def _aggregate_scatter(values, indices, size, dtype):
-    return (jnp
-        .zeros(size, dtype)
-        .at[indices]
-        .add(values)
-    )
-
 def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
     nbatches = indices.size // batch_size + bool(indices.size % batch_size)
     batch_indices = jnp.arange(indices.size) // batch_size
@@ -1074,57 +1127,6 @@ def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
         .at[batch_indices, indices]
         .add(values)
         .sum(axis=0)
-    )
-
-def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
-    
-    ntree, tree_size = grow_moves['split_tree'].shape
-    tree_size *= 2
-    counts = dict(grow=dict(), prune=dict())
-    tree_indices = jnp.arange(ntree)
-
-    count_trees = count_datapoints_per_leaf(grow_leaf_indices, tree_size, batch_size)
-
-    # count datapoints in leaf to grow
-    counts['grow']['left'] = count_trees[tree_indices, grow_moves['left']]
-    counts['grow']['right'] = count_trees[tree_indices, grow_moves['right']]
-    counts['grow']['total'] = counts['grow']['left'] + counts['grow']['right']
-    count_trees = count_trees.at[tree_indices, grow_moves['node']].set(counts['grow']['total'])
-
-    # count datapoints in node to prune
-    counts['prune']['left'] = count_trees[tree_indices, prune_moves['left']]
-    counts['prune']['right'] = count_trees[tree_indices, prune_moves['right']]
-    counts['prune']['total'] = counts['prune']['left'] + counts['prune']['right']
-    count_trees = count_trees.at[tree_indices, prune_moves['node']].set(counts['prune']['total'])
-
-    return count_trees, counts
-
-def count_datapoints_per_leaf(leaf_indices, tree_size, batch_size):
-    if batch_size is None:
-        return _count_scan(leaf_indices, tree_size)
-    else:
-        return _count_vec(leaf_indices, tree_size, batch_size)
-
-def _count_scan(leaf_indices, tree_size):
-    def loop(_, leaf_indices):
-        return None, _aggregate_scatter(1, leaf_indices, tree_size, jnp.uint32)
-    _, count_trees = lax.scan(loop, None, leaf_indices)
-    return count_trees
-
-def _count_vec(leaf_indices, tree_size, batch_size):
-    return _aggregate_batched_alltrees(1, leaf_indices, tree_size, jnp.uint32, batch_size)
-        # uint16 is super-slow on gpu, don't use it even if n < 2^16
-
-def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
-    ntree, n = indices.shape
-    tree_indices = jnp.arange(ntree)
-    nbatches = n // batch_size + bool(n % batch_size)
-    batch_indices = jnp.arange(n) % nbatches
-    return (jnp
-        .zeros((ntree, size, nbatches), dtype)
-        .at[tree_indices[:, None], indices, batch_indices]
-        .add(values)
-        .sum(axis=2)
     )
 
 def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):
