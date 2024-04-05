@@ -54,7 +54,8 @@ def init(*,
     small_float=jnp.float32,
     large_float=jnp.float32,
     min_points_per_leaf=None,
-    suffstat_batch_size='auto',
+    resid_batch_size='auto',
+    count_batch_size='auto',
     save_ratios=False,
     ):
     """
@@ -152,7 +153,7 @@ def init(*,
     small_float = jnp.dtype(small_float)
     large_float = jnp.dtype(large_float)
     y = jnp.asarray(y, small_float)
-    suffstat_batch_size = _choose_suffstat_batch_size(suffstat_batch_size, y)
+    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y)
 
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
@@ -180,10 +181,11 @@ def init(*,
             make_forest(max_depth - 1, bool).at[:, 1].set(y.size >= 2 * min_points_per_leaf)
         ),
         opt=jaxext.LeafDict(
-            suffstat_batch_size=suffstat_batch_size,
             small_float=small_float,
             large_float=large_float,
             require_min_points=min_points_per_leaf is not None,
+            resid_batch_size=resid_batch_size,
+            count_batch_size=count_batch_size,
         ),
     )
     
@@ -201,28 +203,37 @@ def init(*,
 
     return bart
 
-def _choose_suffstat_batch_size(size, y):
-    if size == 'auto':
+def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
+    
+    def get_platform():
         try:
             device = y.devices().pop()
         except jax.errors.ConcretizationTypeError:
             device = jax.devices()[0]
         platform = device.platform
-
-        if platform == 'cpu':
-            return None
-                # maybe I should batch residuals (not counts) for numerical
-                # accuracy, even if it's slower
-        elif platform == 'gpu':
-            return 128 # 128 is good on A100, and V100 at high n
-                       # 512 is good on T4, and V100 at low n
-        else:
+        if platform not in ('cpu', 'gpu'):
             raise KeyError(f'Unknown platform: {platform}')
+        return platform
 
-    elif size is not None:
-        return int(size)
+    if resid_batch_size == 'auto':
+        platform = get_platform()
+        if platform == 'cpu':
+            resid_batch_size = None
+        elif platform == 'gpu':
+            resid_batch_size = 128 # 128 is good on A100, and V100 at high n
+                                   # 512 is good on T4, and V100 at low n
 
-    return size
+    if count_batch_size == 'auto':
+        platform = get_platform()
+        if platform == 'cpu':
+            count_batch_size = None
+        elif platform == 'gpu':
+            n = max(1, y.size)
+            count_batch_size = 2 ** int(round(math.log2(math.sqrt(n) / 4)))
+                # /4 is good on V100, /2 on L4/T4, still haven't tried A100
+            count_batch_size = max(1, count_batch_size)
+
+    return resid_batch_size, count_batch_size
 
 def step(bart, key):
     """
@@ -350,9 +361,12 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
 
     ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
 
+    left = leaf_to_grow << 1
     return dict(
         num_growable=num_growable,
         node=leaf_to_grow,
+        left=left,
+        right=left + 1,
         partial_ratio=ratio,
         var_tree=var_tree,
         split_tree=split_tree,
@@ -707,9 +721,12 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p
 
     ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune, split_tree)
 
+    left = node_to_prune << 1
     return dict(
         allowed=allowed,
         node=node_to_prune,
+        left=left,
+        right=left + 1,
         partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
     )
 
@@ -804,11 +821,13 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
 
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
+    count_trees, move_counts = compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, bart['opt']['count_batch_size'])
+
     def loop(resid, item):
         resid, leaf_tree, split_tree, count_half_tree, counts, ratios = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
-            bart['opt']['suffstat_batch_size'],
+            bart['opt']['resid_batch_size'],
             resid,
             bart['sigma2'],
             bart['min_points_per_leaf'],
@@ -823,9 +842,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
 
     items = (
         bart['leaf_trees'],
+        count_trees,
         grow_moves,
         prune_moves,
         grow_leaf_indices,
+        move_counts,
         u,
         z,
     )
@@ -843,7 +864,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
 
     return bart
 
-def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, grow_move, prune_move, grow_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, grow_leaf_indices, move_counts, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -888,11 +909,11 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
         The indicators of proposals and acceptances for grow and prune moves.
     """
 
-    # compute indices of grow move
+    # get indices of grow move
     grow_node = grow_move['node']
     assert grow_node.dtype == jnp.int32
-    grow_left = grow_node << 1
-    grow_right = grow_left + 1
+    grow_left = grow_move['left']
+    grow_right = grow_move['right']
 
     # copy leaves around such that grow leaf indices work on the original tree
     leaf_tree = (leaf_tree
@@ -906,7 +927,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     resid += leaf_tree[grow_leaf_indices]
 
     # sum residuals and count units per leaf, in tree proposed by grow move
-    resid_tree, count_tree = sufficient_stat(resid, grow_leaf_indices, leaf_tree.size, suffstat_batch_size)
+    resid_tree = sum_resid(resid, grow_leaf_indices, leaf_tree.size, resid_batch_size)
 
     # sum residuals in leaf to grow
     grow_resid_left = resid_tree[grow_left]
@@ -914,17 +935,11 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     grow_resid_total = grow_resid_left + grow_resid_right
     resid_tree = resid_tree.at[grow_node].set(grow_resid_total)
 
-    # count datapoints in leaf to grow
-    grow_count_left = count_tree[grow_left]
-    grow_count_right = count_tree[grow_right]
-    grow_count_total = grow_count_left + grow_count_right
-    count_tree = count_tree.at[grow_node].set(grow_count_total)
-
-    # compute indices of prune move
+    # get indices of prune move
     prune_node = prune_move['node']
     assert prune_node.dtype == jnp.int32
-    prune_left = prune_node << 1
-    prune_right = prune_left + 1
+    prune_left = prune_move['left']
+    prune_right = prune_move['right']
 
     # sum residuals in node to prune
     prune_resid_left = resid_tree[prune_left]
@@ -932,28 +947,22 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
     prune_resid_total = prune_resid_left + prune_resid_right
     resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
 
-    # count datapoints in node to prune
-    prune_count_left = count_tree[prune_left]
-    prune_count_right = count_tree[prune_right]
-    prune_count_total = prune_count_left + prune_count_right
-    count_tree = count_tree.at[prune_node].set(prune_count_total)
-
     # Now resid_tree and count_tree contain correct values whatever move is
     # accepted.
 
     # compute probability of proposing prune
-    grow_p_prune, prune_p_prune = compute_p_prune(grow_move, grow_count_left, grow_count_right, min_points_per_leaf)
+    grow_p_prune, prune_p_prune = compute_p_prune(grow_move, move_counts['grow']['left'], move_counts['grow']['right'], min_points_per_leaf)
 
     # compute likelihood ratios
-    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, grow_count_total, grow_count_left, grow_count_right, sigma2, ntree)
-    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prune_count_total, prune_count_left, prune_count_right, sigma2, ntree)
+    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, move_counts['grow']['total'], move_counts['grow']['left'], move_counts['grow']['right'], sigma2, ntree)
+    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, move_counts['prune']['total'], move_counts['prune']['left'], move_counts['prune']['right'], sigma2, ntree)
 
     # compute acceptance ratios
     grow_trans_prior_ratio =grow_p_prune * grow_move['partial_ratio']
     grow_ratio = grow_trans_prior_ratio * grow_lk_ratio
     if min_points_per_leaf is not None:
-        grow_ratio = jnp.where(grow_count_left >= min_points_per_leaf, grow_ratio, 0)
-        grow_ratio = jnp.where(grow_count_right >= min_points_per_leaf, grow_ratio, 0)
+        grow_ratio = jnp.where(move_counts['grow']['left'] >= min_points_per_leaf, grow_ratio, 0)
+        grow_ratio = jnp.where(move_counts['grow']['right'] >= min_points_per_leaf, grow_ratio, 0)
     prune_trans_prior_ratio = prune_p_prune * prune_move['partial_ratio']
     prune_ratio = prune_trans_prior_ratio * prune_lk_ratio
     prune_ratio = lax.reciprocal(prune_ratio)
@@ -1022,7 +1031,7 @@ def accept_move_and_sample_leaves(X, ntree, suffstat_batch_size, resid, sigma2, 
 
     return resid, leaf_tree, split_tree, count_tree[:split_tree.size], counts, ratios
 
-def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
+def sum_resid(resid, leaf_indices, tree_size, batch_size):
     """
     Compute the sufficient statistics for the likelihood ratio of a tree move.
 
@@ -1048,11 +1057,8 @@ def sufficient_stat(resid, leaf_indices, tree_size, batch_size):
     if batch_size is None:
         aggr_func = _aggregate_scatter
     else:
-        aggr_func = functools.partial(_aggregate_batched, batch_size=batch_size)
-    resid_tree = aggr_func(resid, leaf_indices, tree_size, jnp.float32)
-    count_tree = aggr_func(1, leaf_indices, tree_size, jnp.uint32)
-        # uint16 is super-slow on gpu, don't use it even if n < 2^16
-    return resid_tree, count_tree
+        aggr_func = functools.partial(_aggregate_batched_onetree, batch_size=batch_size)
+    return aggr_func(resid, leaf_indices, tree_size, jnp.float32)
 
 def _aggregate_scatter(values, indices, size, dtype):
     return (jnp
@@ -1061,7 +1067,7 @@ def _aggregate_scatter(values, indices, size, dtype):
         .add(values)
     )
 
-def _aggregate_batched(values, indices, size, dtype, batch_size):
+def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
     nbatches = indices.size // batch_size + bool(indices.size % batch_size)
     batch_indices = jnp.arange(indices.size) // batch_size
     return (jnp
@@ -1069,6 +1075,57 @@ def _aggregate_batched(values, indices, size, dtype, batch_size):
         .at[batch_indices, indices]
         .add(values)
         .sum(axis=0)
+    )
+
+def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
+    
+    ntree, tree_size = grow_moves['split_tree'].shape
+    tree_size *= 2
+    counts = dict(grow=dict(), prune=dict())
+    tree_indices = jnp.arange(ntree)
+
+    count_trees = count_datapoints_per_leaf(grow_leaf_indices, tree_size, batch_size)
+
+    # count datapoints in leaf to grow
+    counts['grow']['left'] = count_trees[tree_indices, grow_moves['left']]
+    counts['grow']['right'] = count_trees[tree_indices, grow_moves['right']]
+    counts['grow']['total'] = counts['grow']['left'] + counts['grow']['right']
+    count_trees = count_trees.at[tree_indices, grow_moves['node']].set(counts['grow']['total'])
+
+    # count datapoints in node to prune
+    counts['prune']['left'] = count_trees[tree_indices, prune_moves['left']]
+    counts['prune']['right'] = count_trees[tree_indices, prune_moves['right']]
+    counts['prune']['total'] = counts['prune']['left'] + counts['prune']['right']
+    count_trees = count_trees.at[tree_indices, prune_moves['node']].set(counts['prune']['total'])
+
+    return count_trees, counts
+
+def count_datapoints_per_leaf(leaf_indices, tree_size, batch_size):
+    if batch_size is None:
+        return _count_scan(leaf_indices, tree_size)
+    else:
+        return _count_vec(leaf_indices, tree_size, batch_size)
+
+def _count_scan(leaf_indices, tree_size):
+    def loop(_, leaf_indices):
+        return None, _aggregate_scatter(1, leaf_indices, tree_size, jnp.uint32)
+    _, count_trees = lax.scan(loop, None, leaf_indices)
+    return count_trees
+
+def _count_vec(leaf_indices, tree_size, batch_size):
+    return _aggregate_batched_alltrees(1, leaf_indices, tree_size, jnp.uint32, batch_size)
+        # uint16 is super-slow on gpu, don't use it even if n < 2^16
+
+def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
+    ntree, n = indices.shape
+    tree_indices = jnp.arange(ntree)
+    nbatches = n // batch_size + bool(n % batch_size)
+    batch_indices = jnp.arange(n) % nbatches
+    return (jnp
+        .zeros((ntree, size, nbatches), dtype)
+        .at[tree_indices[:, None], indices, batch_indices]
+        .add(values)
+        .sum(axis=2)
     )
 
 def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):

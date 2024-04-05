@@ -210,7 +210,11 @@ def test_few_datapoints(X, y, kw, key):
     bart = bartz.BART.gbart(X, y, **kw, seed=key)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
-def test_comparison_rbart(X, y, key):
+@pytest.mark.parametrize('initkw', [
+    dict(resid_batch_size=None, count_batch_size=None),
+    dict(resid_batch_size=16, count_batch_size=16),
+])
+def test_comparison_rbart(X, y, key, initkw):
     key1, key2 = random.split(key, 2)
     kw = dict(
         ntree=2 * X.shape[1],
@@ -218,7 +222,7 @@ def test_comparison_rbart(X, y, key):
         ndpost=1000,
         numcut=255,
     )
-    bart = bartz.BART.gbart(X, y, **kw, seed=key1)
+    bart = bartz.BART.gbart(X, y, **kw, initkw=initkw, seed=key1)
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
     rbart = BART.mc_gbart(X.T, y, **kw, usequants=True, rm_const=False, mc_cores=1, seed=seed)
 
