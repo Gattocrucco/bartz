@@ -740,12 +740,12 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
     node_to_prune = randint_masked(key, is_prunable)
     node_to_prune = jnp.where(num_prunable, node_to_prune, 2 * split_tree.size)
 
-    pruned_split_tree = split_tree.at[node_to_prune].set(0)
-    pruned_affluence_tree = (
+    split_tree = split_tree.at[node_to_prune].set(0)
+    affluence_tree = (
         None if affluence_tree is None else
         affluence_tree.at[node_to_prune].set(True)
     )
-    is_growable_leaf = growable_leaves(pruned_split_tree, pruned_affluence_tree)
+    is_growable_leaf = growable_leaves(split_tree, affluence_tree)
     num_growable = jnp.count_nonzero(is_growable_leaf)
 
     return node_to_prune, num_prunable, num_growable
@@ -815,7 +815,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
-    bart['ratios'].update(ratios)
+    bart.get('ratios', {}).update(ratios)
 
     return bart
 

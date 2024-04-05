@@ -275,3 +275,4 @@ def test_jit(X, y, key, kw):
 #         - use variables with many splits to avoid problems with disallowed variables
 # - diff trees
 #    - at each iteration, the trees differ at most in two split nodes
+# - use dataframes/series
