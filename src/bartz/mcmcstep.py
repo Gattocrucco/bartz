@@ -822,9 +822,12 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
 
     count_trees, move_counts = compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, bart['opt']['count_batch_size'])
+    if bart['opt']['require_min_points']:
+        count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
+        bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
 
     def loop(resid, item):
-        resid, leaf_tree, split_tree, count_half_tree, counts, ratios = accept_move_and_sample_leaves(
+        resid, leaf_tree, split_tree, counts, ratios = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['resid_batch_size'],
@@ -834,7 +837,7 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
             'ratios' in bart,
             *item,
         )
-        return resid, (leaf_tree, split_tree, count_half_tree, counts, ratios)
+        return resid, (leaf_tree, split_tree, counts, ratios)
 
     key, subkey = random.split(key)
     u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
@@ -851,13 +854,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         z,
     )
 
-    resid, (leaf_trees, split_trees, count_half_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
+    resid, (leaf_trees, split_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
     bart['split_trees'] = split_trees
-    if bart['opt']['require_min_points']:
-        bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
     bart.get('ratios', {}).update(ratios)
@@ -903,8 +904,6 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
         The new leaf values of the tree.
     split_tree : int array (2 ** (d - 1),)
         The updated decision boundaries of the tree.
-    count_half_tree : int array (2 ** (d - 1),)
-        The number of data points in each leaf node.
     counts : dict
         The indicators of proposals and acceptances for grow and prune moves.
     """
@@ -1029,7 +1028,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
         prune_acc_count=do_prune,
     )
 
-    return resid, leaf_tree, split_tree, count_tree[:split_tree.size], counts, ratios
+    return resid, leaf_tree, split_tree, counts, ratios
 
 def sum_resid(resid, leaf_indices, tree_size, batch_size):
     """
