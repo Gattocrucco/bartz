@@ -165,6 +165,7 @@ def init(*,
         prune_prop_count=jnp.zeros((), int),
         prune_acc_count=jnp.zeros((), int),
         p_nonterminal=p_nonterminal,
+        p_propose_grow=p_nonterminal[grove.tree_depths(2 ** (max_depth - 1))],
         sigma2_alpha=jnp.asarray(sigma2_alpha, large_float),
         sigma2_beta=jnp.asarray(sigma2_beta, large_float),
         max_split=jnp.asarray(max_split),
@@ -263,7 +264,6 @@ def sample_trees(bart, key):
     -----
     This function zeroes the proposal counters before using them.
     """
-    bart = bart.copy()
     key, subkey = random.split(key)
     grow_moves, prune_moves = sample_moves(bart, subkey)
     return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
@@ -285,17 +285,17 @@ def sample_moves(bart, key):
         The proposals for grow and prune moves. See `grow_move` and `prune_move`.
     """
     key = random.split(key, bart['var_trees'].shape[0])
-    return sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], key)
+    return sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], bart['p_propose_grow'], key)
 
-@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, 0))
-def sample_moves_vmap_trees(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, None, 0))
+def sample_moves_vmap_trees(*args):
+    args, key = args[:-1], args[-1]
     key, key1 = random.split(key)
-    args = var_tree, split_tree, affluence_tree, max_split, p_nonterminal
     grow = grow_move(*args, key)
     prune = prune_move(*args, key1)
     return grow, prune
 
-def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
+def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key):
     """
     Tree structure grow move proposal of BART MCMC.
 
@@ -340,7 +340,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
 
     key, key1, key2 = random.split(key, 3)
 
-    leaf_to_grow, num_growable, num_prunable = choose_leaf(split_tree, affluence_tree, key)
+    leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(split_tree, affluence_tree, p_propose_grow, key)
 
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
@@ -348,7 +348,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
     split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
+    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
 
     return dict(
         num_growable=num_growable,
@@ -358,7 +358,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, ke
         split_tree=split_tree,
     )
 
-def choose_leaf(split_tree, affluence_tree, key):
+def choose_leaf(split_tree, affluence_tree, p_propose_grow, key):
     """
     Choose a leaf node to grow in a tree.
 
@@ -384,11 +384,13 @@ def choose_leaf(split_tree, affluence_tree, key):
     """
     is_growable = growable_leaves(split_tree, affluence_tree)
     num_growable = jnp.count_nonzero(is_growable)
-    leaf_to_grow = randint_masked(key, is_growable)
+    distr = jnp.where(is_growable, p_propose_grow, 0)
+    leaf_to_grow, distr_norm = categorical(key, distr)
     leaf_to_grow = jnp.where(num_growable, leaf_to_grow, 2 * split_tree.size)
+    prob_choose = distr[leaf_to_grow] / distr_norm
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
-    return leaf_to_grow, num_growable, num_prunable
+    return leaf_to_grow, num_growable, prob_choose, num_prunable
 
 def growable_leaves(split_tree, affluence_tree):
     """
@@ -413,7 +415,7 @@ def growable_leaves(split_tree, affluence_tree):
         is_growable &= affluence_tree
     return is_growable
 
-def randint_masked(key, mask):
+def categorical(key, distr):
     """
     Return a random integer in a range, including only some values.
 
@@ -430,9 +432,9 @@ def randint_masked(key, mask):
         A random integer in the range ``[0, n)``, and which satisfies
         ``mask[u] == True``. If all values in the mask are `False`, return `n`.
     """
-    ecdf = jnp.cumsum(mask)
-    u = random.randint(key, (), 0, ecdf[-1])
-    return jnp.searchsorted(ecdf, u, 'right')
+    ecdf = jnp.cumsum(distr)
+    u = random.uniform(key, (), ecdf.dtype, 0, ecdf[-1])
+    return jnp.searchsorted(ecdf, u, 'right'), ecdf[-1]
 
 def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -619,7 +621,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree):
+def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree):
     """
     Compute the product of the transition and prior ratios of a grow move.
 
@@ -658,16 +660,16 @@ def compute_partial_ratio(num_growable, num_prunable, p_nonterminal, leaf_to_gro
 
     p_grow = jnp.where(prune_allowed, 0.5, 1)
 
-    trans_ratio = num_growable / (p_grow * num_prunable)
+    inv_trans_ratio = p_grow * prob_choose * num_prunable
 
     depth = grove.tree_depths(new_split_tree.size)[leaf_to_grow]
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal[depth + 1]
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
 
-    return trans_ratio * tree_ratio
+    return tree_ratio / inv_trans_ratio
 
-def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, key):
+def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key):
     """
     Tree structure prune move proposal of BART MCMC.
 
@@ -700,10 +702,10 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
             the likelihood ratio and the probability of proposing the prune
             move. This ratio is inverted.
     """
-    node_to_prune, num_prunable, num_growable = choose_leaf_parent(split_tree, affluence_tree, key)
+    node_to_prune, num_prunable, prob_choose = choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key)
     allowed = split_tree[1].astype(bool) # allowed iff the tree is not a root
 
-    ratio = compute_partial_ratio(num_growable, num_prunable, p_nonterminal, node_to_prune, split_tree)
+    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune, split_tree)
 
     return dict(
         allowed=allowed,
@@ -711,7 +713,7 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, k
         partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
     )
 
-def choose_leaf_parent(split_tree, affluence_tree, key):
+def choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key):
     """
     Pick a non-terminal node with leaf children to prune in a tree.
 
@@ -746,9 +748,31 @@ def choose_leaf_parent(split_tree, affluence_tree, key):
         affluence_tree.at[node_to_prune].set(True)
     )
     is_growable_leaf = growable_leaves(split_tree, affluence_tree)
-    num_growable = jnp.count_nonzero(is_growable_leaf)
+    prob_choose = p_propose_grow[node_to_prune]
+    prob_choose /= jnp.sum(p_propose_grow, where=is_growable_leaf)
 
-    return node_to_prune, num_prunable, num_growable
+    return node_to_prune, num_prunable, prob_choose
+
+def randint_masked(key, mask):
+    """
+    Return a random integer in a range, including only some values.
+    
+    Parameters
+    ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
+    mask : bool array (n,)
+        The mask indicating the allowed values.
+    
+    Returns
+    -------
+    u : int
+        A random integer in the range ``[0, n)``, and which satisfies
+        ``mask[u] == True``. If all values in the mask are `False`, return `n`.
+    """
+    ecdf = jnp.cumsum(mask)
+    u = random.randint(key, (), 0, ecdf[-1])
+    return jnp.searchsorted(ecdf, u, 'right')
 
 def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     """
