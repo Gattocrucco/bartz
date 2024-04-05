@@ -814,6 +814,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         The new BART mcmc state.
     """
     bart = bart.copy()
+    bart, count_trees, move_counts, grow_leaf_indices, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
+    return accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, grow_leaf_indices, u, z)
+
+def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
+    bart = bart.copy()
 
     bart['var_trees'] = grow_moves['var_tree']
         # Since var_tree can contain garbage, I can set the var of leaf to be
@@ -827,42 +832,13 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
     
-    leaf_trees = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
+    bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
 
     key, subkey = random.split(key)
-    u = random.uniform(subkey, (len(leaf_trees), 2), bart['opt']['large_float'])
-    z = random.normal(key, leaf_trees.shape, bart['opt']['large_float'])
+    u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
+    z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
 
-    def loop(resid, item):
-        resid, leaf_tree, split_tree, counts, ratios = accept_move_and_sample_leaves(
-            bart['X'],
-            len(bart['leaf_trees']),
-            bart['opt']['resid_batch_size'],
-            resid,
-            bart['sigma2'],
-            bart['min_points_per_leaf'],
-            'ratios' in bart,
-            *item,
-        )
-        return resid, (leaf_tree, split_tree, counts, ratios)
-
-    items = (
-        leaf_trees, count_trees,
-        grow_moves, prune_moves, move_counts,
-        grow_leaf_indices,
-        u, z,
-    )
-
-    resid, (leaf_trees, split_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
-
-    bart['resid'] = resid
-    bart['leaf_trees'] = leaf_trees
-    bart['split_trees'] = split_trees
-    for k, v in counts.items():
-        bart[k] = jnp.sum(v, axis=0)
-    bart.get('ratios', {}).update(ratios)
-
-    return bart
+    return bart, count_trees, move_counts, grow_leaf_indices, u, z
 
 def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
     
@@ -933,6 +909,39 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
         .set(values_at_node)
     )
 
+def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, grow_leaf_indices, u, z):
+    bart = bart.copy()
+    
+    def loop(resid, item):
+        resid, leaf_tree, split_tree, counts, ratios = accept_move_and_sample_leaves(
+            bart['X'],
+            len(bart['leaf_trees']),
+            bart['opt']['resid_batch_size'],
+            resid,
+            bart['sigma2'],
+            bart['min_points_per_leaf'],
+            'ratios' in bart,
+            *item,
+        )
+        return resid, (leaf_tree, split_tree, counts, ratios)
+
+    items = (
+        bart['leaf_trees'], count_trees,
+        grow_moves, prune_moves, move_counts,
+        grow_leaf_indices,
+        u, z,
+    )
+    resid, (leaf_trees, split_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
+
+    bart['resid'] = resid
+    bart['leaf_trees'] = leaf_trees
+    bart['split_trees'] = split_trees
+    for k, v in counts.items():
+        bart[k] = jnp.sum(v, axis=0)
+    bart.get('ratios', {}).update(ratios)
+
+    return bart
+
 def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
@@ -976,11 +985,11 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
         The indicators of proposals and acceptances for grow and prune moves.
     """
 
-    # subtract starting tree from function
-    resid += leaf_tree[grow_leaf_indices]
-
     # sum residuals and count units per leaf, in tree proposed by grow move
     resid_tree = sum_resid(resid, grow_leaf_indices, leaf_tree.size, resid_batch_size)
+
+    # subtract starting tree from function
+    resid_tree += count_tree * leaf_tree
 
     # get indices of grow move
     grow_node = grow_move['node']
@@ -1061,6 +1070,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     prec_lk = count_tree * inv_sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
     mean_post = resid_tree * inv_sigma2 * var_post # = mean_lk * prec_lk * var_post
+    initial_leaf_tree = leaf_tree
     leaf_tree = mean_post + z * jnp.sqrt(var_post)
 
     # copy leaves around such that the grow leaf indices select the right leaf
@@ -1077,8 +1087,8 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
         .set(leaf_tree[grow_node])
     )
 
-    # add new tree to function
-    resid -= leaf_tree[grow_leaf_indices]
+    # replace old tree with new tree in function values
+    resid += (initial_leaf_tree - leaf_tree)[grow_leaf_indices]
 
     # pack proposal and acceptance indicators
     counts = dict(
