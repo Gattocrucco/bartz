@@ -172,6 +172,7 @@ def init(*,
         max_split=jnp.asarray(max_split),
         y=y,
         X=jnp.asarray(X),
+        leaf_indices=jnp.ones((num_trees, y.size), jaxext.minimal_unsigned_dtype(2 ** max_depth - 1)),
         min_points_per_leaf=(
             None if min_points_per_leaf is None else
             jnp.asarray(min_points_per_leaf)
@@ -296,10 +297,10 @@ def sample_moves(bart, key):
         The proposals for grow and prune moves. See `grow_move` and `prune_move`.
     """
     key = random.split(key, bart['var_trees'].shape[0])
-    return sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], bart['p_propose_grow'], key)
+    return _sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], bart['p_propose_grow'], key)
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, None, 0))
-def sample_moves_vmap_trees(*args):
+def _sample_moves_vmap_trees(*args):
     args, key = args[:-1], args[-1]
     key, key1 = random.split(key)
     grow = grow_move(*args, key)
@@ -367,6 +368,8 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
         node=leaf_to_grow,
         left=left,
         right=left + 1,
+        var=var,
+        split=split,
         partial_ratio=ratio,
         var_tree=var_tree,
         split_tree=split_tree,
@@ -813,9 +816,9 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart : dict
         The new BART mcmc state.
     """
-    bart = bart.copy()
-    bart, count_trees, move_counts, grow_leaf_indices, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
-    return accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, grow_leaf_indices, u, z)
+    bart, count_trees, move_counts, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
+    bart, counts = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z)
+    return accept_moves_final_stage(bart, counts, grow_moves, prune_moves)
 
 def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     bart = bart.copy()
@@ -824,9 +827,9 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
         # Since var_tree can contain garbage, I can set the var of leaf to be
         # grown irrespectively of what move I'm gonna accept in the end.
 
-    grow_leaf_indices = grove.traverse_forest(bart['X'], grow_moves['var_tree'], grow_moves['split_tree'])
+    bart['leaf_indices'] = apply_grow_to_indices(grow_moves, bart['leaf_indices'], bart['X'])
 
-    count_trees, move_counts = compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, bart['opt']['count_batch_size'])
+    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], grow_moves, prune_moves, bart['opt']['count_batch_size'])
     
     if bart['opt']['require_min_points']:
         count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
@@ -838,7 +841,18 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     u = random.uniform(subkey, (len(bart['leaf_trees']), 2), bart['opt']['large_float'])
     z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
 
-    return bart, count_trees, move_counts, grow_leaf_indices, u, z
+    return bart, count_trees, move_counts, u, z
+
+def apply_grow_to_indices(grow_moves, leaf_indices, X):
+    left_child = grow_moves['node'].astype(leaf_indices.dtype) << 1
+    go_right = X[grow_moves['var'], :] >= grow_moves['split'][:, None]
+    tree_size = jnp.array(2 * grow_moves['split_tree'].shape[1])
+    node_to_update = jnp.where(grow_moves['num_growable'], grow_moves['node'], tree_size)
+    return jnp.where(
+        leaf_indices == node_to_update[:, None],
+        left_child[:, None] + go_right,
+        leaf_indices,
+    )
 
 def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
     
@@ -909,7 +923,7 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
         .set(values_at_node)
     )
 
-def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, grow_leaf_indices, u, z):
+def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z):
     bart = bart.copy()
     
     def loop(resid, item):
@@ -928,7 +942,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
     items = (
         bart['leaf_trees'], count_trees,
         grow_moves, prune_moves, move_counts,
-        grow_leaf_indices,
+        bart['leaf_indices'],
         u, z,
     )
     resid, (leaf_trees, split_trees, counts, ratios) = lax.scan(loop, bart['resid'], items)
@@ -936,11 +950,9 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
     bart['split_trees'] = split_trees
-    for k, v in counts.items():
-        bart[k] = jnp.sum(v, axis=0)
     bart.get('ratios', {}).update(ratios)
 
-    return bart
+    return bart, counts
 
 def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, u, z):
     """
@@ -1190,6 +1202,31 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, 
     )
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+
+def accept_moves_final_stage(bart, counts, grow_moves, prune_moves):
+    bart = bart.copy()
+    
+    for k, v in counts.items():
+        bart[k] = jnp.sum(v, axis=0)
+
+    bart['leaf_indices'] = apply_moves_to_indices(bart['leaf_indices'], counts, grow_moves, prune_moves)
+
+    return bart
+
+def apply_moves_to_indices(leaf_indices, counts, grow_moves, prune_moves):
+    mask = ~jnp.array(1, leaf_indices.dtype) # ...1111111110
+    cond = (leaf_indices & mask) == grow_moves['left'][:, None]
+    leaf_indices = jnp.where(
+        cond & ~counts['grow_acc_count'][:, None],
+        grow_moves['node'][:, None].astype(leaf_indices.dtype),
+        leaf_indices,
+    )
+    cond = (leaf_indices & mask) == prune_moves['left'][:, None]
+    return jnp.where(
+        cond & counts['prune_acc_count'][:, None],
+        prune_moves['node'][:, None].astype(leaf_indices.dtype),
+        leaf_indices,
+    )
 
 def sample_sigma(bart, key):
     """
