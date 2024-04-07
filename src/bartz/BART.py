@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -148,6 +148,7 @@ class gbart:
 
     def __init__(self, x_train, y_train, *,
         x_test=None,
+        usequants=False,
         sigest=None,
         sigdf=3,
         sigquant=0.9,
@@ -168,15 +169,15 @@ class gbart:
         ):
 
         x_train, x_train_fmt = self._process_predictor_input(x_train)
-        
+
         y_train, y_train_fmt = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
-        
+
         offset = self._process_offset_settings(y_train, offset)
         scale = self._process_scale_settings(y_train, k)
         lamda, sigest = self._process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, offset)
 
-        splits, max_split = self._determine_splits(x_train, numcut)
+        splits, max_split = self._determine_splits(x_train, usequants, numcut)
         x_train = self._bin_predictors(x_train, splits)
 
         y_train = self._transform_input(y_train, offset, scale)
@@ -306,8 +307,11 @@ class gbart:
             return (y_train.max() - y_train.min()) / (2 * k)
 
     @staticmethod
-    def _determine_splits(x_train, numcut):
-        return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
+    def _determine_splits(x_train, usequants, numcut):
+        if usequants:
+            return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
+        else:
+            return prepcovars.uniform_splits_from_matrix(x_train, numcut + 1)
 
     @staticmethod
     def _bin_predictors(x, splits):
@@ -357,7 +361,7 @@ class gbart:
     def _extract_sigma(trace, scale):
         return scale * jnp.sqrt(trace['sigma2'])
 
-    
+
     def _show_tree(self, i_sample, i_tree, print_all=False):
         from . import debug
         trace = self._main_trace

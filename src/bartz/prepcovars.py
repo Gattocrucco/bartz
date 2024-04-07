@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -80,6 +80,15 @@ def _quantilized_splits_from_matrix(x, out_length):
     splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
     max_split = jnp.minimum(actual_length, out_length)
     max_split = max_split.astype(jaxext.minimal_unsigned_dtype(out_length))
+    return splits, max_split
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def uniform_splits_from_matrix(X, num_bins):
+    low = jnp.min(X, axis=1)
+    high = jnp.max(X, axis=1)
+    splits = jnp.linspace(low, high, num_bins + 1, axis=1)[:, 1:-1]
+    assert splits.shape == (X.shape[0], num_bins - 1)
+    max_split = jnp.full(*splits.shape, jaxext.minimal_unsigned_dtype(num_bins - 1))
     return splits, max_split
 
 @jax.jit

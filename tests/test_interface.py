@@ -64,7 +64,7 @@ def y(X, key):
 
 @pytest.fixture
 def kw():
-    return dict(ntree=20, ndpost=100, nskip=50)
+    return dict(ntree=20, ndpost=100, nskip=50, usequants=True)
 
 def test_bad_trees(X, y, key, kw):
     bart = bartz.BART.gbart(X, y, **kw, seed=key)
@@ -210,21 +210,32 @@ def test_few_datapoints(X, y, kw, key):
     bart = bartz.BART.gbart(X, y, **kw, seed=key)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
-@pytest.mark.parametrize('initkw', [
-    dict(resid_batch_size=None, count_batch_size=None, save_ratios=True),
-    dict(resid_batch_size=16, count_batch_size=16, save_ratios=False),
+@pytest.mark.parametrize('kw_shared,initkw', [
+    [dict(usequants=True), dict(resid_batch_size=None, count_batch_size=None, save_ratios=True)],
+    [dict(usequants=False, numcut=5), dict(resid_batch_size=16, count_batch_size=16, save_ratios=False)],
 ])
-def test_comparison_rbart(X, y, key, initkw):
+def test_comparison_rbart(X, y, key, kw_shared, initkw):
     key1, key2 = random.split(key, 2)
+
     kw = dict(
         ntree=2 * X.shape[1],
         nskip=1000,
         ndpost=1000,
         numcut=255,
     )
-    bart = bartz.BART.gbart(X, y, **kw, initkw=initkw, seed=key1)
+    kw.update(kw_shared)
+
+    kw_bartz = dict(**kw, initkw=initkw)
+
+    kw_BART = dict(
+        **kw,
+        rm_const=False,
+        mc_cores=1,
+    )
+
+    bart = bartz.BART.gbart(X, y, **kw_bartz, seed=key1)
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
-    rbart = BART.mc_gbart(X.T, y, **kw, usequants=True, rm_const=False, mc_cores=1, seed=seed)
+    rbart = BART.mc_gbart(X.T, y, **kw_BART, seed=seed)
 
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10

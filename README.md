@@ -43,7 +43,7 @@ This Python module provides an implementation of BART that runs on GPU, to proce
 - [MOTR-BART](https://github.com/ebprado/MOTR-BART)
 - [bcfbma](https://github.com/EoghanONeill/bcfbma)
 - [bartBMAnew](https://github.com/EoghanONeill/bartBMAnew)
-- ~[BART-BMA](https://github.com/BelindaHernandez/BART-BMA)~ (superseded by bartBMAnew)
+- [BART-BMA](https://github.com/BelindaHernandez/BART-BMA) (superseded by bartBMAnew)
 - [gpbart](https://github.com/MateusMaiaDS/gpbart)
 - [GPBART](https://github.com/nchenderson/GPBART)
 - [bartpy](https://github.com/JakeColtman/bartpy)
