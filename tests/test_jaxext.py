@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -61,7 +61,7 @@ def test_unique_empty_output():
 @pytest.mark.parametrize('with_margin', [False, True])
 @pytest.mark.parametrize('additional_size', [3, 0])
 def test_autobatch(key, target_nbatches, with_margin, additional_size):
-    
+
     def func(a, b, c):
         return (a * b[:, None]).sum(1), c * b[None, :]
 
@@ -81,14 +81,32 @@ def test_autobatch(key, target_nbatches, with_margin, additional_size):
 
     batch_nbytes = batch_size * a.itemsize
     batched_func = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1), return_nbatches=True)
+    batched_func_nobatches = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1))
 
     out1 = func(a, b, c)
     out2, nbatches = batched_func(a, b, c)
+    out3 = batched_func_nobatches(a, b, c)
 
     assert nbatches == target_nbatches
 
+    for o2, o3 in zip(out2, out3):
+        numpy.testing.assert_array_max_ulp(o2, o3)
     for o1, o2 in zip(out1, out2):
         numpy.testing.assert_array_max_ulp(o1, o2)
+
+def test_autobatch_none():
+
+    def func(a, b):
+        return a + b
+    batched_func = jaxext.autobatch(func, 32, (0, None))
+
+    a = jnp.arange(100)
+    b = 2
+
+    out1 = func(a, b)
+    out2 = batched_func(a, b)
+
+    numpy.testing.assert_array_max_ulp(out1, out2)
 
 def test_autobatch_warning():
     x = jnp.arange(10_000).reshape(10, 1000)

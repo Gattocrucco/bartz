@@ -218,8 +218,18 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
             return tree_util.tree_map(lambda _: axes, tree)
         return tree_util.tree_map(lambda _, axis: axis, tree, axes)
 
+    def check_no_nones(axes, tree):
+        def check_not_none(_, axis):
+            assert axis is not None
+        tree_util.tree_map(check_not_none, tree, axes)
+
     def extract_size(axes, tree):
-        sizes = tree_util.tree_map(lambda x, axis: x.shape[axis], tree, axes)
+        def get_size(x, axis):
+            if axis is None:
+                return None
+            else:
+                return x.shape[axis]
+        sizes = tree_util.tree_map(get_size, tree, axes)
         sizes, _ = tree_util.tree_flatten(sizes)
         assert all(s == sizes[0] for s in sizes)
         return sizes[0]
@@ -247,15 +257,31 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
             return next_divisor_small(dividend, min_divisor)
         return next_divisor_large(dividend, min_divisor)
 
+    def pull_nonbatched(axes, tree):
+        def pull_nonbatched(x, axis):
+            if axis is None:
+                return None
+            else:
+                return x
+        return tree_util.tree_map(pull_nonbatched, tree, axes), tree
+
+    def push_nonbatched(axes, tree, original_tree):
+        def push_nonbatched(original_x, x, axis):
+            if axis is None:
+                return original_x
+            else:
+                return x
+        return tree_util.tree_map(push_nonbatched, original_tree, tree, axes)
+
     def move_axes_out(axes, tree):
-        def move_axis_out(axis, x):
+        def move_axis_out(x, axis):
             return jnp.moveaxis(x, axis, 0)
-        return tree_util.tree_map(move_axis_out, axes, tree)
+        return tree_util.tree_map(move_axis_out, tree, axes)
 
     def move_axes_in(axes, tree):
-        def move_axis_in(axis, x):
+        def move_axis_in(x, axis):
             return jnp.moveaxis(x, 0, axis)
-        return tree_util.tree_map(move_axis_in, axes, tree)
+        return tree_util.tree_map(move_axis_in, tree, axes)
 
     def batch(tree, nbatches):
         def batch(x):
@@ -283,13 +309,13 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
         in_axes = expand_axes(initial_in_axes, args)
         out_axes = expand_axes(initial_out_axes, example_result)
+        check_no_nones(out_axes, example_result)
 
-        in_size = extract_size(in_axes, args)
-        out_size = extract_size(out_axes, example_result)
-        assert in_size == out_size
-        size = in_size
+        size = extract_size((in_axes, out_axes), (args, example_result))
 
-        total_nbytes = sum_nbytes(args) + sum_nbytes(example_result)
+        args, nonbatched_args = pull_nonbatched(in_axes, args)
+
+        total_nbytes = sum_nbytes((args, example_result))
         min_nbatches = total_nbytes // max_io_nbytes + bool(total_nbytes % max_io_nbytes)
         nbatches = next_divisor(size, min_nbatches)
         assert 1 <= nbatches <= size
@@ -303,6 +329,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
         def loop(_, args):
             args = move_axes_in(in_axes, args)
+            args = push_nonbatched(in_axes, args, nonbatched_args)
             result = func(*args)
             result = move_axes_out(out_axes, result)
             return None, result
