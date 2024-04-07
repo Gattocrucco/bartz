@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -74,11 +74,11 @@ def test_bad_trees(X, y, key, kw):
 
 def test_sequential_guarantee(X, y, key, kw):
     bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
-    
+
     kw['nskip'] -= 1
     kw['ndpost'] += 1
     bart2 = bartz.BART.gbart(X, y, **kw, seed=key)
-    
+
     numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
     kw['keepevery'] = 2
@@ -176,7 +176,7 @@ def test_two_datapoints(X, y, kw, key):
 # def test_no_trees(X, y, kw, key):
 #     kw.update(ntree=0)
 #     bart = bartz.BART.gbart(X, y, **kw, seed=key)
-    
+
 #     depth = bart._depth_distr()
 #     assert depth.shape == (kw['ndpost'], bart.maxdepth)
 #     assert jnp.all(depth == 0)
@@ -188,7 +188,7 @@ def test_two_datapoints(X, y, kw, key):
 # def test_root_trees(X, y, kw, key):
 #     kw.update(maxdepth=1)
 #     bart = bartz.BART.gbart(X, y, **kw, seed=key)
-    
+
 #     depth = bart._depth_distr()
 #     assert jnp.all(depth[:, 0] == depth.sum(axis=1))
 
@@ -211,8 +211,8 @@ def test_few_datapoints(X, y, kw, key):
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 @pytest.mark.parametrize('initkw', [
-    dict(resid_batch_size=None, count_batch_size=None),
-    dict(resid_batch_size=16, count_batch_size=16),
+    dict(resid_batch_size=None, count_batch_size=None, save_ratios=True),
+    dict(resid_batch_size=16, count_batch_size=16, save_ratios=False),
 ])
 def test_comparison_rbart(X, y, key, initkw):
     key1, key2 = random.split(key, 2)
@@ -235,7 +235,7 @@ def test_comparison_rbart(X, y, key, initkw):
 def mahalanobis_distance2(x, y):
     avg = (x + y) / 2
     cov = jnp.atleast_2d(jnp.cov(avg, rowvar=False))
-    
+
     w, O = jnp.linalg.eigh(cov) # cov = O w O^T
     eps = len(w) * jnp.max(jnp.abs(w)) * jnp.finfo(w.dtype).eps
     nonzero = w > eps
@@ -251,33 +251,13 @@ def mahalanobis_distance2(x, y):
 
 def test_jit(X, y, key, kw):
     """ test that jitting around the whole interface works """
-    
+
     def task(X, y, key):
         bart = bartz.BART.gbart(X, y, **kw, seed=key)
         return bart._mcmc_state, bart.yhat_train
     task_compiled = jax.jit(task)
-    
+
     state1, pred1 = task(X, y, key)
     state2, pred2 = task_compiled(X, y, key)
-    
-    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 10)
 
-# TODO
-# - test where I count how many trees have changes, and check it's equal to total acc count
-# - test for prop & acc counts internal consistency:
-#    - acc <= prop (per category)
-#    - prop_total <= ntree
-# - test 0 burnin & ndpost because they are special-cased
-# - parametrize the comparison with the R package
-#    - maxdepth 8 and 9 (more likely to see problems at the boundary)
-#    - numcut = 1
-#    - p = 1
-# - some test with min leaves None
-# - prior sampling tests, run with no data
-#    - p(nonterminal|depth) matches the distribution in the chain
-#         - I need an effective sample size to tune the test
-#         - use variables with many splits to avoid problems with disallowed variables
-# - diff trees
-#    - at each iteration, the trees differ at most in two split nodes
-# - use dataframes/series
-# - check the types in the state
+    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 10)
