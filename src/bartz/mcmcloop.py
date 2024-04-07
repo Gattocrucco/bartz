@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -34,8 +34,9 @@ from jax import debug
 from jax import numpy as jnp
 from jax import lax
 
-from . import mcmcstep
+from . import jaxext
 from . import grove
+from . import mcmcstep
 
 @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
@@ -190,7 +191,10 @@ def evaluate_trace(trace, X):
     y : array (n_trace, n)
         The predictions for each iteration of the MCMC.
     """
+    evaluate_trees = functools.partial(grove.evaluate_forest, sum_trees=False)
+    evaluate_trees = jaxext.autobatch(evaluate_trees, 2 ** 29, (None, 0, 0, 0))
     def loop(_, state):
-        return None, grove.evaluate_forest(X, state['leaf_trees'], state['var_trees'], state['split_trees'], jnp.float32)
+        values = evaluate_trees(X, state['leaf_trees'], state['var_trees'], state['split_trees'])
+        return None, jnp.sum(values, axis=0, dtype=jnp.float32)
     _, y = lax.scan(loop, None, trace)
     return y

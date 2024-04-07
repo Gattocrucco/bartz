@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -114,7 +114,7 @@ def traverse_tree(x, var_tree, split_tree):
 
         split = split_tree[index]
         var = var_tree[index]
-        
+
         leaf_found |= split == 0
         child_index = (index << 1) + (x[var] >= split)
         index = jnp.where(leaf_found, index, child_index)
@@ -147,7 +147,7 @@ def traverse_forest(X, var_trees, split_trees):
     """
     return traverse_tree(X, var_trees, split_trees)
 
-def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
+def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees=True):
     """
     Evaluate a ensemble of trees at an array of points.
 
@@ -162,7 +162,7 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
         The decision axes of the trees.
     split_trees : array (m, 2 ** (d - 1))
         The decision boundaries of the trees.
-    dtype : dtype
+    dtype : dtype, optional
         The dtype of the output.
 
     Returns
@@ -172,11 +172,14 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype):
     """
     indices = traverse_forest(X, var_trees, split_trees)
     ntree, _ = leaf_trees.shape
-    tree_index = jnp.arange(ntree, dtype=jaxext.minimal_unsigned_dtype(ntree - 1))[:, None]
-    leaves = leaf_trees[tree_index, indices]
-    return jnp.sum(leaves, axis=0, dtype=dtype)
-        # this sum suggests to swap the vmaps, but I think it's better for X
-        # copying to keep it that way
+    tree_index = jnp.arange(ntree, dtype=jaxext.minimal_unsigned_dtype(ntree - 1))
+    leaves = leaf_trees[tree_index[:, None], indices]
+    if sum_trees:
+        return jnp.sum(leaves, axis=0, dtype=dtype)
+            # this sum suggests to swap the vmaps, but I think it's better for X
+            # copying to keep it that way
+    else:
+        return leaves
 
 def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """
@@ -238,7 +241,7 @@ def tree_depths(tree_length):
     tree_length : int
         The length of the tree array, i.e., 2 ** d.
 
-    Returns    
+    Returns
     -------
     depth : array (tree_length,)
         The depth of each node. The root node (index 1) has depth 0. The depth
