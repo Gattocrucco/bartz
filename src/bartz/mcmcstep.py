@@ -190,7 +190,7 @@ def init(*,
             count_batch_size=count_batch_size,
         ),
     )
-    
+
     if save_ratios:
         bart['ratios'] = dict(
             grow=dict(
@@ -206,7 +206,8 @@ def init(*,
     return bart
 
 def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
-    
+
+    @functools.cache
     def get_platform():
         try:
             device = y.devices().pop()
@@ -219,11 +220,12 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
 
     if resid_batch_size == 'auto':
         platform = get_platform()
+        n = max(1, y.size)
         if platform == 'cpu':
-            resid_batch_size = None
+            resid_batch_size = 2 ** int(round(math.log2(n / 6))) # n/6
         elif platform == 'gpu':
-            resid_batch_size = 128 # 128 is good on A100, and V100 at high n
-                                   # 512 is good on T4, and V100 at low n
+            resid_batch_size = 2 ** int(round((1 + math.log2(n)) / 3)) # n^1/3
+        resid_batch_size = max(1, resid_batch_size)
 
     if count_batch_size == 'auto':
         platform = get_platform()
@@ -231,7 +233,7 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
             count_batch_size = None
         elif platform == 'gpu':
             n = max(1, y.size)
-            count_batch_size = 2 ** int(round(math.log2(math.sqrt(n) / 4)))
+            count_batch_size = 2 ** int(round(math.log2(n) / 2 - 2)) # n^1/2
                 # /4 is good on V100, /2 on L4/T4, still haven't tried A100
             count_batch_size = max(1, count_batch_size)
 
@@ -777,14 +779,14 @@ def choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key):
 def randint_masked(key, mask):
     """
     Return a random integer in a range, including only some values.
-    
+
     Parameters
     ----------
     key : jax.dtypes.prng_key array
         A jax random key.
     mask : bool array (n,)
         The mask indicating the allowed values.
-    
+
     Returns
     -------
     u : int
@@ -831,11 +833,11 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     bart['leaf_indices'] = apply_grow_to_indices(grow_moves, bart['leaf_indices'], bart['X'])
 
     count_trees, move_counts = compute_count_trees(bart['leaf_indices'], grow_moves, prune_moves, bart['opt']['count_batch_size'])
-    
+
     if bart['opt']['require_min_points']:
         count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
-    
+
     bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
 
     key, subkey = random.split(key)
@@ -856,7 +858,7 @@ def apply_grow_to_indices(grow_moves, leaf_indices, X):
     )
 
 def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
-    
+
     ntree, tree_size = grow_moves['split_tree'].shape
     tree_size *= 2
     counts = dict(grow=dict(), prune=dict())
@@ -926,7 +928,7 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
 
 def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z):
     bart = bart.copy()
-    
+
     def loop(resid, item):
         resid, leaf_tree, split_tree, counts, ratios = accept_move_and_sample_leaves(
             bart['X'],
@@ -1143,13 +1145,14 @@ def sum_resid(resid, leaf_indices, tree_size, batch_size):
     return aggr_func(resid, leaf_indices, tree_size, jnp.float32)
 
 def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
-    nbatches = indices.size // batch_size + bool(indices.size % batch_size)
-    batch_indices = jnp.arange(indices.size) // batch_size
+    n, = indices.shape
+    nbatches = n // batch_size + bool(n % batch_size)
+    batch_indices = jnp.arange(n) % nbatches
     return (jnp
-        .zeros((nbatches, size), dtype)
-        .at[batch_indices, indices]
+        .zeros((size, nbatches), dtype)
+        .at[indices, batch_indices]
         .add(values)
-        .sum(axis=0)
+        .sum(axis=1)
     )
 
 def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):
@@ -1206,7 +1209,7 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, 
 
 def accept_moves_final_stage(bart, counts, grow_moves, prune_moves):
     bart = bart.copy()
-    
+
     for k, v in counts.items():
         bart[k] = jnp.sum(v, axis=0)
 
