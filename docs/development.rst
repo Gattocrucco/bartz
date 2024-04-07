@@ -10,10 +10,10 @@
 .. to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 .. copies of the Software, and to permit persons to whom the Software is
 .. furnished to do so, subject to the following conditions:
-.. 
+..
 .. The above copyright notice and this permission notice shall be included in all
 .. copies or substantial portions of the Software.
-.. 
+..
 .. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 .. IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 .. FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -28,38 +28,39 @@ Development
 Initial setup
 -------------
 
-Clone the repository:
+`Fork <https://github.com/Gattocrucco/bartz/fork>`_ the repository on Github, then clone the fork:
 
 .. code-block:: shell
 
-    $ git clone git@github.com:Gattocrucco/bartz.git
-    $ cd bartz
+    git clone git@github.com:YourGithubUserName/bartz.git
+    cd bartz
 
 Install `poetry <https://python-poetry.org/docs/#installation>`_. My favorite complete installation route on macOS:
 
 * Install `brew <https://brew.sh/>`_, then add :literal:`brew` to the :literal:`PATH`
-* :literal:`$ brew install pipx`, then add :literal:`pipx`'s directory to the :literal:`PATH`
-* :literal:`$ pipx install poetry`
+* :literal:`brew install pipx`, then add :literal:`pipx`'s directory to the :literal:`PATH`
+* :literal:`pipx install poetry`
 
 Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html>`_ or an equivalent package manager like :literal:`mamba` or :literal:`micromamba`. My favorite is :literal:`micromamba`:
 
 .. code-block:: shell
 
-    $ brew install micromamba
+    brew install micromamba
 
 Create a virtual environment from the file spec:
 
 .. code-block:: shell
 
-    $ micromamba env create --file condaenv.yml
-    $ micromamba activate bartz
-    (bartz) $ poetry config virtualenvs.create false --local # to make sure poetry does not create another virtualenv
+    micromamba env create --file condaenv.yml
+    micromamba activate bartz
+    poetry config virtualenvs.create false --local # to make sure poetry does not create another virtualenv
 
 Finally, install the package with
 
 .. code-block:: shell
 
-    (bartz) $ poetry install
+    poetry install
+    pre-commit install
 
 Routine setup
 -------------
@@ -68,18 +69,8 @@ Each time you want to work on `bartz` in a terminal, do
 
 .. code-block:: shell
 
-    $ cd <...>/bartz
-    $ micromamba activate bartz # or the activation command for your env
-    (bartz) $
-
-Maintainer setup
-----------------
-
-Login to PyPI, create a token, add it to poetry with
-
-.. code-block:: shell
-
-    $ poetry config pypi-token.pypi <token>
+    cd <...>/bartz
+    micromamba activate bartz # or the activation command for your env
 
 Commands
 --------
