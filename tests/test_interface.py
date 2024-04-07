@@ -280,3 +280,4 @@ def test_jit(X, y, key, kw):
 # - diff trees
 #    - at each iteration, the trees differ at most in two split nodes
 # - use dataframes/series
+# - check the types in the state

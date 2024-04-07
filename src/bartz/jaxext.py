@@ -249,16 +249,12 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
     def move_axes_out(axes, tree):
         def move_axis_out(axis, x):
-            if axis != 0:
-                return jnp.moveaxis(x, axis, 0)
-            return x
+            return jnp.moveaxis(x, axis, 0)
         return tree_util.tree_map(move_axis_out, axes, tree)
 
     def move_axes_in(axes, tree):
         def move_axis_in(axis, x):
-            if axis != 0:
-                return jnp.moveaxis(x, 0, axis)
-            return x
+            return jnp.moveaxis(x, 0, axis)
         return tree_util.tree_map(move_axis_in, axes, tree)
 
     def batch(tree, nbatches):

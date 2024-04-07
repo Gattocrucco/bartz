@@ -34,6 +34,7 @@ range of possible values.
 """
 
 import functools
+import math
 
 import jax
 from jax import random
