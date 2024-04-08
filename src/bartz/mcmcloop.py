@@ -133,12 +133,9 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     return bart, burnin_trace, main_trace
 
-    # TODO I could add an argument callback_state to carry over state. This would allow e.g. accumulating counts. If I made the callback return the mcmc state, I could modify the mcmc from the callback.
-
 @functools.lru_cache
     # cache to make the callback function object unique, such that the jit
-    # of run_mcmc recognizes it => with the callback state, I can make
-    # printevery a runtime quantity
+    # of run_mcmc recognizes it
 def make_simple_print_callback(printevery):
     """
     Create a logging callback function for MCMC iterations.

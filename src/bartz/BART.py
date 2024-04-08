@@ -49,6 +49,9 @@ class gbart:
         The training responses.
     x_test : array (p, m) or DataFrame, optional
         The test predictors.
+    usequants : bool, default False
+        Whether to use predictors quantiles instead of a uniform grid to bin
+        predictors.
     sigest : float, optional
         An estimate of the residual standard deviation on `y_train`, used to
         set `lamda`. If not specified, it is estimated by linear regression.
@@ -82,10 +85,16 @@ class gbart:
     ntree : int, default 200
         The number of trees used to represent the latent mean function.
     numcut : int, default 255
-        The maximum number of cutpoints to use for binning the predictors. Each
-        predictor is binned such that its distribution in `x_train` is
-        approximately uniform across bins. The number of bins is at most the
-        number of unique values appearing in `x_train`, or ``numcut + 1``.
+        If `usequants` is `False`: the exact number of cutpoints used to bin the
+        predictors, ranging between the minimum and maximum observed values
+        (excluded).
+
+        If `usequants` is `True`: the maximum number of cutpoints to use for
+        binning the predictors. Each predictor is binned such that its
+        distribution in `x_train` is approximately uniform across bins. The
+        number of bins is at most the number of unique values appearing in
+        `x_train`, or ``numcut + 1``.
+
         Before running the algorithm, the predictors are compressed to the
         smallest integer type that fits the bin indices, so `numcut` is best set
         to the maximum value of an unsigned integer type.
@@ -126,6 +135,8 @@ class gbart:
         The number of trees.
     maxdepth : int
         The maximum depth of the trees.
+    initkw : dict
+        Additional arguments passed to `mcmcstep.init`.
 
     Methods
     -------
@@ -133,17 +144,21 @@ class gbart:
 
     Notes
     -----
-    This interface imitates the function `gbart` from the R package `BART
+    This interface imitates the function ``gbart`` from the R package `BART
     <https://cran.r-project.org/package=BART>`_, but with these differences:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
       instead of per column.
+    - If ``usequants=False``, R BART switches to quantiles anyway if there are
+      less predictor values than the required number of bins, while bartz
+      always follows the specification.
     - The error variance parameter is called `lamda` instead of `lambda`.
-    - `usequants` is always `True`.
     - `rm_const` is always `False`.
     - The default `numcut` is 255 instead of 100.
     - A lot of functionality is missing (variable selection, discrete response).
     - There are some additional attributes, and some missing.
+
+    The linear regression used to set `sigest` adds an intercept.
     """
 
     def __init__(self, x_train, y_train, *,

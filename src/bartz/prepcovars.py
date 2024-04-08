@@ -84,6 +84,25 @@ def _quantilized_splits_from_matrix(x, out_length):
 
 @functools.partial(jax.jit, static_argnums=(1,))
 def uniform_splits_from_matrix(X, num_bins):
+    """
+    Make an evenly spaced binning grid.
+
+    Parameters
+    ----------
+    X : array (p, n)
+        A matrix with `p` predictors and `n` observations.
+    num_bins : int
+        The number of bins to produce.
+
+    Returns
+    -------
+    splits : array (p, num_bins - 1)
+        A matrix containing, for each predictor, the boundaries between bins.
+        The excluded endpoints are the minimum and maximum value in each row of
+        `X`.
+    max_split : array (p,)
+        The number of cutpoints in each row of `splits`, i.e., ``num_bins - 1``.
+    """
     low = jnp.min(X, axis=1)
     high = jnp.max(X, axis=1)
     splits = jnp.linspace(low, high, num_bins + 1, axis=1)[:, 1:-1]
@@ -107,6 +126,8 @@ def bin_predictors(X, splits, **kw):
         `m` is the maximum number of splits; each row may have shorter
         actual length, marked by padding unused locations at the end of the
         row with the maximum value allowed by the type.
+    **kw : dict
+        Additional arguments are passed to `jax.numpy.searchsorted`.
 
     Returns
     -------

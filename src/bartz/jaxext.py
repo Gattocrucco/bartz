@@ -196,13 +196,14 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         A jittable function with positional arguments only, with inputs and
         outputs pytrees of arrays.
     max_io_nbytes : int
-        The maximum number of input + output bytes in each batch.
-    in_axes : pytree of ints, default 0
+        The maximum number of input + output bytes in each batch (excluding
+        unbatched arguments.)
+    in_axes : pytree of int or None, default 0
         A tree matching the structure of the function input, indicating along
         which axes each array should be batched. If a single integer, it is
-        used for all arrays.
+        used for all arrays. A `None` axis indicates to not batch an argument.
     out_axes : pytree of ints, default 0
-        The same for outputs.
+        The same for outputs (but non-batching is not allowed).
     return_nbatches : bool, default False
         If True, the number of batches is returned as a second output.
 

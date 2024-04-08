@@ -163,12 +163,14 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees
     split_trees : array (m, 2 ** (d - 1))
         The decision boundaries of the trees.
     dtype : dtype, optional
-        The dtype of the output.
+        The dtype of the output. Ignored if `sum_trees` is `False`.
+    sum_trees : bool, default True
+        Whether to sum the values across trees.
 
     Returns
     -------
-    out : array (n,)
-        The sum of the values of the trees at the points in `X`.
+    out : array (n,) or (m, n)
+        The (sum of) the values of the trees at the points in `X`.
     """
     indices = traverse_forest(X, var_trees, split_trees)
     ntree, _ = leaf_trees.shape
