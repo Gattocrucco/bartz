@@ -281,7 +281,10 @@ class gbart:
             elif y_train.size <= x_train.shape[0]:
                 sigest2 = jnp.var(y_train - offset)
             else:
-                _, chisq, rank, _ = jnp.linalg.lstsq(x_train.T, y_train - offset)
+                x_centered = x_train.T - x_train.mean(axis=1)
+                y_centered = y_train - y_train.mean()
+                    # centering is equivalent to adding an intercept column
+                _, chisq, rank, _ = jnp.linalg.lstsq(x_centered, y_centered)
                 chisq = chisq.squeeze(0)
                 dof = len(y_train) - rank
                 sigest2 = chisq / dof

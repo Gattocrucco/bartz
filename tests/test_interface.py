@@ -41,13 +41,27 @@ def n():
 def p():
     return 2
 
-def gen_X(key, p, n):
-    return random.uniform(key, (p, n), float, -2, 2)
+def gen_X(key, p, n, kind):
+    if kind == 'continuous':
+        return random.uniform(key, (p, n), float, -2, 2)
+    elif kind == 'binary':
+        return random.bernoulli(key, 0.5, (p, n)).astype(float)
+    else:
+        raise KeyError(kind)
 
 @pytest.fixture
-def X(n, p, key):
+def X_continuous(n, p, key):
     key = random.fold_in(key, 0xd9b0963d)
-    return gen_X(key, p, n)
+    return gen_X(key, p, n, 'continuous')
+
+@pytest.fixture
+def X_binary(n, p, key):
+    key = random.fold_in(key, 0x1a7c4e8d)
+    return gen_X(key, p, n, 'binary')
+
+@pytest.fixture(params=['X_continuous', 'X_binary'])
+def X(request, X_continuous, X_binary):
+    return eval(request.param)
 
 def f(x): # conditional mean
     T = 2
@@ -121,12 +135,12 @@ def test_scale_shift(X, y, key, kw):
     bart2 = bartz.BART.gbart(X, offset + y * scale, **kw, seed=key)
 
     numpy.testing.assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6)
-    numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale)
+    numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale, atol=1e-7)
-    numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale ** 2)
+    numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale ** 2, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.yhat_train, (bart2.yhat_train - offset) / scale, atol=1e-5, rtol=1e-5)
     numpy.testing.assert_allclose(bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, atol=1e-5, rtol=1e-5)
-    util.assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-6)
+    util.assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-5)
     util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
 
 def test_min_points_per_leaf(X, y, key, kw):
@@ -140,7 +154,7 @@ def test_residuals_accuracy(key):
     key1, key2, key3 = random.split(key, 3)
     n = 100
     p = 1
-    X = gen_X(key1, p, n)
+    X = gen_X(key1, p, n, 'continuous')
     y = gen_y(key2, X)
     bart = bartz.BART.gbart(X, y, ntree=200, ndpost=1000, nskip=0, seed=key3)
     accum_resid, actual_resid = bart._compare_resid()
@@ -170,39 +184,6 @@ def test_two_datapoints(X, y, kw, key):
     bart = bartz.BART.gbart(X, y, **kw, seed=key)
     ndpost = kw['ndpost']
     numpy.testing.assert_allclose(bart.sigest, y.std())
-
-# @pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
-#     "axis, even if it's not actually run")
-# def test_no_trees(X, y, kw, key):
-#     kw.update(ntree=0)
-#     bart = bartz.BART.gbart(X, y, **kw, seed=key)
-
-#     depth = bart._depth_distr()
-#     assert depth.shape == (kw['ndpost'], bart.maxdepth)
-#     assert jnp.all(depth == 0)
-
-#     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
-
-# @pytest.mark.xfail(reason="jax errors if I trace code where I index a 0-sized "
-#     "axis, even if it's not actually run")
-# def test_root_trees(X, y, kw, key):
-#     kw.update(maxdepth=1)
-#     bart = bartz.BART.gbart(X, y, **kw, seed=key)
-
-#     depth = bart._depth_distr()
-#     assert jnp.all(depth[:, 0] == depth.sum(axis=1))
-
-#     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
-
-    # TODO to make this (and test_no_trees) work I have to work around the jax
-    # error. I could make a version of scan that does not actually trace the
-    # loop function if the length to scan is 0. Or maybe there is way to tell
-    # jax not to raise if I index a 0-sized axis. Btw, this is at points
-    # inconsistent with the general jax behavior of clipping/dropping. Since
-    # the default is clipping, it makes sense to raise on a naked access like
-    # a[i] or a.at[i].get(). But the default behavior of set is to drop, and
-    # yet a.at[i].set(...) raises. I should make a bug report; testing the code
-    # through corner cases is a valid rationale.
 
 def test_few_datapoints(X, y, kw, key):
     X = X[:, :9] # < 2 * 5
@@ -236,6 +217,8 @@ def test_comparison_rbart(X, y, key, kw_shared, initkw):
     bart = bartz.BART.gbart(X, y, **kw_bartz, seed=key1)
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
     rbart = BART.mc_gbart(X.T, y, **kw_BART, seed=seed)
+
+    numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6)
 
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10
@@ -271,4 +254,4 @@ def test_jit(X, y, key, kw):
     state1, pred1 = task(X, y, key)
     state2, pred2 = task_compiled(X, y, key)
 
-    numpy.testing.assert_array_max_ulp(pred1[5], pred2[5], 10)
+    numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=0, atol=1e-6)

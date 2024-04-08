@@ -57,64 +57,84 @@ def test_unique_empty_output():
     assert out.dtype == x.dtype
     assert length == 0
 
-@pytest.mark.parametrize('target_nbatches', [1, 7])
-@pytest.mark.parametrize('with_margin', [False, True])
-@pytest.mark.parametrize('additional_size', [3, 0])
-def test_autobatch(key, target_nbatches, with_margin, additional_size):
+class TestAutoBatch:
 
-    def func(a, b, c):
-        return (a * b[:, None]).sum(1), c * b[None, :]
+    @pytest.mark.parametrize('target_nbatches', [1, 7])
+    @pytest.mark.parametrize('with_margin', [False, True])
+    @pytest.mark.parametrize('additional_size', [3, 0])
+    def test_batch_size(self, key, target_nbatches, with_margin, additional_size):
 
-    atomic_batch_size = additional_size + 12
-    multiplier = 2
-    batch_size = multiplier * atomic_batch_size
-    if with_margin:
-        batch_size += 1
-    size = target_nbatches * multiplier
+        def func(a, b, c):
+            return (a * b[:, None]).sum(1), c * b[None, :]
 
-    key = random.split(key, 3)
-    a = random.uniform(key[0], (size, additional_size))
-    b = random.uniform(key[1], (size,))
-    c = random.uniform(key[2], (5, size))
+        atomic_batch_size = additional_size + 12
+        multiplier = 2
+        batch_size = multiplier * atomic_batch_size
+        if with_margin:
+            batch_size += 1
+        size = target_nbatches * multiplier
 
-    assert atomic_batch_size == a.shape[1] + 1 + c.shape[0] + 1 + c.shape[0]
+        key = random.split(key, 3)
+        a = random.uniform(key[0], (size, additional_size))
+        b = random.uniform(key[1], (size,))
+        c = random.uniform(key[2], (5, size))
 
-    batch_nbytes = batch_size * a.itemsize
-    batched_func = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1), return_nbatches=True)
-    batched_func_nobatches = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1))
+        assert atomic_batch_size == a.shape[1] + 1 + c.shape[0] + 1 + c.shape[0]
 
-    out1 = func(a, b, c)
-    out2, nbatches = batched_func(a, b, c)
-    out3 = batched_func_nobatches(a, b, c)
+        batch_nbytes = batch_size * a.itemsize
+        batched_func = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1), return_nbatches=True)
+        batched_func_nobatches = jaxext.autobatch(func, batch_nbytes, (0, 0, 1), (0, 1))
 
-    assert nbatches == target_nbatches
+        out1 = func(a, b, c)
+        out2, nbatches = batched_func(a, b, c)
+        out3 = batched_func_nobatches(a, b, c)
 
-    for o2, o3 in zip(out2, out3):
-        numpy.testing.assert_array_max_ulp(o2, o3)
-    for o1, o2 in zip(out1, out2):
-        numpy.testing.assert_array_max_ulp(o1, o2)
+        assert nbatches == target_nbatches
 
-def test_autobatch_none():
+        for o2, o3 in zip(out2, out3):
+            numpy.testing.assert_array_max_ulp(o2, o3)
+        for o1, o2 in zip(out1, out2):
+            numpy.testing.assert_array_max_ulp(o1, o2)
 
-    def func(a, b):
-        return a + b
-    batched_func = jaxext.autobatch(func, 32, (0, None))
+    def test_unbatched_arg(self):
 
-    a = jnp.arange(100)
-    b = 2
+        def func(a, b):
+            return a + b
+        batched_func = jaxext.autobatch(func, 32, (0, None))
 
-    out1 = func(a, b)
-    out2 = batched_func(a, b)
+        a = jnp.arange(100)
+        b = 2
 
-    numpy.testing.assert_array_max_ulp(out1, out2)
+        out1 = func(a, b)
+        out2 = batched_func(a, b)
 
-def test_autobatch_warning():
-    x = jnp.arange(10_000).reshape(10, 1000)
-    def f(x):
-        return x
-    g = jaxext.autobatch(f, 100)
-    with pytest.warns(UserWarning, match=' > max_io_nbytes = '):
-        g(x)
+        numpy.testing.assert_array_max_ulp(out1, out2)
+
+    def test_large_batch_warning(self):
+        x = jnp.arange(10_000).reshape(10, 1000)
+        def f(x):
+            return x
+        g = jaxext.autobatch(f, 100)
+        with pytest.warns(UserWarning, match=' > max_io_nbytes = '):
+            g(x)
+
+    def test_empty_values(self):
+        x = jnp.empty((10, 0))
+        def f(x):
+            return x
+        g = jaxext.autobatch(f, 100, return_nbatches=True)
+        y, nbatches = g(x)
+        assert nbatches == 1
+        assert jnp.all(y == x)
+
+    def test_zero_size(self):
+        x = jnp.empty((0, 10))
+        def f(x):
+            return x
+        g = jaxext.autobatch(f, 100, return_nbatches=True)
+        y, nbatches = g(x)
+        assert nbatches == 1
+        assert jnp.all(y == x)
 
 def test_leaf_dict_repr():
     x = jaxext.LeafDict(a=1)

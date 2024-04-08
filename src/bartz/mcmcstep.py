@@ -155,13 +155,15 @@ def init(*,
     large_float = jnp.dtype(large_float)
     y = jnp.asarray(y, small_float)
     resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y)
+    sigma2 = jnp.array(sigma2_beta / sigma2_alpha, large_float)
+    sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
 
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
         var_trees=make_forest(max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float),
-        sigma2=jnp.ones((), large_float),
+        sigma2=sigma2,
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
         prune_prop_count=jnp.zeros((), int),
@@ -1258,7 +1260,7 @@ def sample_sigma(bart, key):
 
     resid = bart['resid']
     alpha = bart['sigma2_alpha'] + resid.size / 2
-    norm2 = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
+    norm2 = jnp.dot(resid, resid, preferred_element_type=bart['opt']['large_float'])
     beta = bart['sigma2_beta'] + norm2 / 2
 
     sample = random.gamma(key, alpha)

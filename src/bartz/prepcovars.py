@@ -55,10 +55,10 @@ def quantilized_splits_from_matrix(X, max_bins):
     """
     out_length = min(max_bins, X.shape[1]) - 1
     # return _quantilized_splits_from_matrix(X, out_length)
-    @functools.partial(jaxext.autobatch, max_io_nbytes=500_000_000)
-    def func(X):
+    @functools.partial(jaxext.autobatch, max_io_nbytes=2 ** 29)
+    def quantilize(X):
         return _quantilized_splits_from_matrix(X, out_length)
-    return func(X)
+    return quantilize(X)
 
 @functools.partial(jax.vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(x, out_length):
@@ -91,8 +91,8 @@ def uniform_splits_from_matrix(X, num_bins):
     max_split = jnp.full(*splits.shape, jaxext.minimal_unsigned_dtype(num_bins - 1))
     return splits, max_split
 
-@jax.jit
-def bin_predictors(X, splits):
+@functools.partial(jax.jit, static_argnames=('method',))
+def bin_predictors(X, splits, **kw):
     """
     Bin the predictors according to the given splits.
 
@@ -114,9 +114,9 @@ def bin_predictors(X, splits):
         A matrix with `p` predictors and `n` observations, where each predictor
         has been replaced by the index of the bin it falls into.
     """
-    return _bin_predictors(X, splits)
-
-@jax.vmap
-def _bin_predictors(x, splits):
-    dtype = jaxext.minimal_unsigned_dtype(splits.size)
-    return jnp.searchsorted(splits, x).astype(dtype)
+    @functools.partial(jaxext.autobatch, max_io_nbytes=2 ** 29)
+    @jax.vmap
+    def bin_predictors(x, splits):
+        dtype = jaxext.minimal_unsigned_dtype(splits.size)
+        return jnp.searchsorted(splits, x, **kw).astype(dtype)
+    return bin_predictors(X, splits)

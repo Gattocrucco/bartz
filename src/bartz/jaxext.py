@@ -253,6 +253,8 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         return dividend
 
     def next_divisor(dividend, min_divisor):
+        if dividend == 0:
+            return min_divisor
         if min_divisor * min_divisor <= dividend:
             return next_divisor_small(dividend, min_divisor)
         return next_divisor_large(dividend, min_divisor)
@@ -317,8 +319,9 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
         total_nbytes = sum_nbytes((args, example_result))
         min_nbatches = total_nbytes // max_io_nbytes + bool(total_nbytes % max_io_nbytes)
+        min_nbatches = max(1, min_nbatches)
         nbatches = next_divisor(size, min_nbatches)
-        assert 1 <= nbatches <= size
+        assert 1 <= nbatches <= max(1, size)
         assert size % nbatches == 0
         assert total_nbytes % nbatches == 0
 
