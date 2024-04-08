@@ -26,6 +26,22 @@ SOFTWARE.
 
 # Changelog
 
+## 0.3.0
+
+* 2-3x faster on CPU.
+* Uses less memory.
+* Add `initkw` argument to `BART.gbart` for advanced configuration of the MCMC initialization.
+* Modified the automatic determination of `sigest` in `BART.gbart` to match the one of the R package.
+* Add `usequants=False` option to `BART.gbart`, which is now the default.
+* New function `prepcovars.uniform_splits_from_matrix`.
+* Add `sum_trees=False` option to `grove.evaluate_forest` to evaluate separately each tree.
+* Support non-batched arguments in `jaxext.autobatch`.
+* Fix a bug with empty arrays in `jaxext.autobatch`.
+* New option in `mcmcstep.init` to save the acceptance ratios.
+* Separate batching options for residuals and counts.
+* Sweeping changes to the tree move internals, more computations are parallel across trees.
+* Added support for `dbarts` in the unit tests.
+
 ## 0.2.1
 
 * Fix a bug that prevented using bart in a compiled function.
