@@ -841,8 +841,8 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart : dict
         The new BART mcmc state.
     """
-    bart, grow_moves, prune_moves, count_trees, move_counts, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
-    bart, grow_moves, prune_moves = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z)
+    bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
+    bart, grow_moves, prune_moves = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, prelkv, prelk, u, z)
     return accept_moves_final_stage(bart, grow_moves, prune_moves)
 
 def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
@@ -878,32 +878,30 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     """
     bart = bart.copy()
 
-    bart['var_trees'] = grow_moves['var_tree']
-        # Since var_tree can contain garbage, I can set the var of leaf to be
-        # grown irrespectively of what move I'm gonna accept in the end.
-
-    bart['leaf_indices'] = apply_grow_to_indices(grow_moves, bart['leaf_indices'], bart['X'])
-
-    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], grow_moves, prune_moves, bart['opt']['count_batch_size'])
-
-    grow_moves, prune_moves = complete_ratio(grow_moves, prune_moves, move_counts, bart['min_points_per_leaf'])
-
-    if bart['opt']['require_min_points']:
-        count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
-        bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
-
-    bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
-
     key, subkey = random.split(key)
     u0, u1 = random.uniform(subkey, (2, len(bart['leaf_trees'])), bart['opt']['large_float'])
     z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
 
-    grow_moves, prune_moves = propose_moves(grow_moves, prune_moves, u0)
+    # modify the state like the grow move was accepted
+    bart['var_trees'] = grow_moves['var_tree']
+    bart['leaf_indices'] = apply_grow_to_indices(grow_moves, bart['leaf_indices'], bart['X'])
+    bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
 
+    # count number of datapoints per leaf
+    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], grow_moves, prune_moves, bart['opt']['count_batch_size'])
+    if bart['opt']['require_min_points']:
+        count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
+        bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
+
+    # compute some missing information about moves
+    grow_moves, prune_moves = complete_ratio(grow_moves, prune_moves, move_counts, bart['min_points_per_leaf'])
+    grow_moves, prune_moves = propose_moves(grow_moves, prune_moves, u0)
     bart['grow_prop_count'] = jnp.sum(grow_moves['prop'])
     bart['prune_prop_count'] = jnp.sum(prune_moves['prop'])
 
-    return bart, grow_moves, prune_moves, count_trees, move_counts, u1, z
+    prelkv, prelk = precompute_likelihood_terms(count_trees, bart['sigma2'], move_counts)
+
+    return bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, u1, z
 
 def apply_grow_to_indices(grow_moves, leaf_indices, X):
     """
@@ -1128,7 +1126,27 @@ def propose_moves(grow_moves, prune_moves, u):
     prune_moves['prop'] = prune_moves['allowed'] & ~grow_moves['prop']
     return grow_moves, prune_moves
 
-def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z):
+def precompute_likelihood_terms(count_trees, sigma2, move_counts):
+    ntree = len(count_trees)
+    sigma_mu2 = 1 / ntree
+    def compute_one_move(counts):
+        terms = dict()
+        terms['sigma2_left'] = sigma2 + counts['left'] * sigma_mu2
+        terms['sigma2_right'] = sigma2 + counts['right'] * sigma_mu2
+        terms['sigma2_total'] = sigma2 + counts['total'] * sigma_mu2
+        terms['sqrt_term'] = jnp.sqrt(
+            sigma2 * terms['sigma2_total'] /
+            (terms['sigma2_left'] * terms['sigma2_right'])
+        )
+        return terms
+    return dict(
+        grow=compute_one_move(move_counts['grow']),
+        prune=compute_one_move(move_counts['prune']),
+    ), dict(
+        exp_factor=sigma_mu2 / (2 * sigma2),
+    )
+
+def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, prelkv, prelk, u, z):
     """
     The part of accepting the moves that has to be done one tree at a time.
 
@@ -1169,6 +1187,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
             bart['sigma2'],
             bart['min_points_per_leaf'],
             'ratios' in bart,
+            prelk,
             *item,
         )
         return resid, (leaf_tree, do_grow, do_prune, ratios)
@@ -1177,6 +1196,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
         bart['leaf_trees'], count_trees,
         grow_moves, prune_moves, move_counts,
         bart['leaf_indices'],
+        prelkv,
         u, z,
     )
     resid, (leaf_trees, do_grow, do_prune, ratios) = lax.scan(loop, bart['resid'], items)
@@ -1189,7 +1209,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
 
     return bart, grow_moves, prune_moves
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, u, z):
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, prelkv, u, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -1271,8 +1291,8 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     # accepted.
 
     # compute likelihood ratios
-    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, move_counts['grow']['total'], move_counts['grow']['left'], move_counts['grow']['right'], sigma2, ntree)
-    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, move_counts['prune']['total'], move_counts['prune']['left'], move_counts['prune']['right'], sigma2, ntree)
+    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, prelkv['grow'], prelk)
+    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prelkv['prune'], prelk)
 
     # compute acceptance ratios
     grow_ratio = grow_move['trans_prior_ratio'] * grow_lk_ratio
@@ -1365,7 +1385,7 @@ def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
         .sum(axis=1)
     )
 
-def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, left_count, right_count, sigma2, n_tree):
+def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk):
     """
     Compute the likelihood ratio of a grow move.
 
@@ -1389,21 +1409,12 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, 
     ratio : float
         The likelihood ratio P(data | new tree) / P(data | old tree).
     """
-
-    sigma_mu2 = 1 / n_tree
-    sigma2_left = sigma2 + left_count * sigma_mu2
-    sigma2_right = sigma2 + right_count * sigma_mu2
-    sigma2_total = sigma2 + total_count * sigma_mu2
-
-    sqrt_term = sigma2 * sigma2_total / (sigma2_left * sigma2_right)
-
-    exp_term = sigma_mu2 / (2 * sigma2) * (
-        left_resid * left_resid / sigma2_left +
-        right_resid * right_resid / sigma2_right -
-        total_resid * total_resid / sigma2_total
+    exp_term = prelk['exp_factor'] * (
+        left_resid * left_resid / prelkv['sigma2_left'] +
+        right_resid * right_resid / prelkv['sigma2_right'] -
+        total_resid * total_resid / prelkv['sigma2_total']
     )
-
-    return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
+    return prelkv['sqrt_term'] * jnp.exp(exp_term)
 
 def accept_moves_final_stage(bart, grow_moves, prune_moves):
     """
