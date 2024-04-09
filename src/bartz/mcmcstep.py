@@ -203,12 +203,12 @@ def init(*,
     if save_ratios:
         bart['ratios'] = dict(
             grow=dict(
-                trans_prior=jnp.full(num_trees, jnp.nan),
-                likelihood=jnp.full(num_trees, jnp.nan),
+                log_trans_prior=jnp.full(num_trees, jnp.nan),
+                log_likelihood=jnp.full(num_trees, jnp.nan),
             ),
             prune=dict(
-                trans_prior=jnp.full(num_trees, jnp.nan),
-                likelihood=jnp.full(num_trees, jnp.nan),
+                log_trans_prior=jnp.full(num_trees, jnp.nan),
+                log_likelihood=jnp.full(num_trees, jnp.nan),
             ),
         )
 
@@ -881,6 +881,7 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     key, subkey = random.split(key)
     u0, u1 = random.uniform(subkey, (2, len(bart['leaf_trees'])), bart['opt']['large_float'])
     z = random.normal(key, bart['leaf_trees'].shape, bart['opt']['large_float'])
+    logu = jnp.log1p(-u1)
 
     # modify the state like the grow move was accepted
     bart['var_trees'] = grow_moves['var_tree']
@@ -901,7 +902,7 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
 
     prelkv, prelk = precompute_likelihood_terms(count_trees, bart['sigma2'], move_counts)
 
-    return bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, u1, z
+    return bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, logu, z
 
 def apply_grow_to_indices(grow_moves, leaf_indices, X):
     """
@@ -1054,8 +1055,8 @@ def complete_ratio(grow_moves, prune_moves, move_counts, min_points_per_leaf):
     prune_moves = prune_moves.copy()
     compute_p_prune_vec = jax.vmap(compute_p_prune, in_axes=(0, 0, 0, None))
     grow_p_prune, prune_p_prune = compute_p_prune_vec(grow_moves, move_counts['grow']['left'], move_counts['grow']['right'], min_points_per_leaf)
-    grow_moves['trans_prior_ratio'] = grow_moves.pop('partial_ratio') * grow_p_prune
-    prune_moves['trans_prior_ratio'] = prune_moves.pop('partial_ratio') * prune_p_prune
+    grow_moves['log_trans_prior_ratio'] = jnp.log(grow_moves.pop('partial_ratio') * grow_p_prune)
+    prune_moves['log_trans_prior_ratio'] = jnp.log(prune_moves.pop('partial_ratio') * prune_p_prune)
     return grow_moves, prune_moves
 
 def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):
@@ -1134,10 +1135,10 @@ def precompute_likelihood_terms(count_trees, sigma2, move_counts):
         terms['sigma2_left'] = sigma2 + counts['left'] * sigma_mu2
         terms['sigma2_right'] = sigma2 + counts['right'] * sigma_mu2
         terms['sigma2_total'] = sigma2 + counts['total'] * sigma_mu2
-        terms['sqrt_term'] = jnp.sqrt(
+        terms['sqrt_term'] = jnp.log(
             sigma2 * terms['sigma2_total'] /
             (terms['sigma2_left'] * terms['sigma2_right'])
-        )
+        ) / 2
         return terms
     return dict(
         grow=compute_one_move(move_counts['grow']),
@@ -1209,7 +1210,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
 
     return bart, grow_moves, prune_moves
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, prelkv, u, z):
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, prelkv, logu, z):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -1291,34 +1292,34 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     # accepted.
 
     # compute likelihood ratios
-    grow_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, prelkv['grow'], prelk)
-    prune_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prelkv['prune'], prelk)
+    grow_log_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, prelkv['grow'], prelk)
+    prune_log_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prelkv['prune'], prelk)
 
     # compute acceptance ratios
-    grow_ratio = grow_move['trans_prior_ratio'] * grow_lk_ratio
-    if min_points_per_leaf is not None:
-        grow_ratio = jnp.where(move_counts['grow']['left'] >= min_points_per_leaf, grow_ratio, 0)
-        grow_ratio = jnp.where(move_counts['grow']['right'] >= min_points_per_leaf, grow_ratio, 0)
-    prune_ratio = prune_move['trans_prior_ratio'] * prune_lk_ratio
-    prune_ratio = lax.reciprocal(prune_ratio)
+    grow_log_ratio = grow_move['log_trans_prior_ratio'] + grow_log_lk_ratio
+    prune_log_ratio = prune_move['log_trans_prior_ratio'] + prune_log_lk_ratio
+    prune_log_ratio = -prune_log_ratio
 
     # save acceptance ratios
     ratios = {}
     if save_ratios:
         ratios.update(
             grow=dict(
-                trans_prior=grow_move['trans_prior_ratio'],
-                likelihood=grow_lk_ratio,
+                log_trans_prior=grow_move['log_trans_prior_ratio'],
+                log_likelihood=grow_log_lk_ratio,
             ),
             prune=dict(
-                trans_prior=lax.reciprocal(prune_move['trans_prior_ratio']),
-                likelihood=lax.reciprocal(prune_lk_ratio),
+                log_trans_prior=lax.reciprocal(prune_move['log_trans_prior_ratio']),
+                log_likelihood=lax.reciprocal(prune_log_lk_ratio),
             ),
         )
 
     # determine whether to accept the move
-    do_grow = grow_move['prop'] & (u < grow_ratio)
-    do_prune = prune_move['prop'] & (u < prune_ratio)
+    do_grow = grow_move['prop'] & (logu <= grow_log_ratio)
+    if min_points_per_leaf is not None:
+        do_grow &= move_counts['grow']['left'] >= min_points_per_leaf
+        do_grow &= move_counts['grow']['right'] >= min_points_per_leaf
+    do_prune = prune_move['prop'] & (logu <= prune_log_ratio)
 
     # compute leaves posterior and sample leaves
     inv_sigma2 = lax.reciprocal(sigma2)
@@ -1414,7 +1415,7 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
         right_resid * right_resid / prelkv['sigma2_right'] -
         total_resid * total_resid / prelkv['sigma2_total']
     )
-    return prelkv['sqrt_term'] * jnp.exp(exp_term)
+    return prelkv['sqrt_term'] + exp_term
 
 def accept_moves_final_stage(bart, grow_moves, prune_moves):
     """
