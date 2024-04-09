@@ -842,8 +842,8 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
         The new BART mcmc state.
     """
     bart, grow_moves, prune_moves, count_trees, move_counts, u, z = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
-    bart, do_grow, do_prune = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z)
-    return accept_moves_final_stage(bart, do_grow, do_prune, grow_moves, prune_moves)
+    bart, grow_moves, prune_moves = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, u, z)
+    return accept_moves_final_stage(bart, grow_moves, prune_moves)
 
 def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     """
@@ -1157,6 +1157,8 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
         The indicators of proposals and acceptances for grow and prune moves.
     """
     bart = bart.copy()
+    grow_moves = grow_moves.copy()
+    prune_moves = prune_moves.copy()
 
     def loop(resid, item):
         resid, leaf_tree, split_tree, do_grow, do_prune, ratios = accept_move_and_sample_leaves(
@@ -1184,7 +1186,10 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
     bart['split_trees'] = split_trees
     bart.get('ratios', {}).update(ratios)
 
-    return bart, do_grow, do_prune
+    grow_moves['acc'] = do_grow
+    prune_moves['acc'] = do_prune
+
+    return bart, grow_moves, prune_moves
 
 def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min_points_per_leaf, save_ratios, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, u, z):
     """
@@ -1408,7 +1413,7 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, total_count, 
 
     return jnp.sqrt(sqrt_term) * jnp.exp(exp_term)
 
-def accept_moves_final_stage(bart, do_grow, do_prune, grow_moves, prune_moves):
+def accept_moves_final_stage(bart, grow_moves, prune_moves):
     """
     The final part of accepting the moves, in parallel across trees.
 
@@ -1427,12 +1432,12 @@ def accept_moves_final_stage(bart, do_grow, do_prune, grow_moves, prune_moves):
         The fully updated BART mcmc state.
     """
     bart = bart.copy()
-    bart['grow_acc_count'] = jnp.sum(do_grow)
-    bart['prune_acc_count'] = jnp.sum(do_prune)
-    bart['leaf_indices'] = apply_moves_to_indices(bart['leaf_indices'], do_grow, do_prune, grow_moves, prune_moves)
+    bart['grow_acc_count'] = jnp.sum(grow_moves['acc'])
+    bart['prune_acc_count'] = jnp.sum(prune_moves['acc'])
+    bart['leaf_indices'] = apply_moves_to_indices(bart['leaf_indices'], grow_moves, prune_moves)
     return bart
 
-def apply_moves_to_indices(leaf_indices, do_grow, do_prune, grow_moves, prune_moves):
+def apply_moves_to_indices(leaf_indices, grow_moves, prune_moves):
     """
     Update the leaf indices to match the accepted move.
 
@@ -1454,13 +1459,13 @@ def apply_moves_to_indices(leaf_indices, do_grow, do_prune, grow_moves, prune_mo
     mask = ~jnp.array(1, leaf_indices.dtype) # ...1111111110
     cond = (leaf_indices & mask) == grow_moves['left'][:, None]
     leaf_indices = jnp.where(
-        cond & ~do_grow[:, None],
+        cond & ~grow_moves['acc'][:, None],
         grow_moves['node'][:, None].astype(leaf_indices.dtype),
         leaf_indices,
     )
     cond = (leaf_indices & mask) == prune_moves['left'][:, None]
     return jnp.where(
-        cond & do_prune[:, None],
+        cond & prune_moves['acc'][:, None],
         prune_moves['node'][:, None].astype(leaf_indices.dtype),
         leaf_indices,
     )
