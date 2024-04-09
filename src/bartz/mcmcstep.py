@@ -1161,7 +1161,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
     prune_moves = prune_moves.copy()
 
     def loop(resid, item):
-        resid, leaf_tree, split_tree, do_grow, do_prune, ratios = accept_move_and_sample_leaves(
+        resid, leaf_tree, do_grow, do_prune, ratios = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['resid_batch_size'],
@@ -1171,7 +1171,7 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
             'ratios' in bart,
             *item,
         )
-        return resid, (leaf_tree, split_tree, do_grow, do_prune, ratios)
+        return resid, (leaf_tree, do_grow, do_prune, ratios)
 
     items = (
         bart['leaf_trees'], count_trees,
@@ -1179,13 +1179,11 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
         bart['leaf_indices'],
         u, z,
     )
-    resid, (leaf_trees, split_trees, do_grow, do_prune, ratios) = lax.scan(loop, bart['resid'], items)
+    resid, (leaf_trees, do_grow, do_prune, ratios) = lax.scan(loop, bart['resid'], items)
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
-    bart['split_trees'] = split_trees
     bart.get('ratios', {}).update(ratios)
-
     grow_moves['acc'] = do_grow
     prune_moves['acc'] = do_prune
 
@@ -1302,12 +1300,6 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     do_grow = grow_move['prop'] & (u < grow_ratio)
     do_prune = prune_move['prop'] & (u < prune_ratio)
 
-    # pick split tree for chosen move
-    split_tree = grow_move['split_tree']
-    split_tree = split_tree.at[jnp.where(do_grow, split_tree.size, grow_node)].set(0)
-    split_tree = split_tree.at[jnp.where(do_prune, prune_node, split_tree.size)].set(0)
-    # I can leave garbage in var_tree, resid_tree, count_tree
-
     # compute leaves posterior and sample leaves
     inv_sigma2 = lax.reciprocal(sigma2)
     prec_lk = count_tree * inv_sigma2
@@ -1333,7 +1325,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, sigma2, min
     # replace old tree with new tree in function values
     resid += (initial_leaf_tree - leaf_tree)[grow_leaf_indices]
 
-    return resid, leaf_tree, split_tree, do_grow, do_prune, ratios
+    return resid, leaf_tree, do_grow, do_prune, ratios
 
 def sum_resid(resid, leaf_indices, tree_size, batch_size):
     """
@@ -1435,8 +1427,10 @@ def accept_moves_final_stage(bart, grow_moves, prune_moves):
     bart['grow_acc_count'] = jnp.sum(grow_moves['acc'])
     bart['prune_acc_count'] = jnp.sum(prune_moves['acc'])
     bart['leaf_indices'] = apply_moves_to_indices(bart['leaf_indices'], grow_moves, prune_moves)
+    bart['split_trees'] = apply_move_to_split_trees(grow_moves, prune_moves)
     return bart
 
+@jax.vmap
 def apply_moves_to_indices(leaf_indices, grow_moves, prune_moves):
     """
     Update the leaf indices to match the accepted move.
@@ -1457,17 +1451,25 @@ def apply_moves_to_indices(leaf_indices, grow_moves, prune_moves):
         The updated leaf indices.
     """
     mask = ~jnp.array(1, leaf_indices.dtype) # ...1111111110
-    cond = (leaf_indices & mask) == grow_moves['left'][:, None]
+    cond = (leaf_indices & mask) == grow_moves['left']
     leaf_indices = jnp.where(
-        cond & ~grow_moves['acc'][:, None],
-        grow_moves['node'][:, None].astype(leaf_indices.dtype),
+        cond & ~grow_moves['acc'],
+        grow_moves['node'].astype(leaf_indices.dtype),
         leaf_indices,
     )
-    cond = (leaf_indices & mask) == prune_moves['left'][:, None]
+    cond = (leaf_indices & mask) == prune_moves['left']
     return jnp.where(
-        cond & prune_moves['acc'][:, None],
-        prune_moves['node'][:, None].astype(leaf_indices.dtype),
+        cond & prune_moves['acc'],
+        prune_moves['node'].astype(leaf_indices.dtype),
         leaf_indices,
+    )
+
+@jax.vmap
+def apply_move_to_split_trees(grow_moves, prune_moves):
+    tree_size = grow_moves['split_tree'].size
+    return (grow_moves['split_tree']
+        .at[jnp.where(grow_moves['acc'], tree_size, grow_moves['node'])].set(0)
+        .at[jnp.where(prune_moves['acc'], prune_moves['node'], tree_size)].set(0)
     )
 
 def sample_sigma(bart, key):
