@@ -202,14 +202,8 @@ def init(*,
 
     if save_ratios:
         bart['ratios'] = dict(
-            grow=dict(
-                log_trans_prior=jnp.full(num_trees, jnp.nan),
-                log_likelihood=jnp.full(num_trees, jnp.nan),
-            ),
-            prune=dict(
-                log_trans_prior=jnp.full(num_trees, jnp.nan),
-                log_likelihood=jnp.full(num_trees, jnp.nan),
-            ),
+            log_trans_prior=jnp.full(num_trees, jnp.nan),
+            log_likelihood=jnp.full(num_trees, jnp.nan),
         )
 
     return bart
@@ -289,8 +283,8 @@ def sample_trees(bart, key):
     This function zeroes the proposal counters.
     """
     key, subkey = random.split(key)
-    grow_moves, prune_moves = sample_moves(bart, subkey)
-    return accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key)
+    moves = sample_moves(bart, subkey)
+    return accept_moves_and_sample_leaves(bart, moves, key)
 
 def sample_moves(bart, key):
     """
@@ -312,17 +306,34 @@ def sample_moves(bart, key):
     key = random.split(key, 1 + ntree)
     key, subkey = key[0], key[1:]
 
+    # compute moves
     grow_moves, prune_moves = _sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], bart['p_propose_grow'], subkey)
 
     u, logu = random.uniform(key, (2, ntree), bart['opt']['large_float'])
-    grow_moves['logu'] = jnp.log1p(-logu)
 
+    # choose between grow or prune
     grow_allowed = grow_moves['num_growable'].astype(bool)
     p_grow = jnp.where(grow_allowed & prune_moves['allowed'], 0.5, grow_allowed)
-    grow_moves['prop'] = u < p_grow # use < instead of <= because u is in [0, 1)
-    prune_moves['prop'] = prune_moves['allowed'] & ~grow_moves['prop']
+    grow = u < p_grow # use < instead of <= because u is in [0, 1)
 
-    return grow_moves, prune_moves
+    # compute children indices
+    node = jnp.where(grow, grow_moves['node'], prune_moves['node'])
+    left = node << 1
+    right = left + 1
+
+    return dict(
+        allowed=grow | prune_moves['allowed'],
+        grow=grow,
+        num_growable=grow_moves['num_growable'],
+        node=node,
+        left=left,
+        right=right,
+        partial_ratio=jnp.where(grow, grow_moves['partial_ratio'], prune_moves['partial_ratio']),
+        grow_var=grow_moves['var'],
+        grow_split=grow_moves['split'],
+        var_trees=grow_moves['var_tree'],
+        logu=jnp.log1p(-logu),
+    )
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, None, 0))
 def _sample_moves_vmap_trees(*args):
@@ -387,21 +398,16 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
 
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
-    split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
     ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow)
 
-    left = leaf_to_grow << 1
     return dict(
         num_growable=num_growable,
         node=leaf_to_grow,
-        left=left,
-        right=left + 1,
         var=var,
         split=split,
         partial_ratio=ratio,
         var_tree=var_tree,
-        split_tree=split_tree,
     )
 
 def choose_leaf(split_tree, affluence_tree, p_propose_grow, key):
@@ -761,12 +767,9 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p
 
     ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune)
 
-    left = node_to_prune << 1
     return dict(
         allowed=allowed,
         node=node_to_prune,
-        left=left,
-        right=left + 1,
         partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
     )
 
@@ -832,7 +835,7 @@ def randint_masked(key, mask):
     u = random.randint(key, (), 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right')
 
-def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
+def accept_moves_and_sample_leaves(bart, moves, key):
     """
     Accept or reject the proposed moves and sample the new leaf values.
 
@@ -854,11 +857,11 @@ def accept_moves_and_sample_leaves(bart, grow_moves, prune_moves, key):
     bart : dict
         The new BART mcmc state.
     """
-    bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, prelf = accept_moves_parallel_stage(bart, grow_moves, prune_moves, key)
-    bart, grow_moves, prune_moves = accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, prelkv, prelk, prelf)
-    return accept_moves_final_stage(bart, grow_moves, prune_moves)
+    bart, moves, count_trees, move_counts, prelkv, prelk, prelf = accept_moves_parallel_stage(bart, moves, key)
+    bart, moves = accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv, prelk, prelf)
+    return accept_moves_final_stage(bart, moves)
 
-def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
+def accept_moves_parallel_stage(bart, moves, key):
     """
     Pre-computes quantities used to accept moves, in parallel across trees.
 
@@ -891,28 +894,29 @@ def accept_moves_parallel_stage(bart, grow_moves, prune_moves, key):
     """
     bart = bart.copy()
 
-    # modify the state like the grow move was accepted
-    bart['var_trees'] = grow_moves['var_tree']
-    bart['leaf_indices'] = apply_grow_to_indices(grow_moves, bart['leaf_indices'], bart['X'])
-    bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], grow_moves)
+    # where the move is grow, modify the state like the move was accepted
+    bart['var_trees'] = moves['var_trees']
+    bart['leaf_indices'] = apply_grow_to_indices(moves, bart['leaf_indices'], bart['X'])
+    bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], moves)
 
     # count number of datapoints per leaf
-    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], grow_moves, prune_moves, bart['opt']['count_batch_size'])
+    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], moves, bart['opt']['count_batch_size'])
     if bart['opt']['require_min_points']:
-        count_half_trees = count_trees[:, :grow_moves['split_tree'].shape[1]]
+        count_half_trees = count_trees[:, :bart['var_trees'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
 
     # compute some missing information about moves
-    grow_moves, prune_moves = complete_ratio(grow_moves, prune_moves, move_counts, bart['min_points_per_leaf'])
-    bart['grow_prop_count'] = jnp.sum(grow_moves['prop'])
-    bart['prune_prop_count'] = jnp.sum(prune_moves['prop'])
+    moves = complete_ratio(moves, move_counts, bart['min_points_per_leaf'])
+    bart['grow_prop_count'] = jnp.sum(moves['grow'])
+    bart['prune_prop_count'] = jnp.sum(moves['allowed'] & ~moves['grow'])
 
     prelkv, prelk = precompute_likelihood_terms(count_trees, bart['sigma2'], move_counts)
     prelf = precompute_leaf_terms(count_trees, bart['sigma2'], key)
 
-    return bart, grow_moves, prune_moves, count_trees, move_counts, prelkv, prelk, prelf
+    return bart, moves, count_trees, move_counts, prelkv, prelk, prelf
 
-def apply_grow_to_indices(grow_moves, leaf_indices, X):
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, None))
+def apply_grow_to_indices(moves, leaf_indices, X):
     """
     Update the leaf indices to apply a grow move.
 
@@ -930,17 +934,17 @@ def apply_grow_to_indices(grow_moves, leaf_indices, X):
     grow_leaf_indices : array (num_trees, n)
         The updated leaf indices.
     """
-    left_child = grow_moves['node'].astype(leaf_indices.dtype) << 1
-    go_right = X[grow_moves['var'], :] >= grow_moves['split'][:, None]
-    tree_size = jnp.array(2 * grow_moves['split_tree'].shape[1])
-    node_to_update = jnp.where(grow_moves['num_growable'], grow_moves['node'], tree_size)
+    left_child = moves['node'].astype(leaf_indices.dtype) << 1
+    go_right = X[moves['grow_var'], :] >= moves['grow_split']
+    tree_size = jnp.array(2 * moves['var_trees'].size)
+    node_to_update = jnp.where(moves['grow'], moves['node'], tree_size)
     return jnp.where(
-        leaf_indices == node_to_update[:, None],
-        left_child[:, None] + go_right,
+        leaf_indices == node_to_update,
+        left_child + go_right,
         leaf_indices,
     )
 
-def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
+def compute_count_trees(leaf_indices, moves, batch_size):
     """
     Count the number of datapoints in each leaf.
 
@@ -964,24 +968,20 @@ def compute_count_trees(grow_leaf_indices, grow_moves, prune_moves, batch_size):
         'left', 'right', and 'total'.
     """
 
-    ntree, tree_size = grow_moves['split_tree'].shape
+    ntree, tree_size = moves['var_trees'].shape
     tree_size *= 2
-    counts = dict(grow=dict(), prune=dict())
     tree_indices = jnp.arange(ntree)
 
-    count_trees = count_datapoints_per_leaf(grow_leaf_indices, tree_size, batch_size)
+    count_trees = count_datapoints_per_leaf(leaf_indices, tree_size, batch_size)
 
-    # count datapoints in leaf to grow
-    counts['grow']['left'] = count_trees[tree_indices, grow_moves['left']]
-    counts['grow']['right'] = count_trees[tree_indices, grow_moves['right']]
-    counts['grow']['total'] = counts['grow']['left'] + counts['grow']['right']
-    count_trees = count_trees.at[tree_indices, grow_moves['node']].set(counts['grow']['total'])
+    # count datapoints in nodes modified by move
+    counts = dict()
+    counts['left'] = count_trees[tree_indices, moves['left']]
+    counts['right'] = count_trees[tree_indices, moves['right']]
+    counts['total'] = counts['left'] + counts['right']
 
-    # count datapoints in node to prune
-    counts['prune']['left'] = count_trees[tree_indices, prune_moves['left']]
-    counts['prune']['right'] = count_trees[tree_indices, prune_moves['right']]
-    counts['prune']['total'] = counts['prune']['left'] + counts['prune']['right']
-    count_trees = count_trees.at[tree_indices, prune_moves['node']].set(counts['prune']['total'])
+    # write count into non-leaf node
+    count_trees = count_trees.at[tree_indices, moves['node']].set(counts['total'])
 
     return count_trees, counts
 
@@ -1037,7 +1037,7 @@ def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
         .sum(axis=2)
     )
 
-def complete_ratio(grow_moves, prune_moves, move_counts, min_points_per_leaf):
+def complete_ratio(moves, move_counts, min_points_per_leaf):
     """
     Complete non-likelihood MH ratio calculation.
 
@@ -1059,15 +1059,12 @@ def complete_ratio(grow_moves, prune_moves, move_counts, min_points_per_leaf):
         The proposals for the moves, with the field 'partial_ratio' replaced
         by 'trans_prior_ratio'.
     """
-    grow_moves = grow_moves.copy()
-    prune_moves = prune_moves.copy()
-    compute_p_prune_vec = jax.vmap(compute_p_prune, in_axes=(0, 0, 0, None))
-    grow_p_prune, prune_p_prune = compute_p_prune_vec(grow_moves, move_counts['grow']['left'], move_counts['grow']['right'], min_points_per_leaf)
-    grow_moves['log_trans_prior_ratio'] = jnp.log(grow_moves.pop('partial_ratio') * grow_p_prune)
-    prune_moves['log_trans_prior_ratio'] = jnp.log(prune_moves.pop('partial_ratio') * prune_p_prune)
-    return grow_moves, prune_moves
+    moves = moves.copy()
+    p_prune = compute_p_prune(moves, move_counts['left'], move_counts['right'], min_points_per_leaf)
+    moves['log_trans_prior_ratio'] = jnp.log(moves.pop('partial_ratio') * p_prune)
+    return moves
 
-def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per_leaf):
+def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
     """
     Compute the probability of proposing a prune move.
 
@@ -1088,18 +1085,24 @@ def compute_p_prune(grow_move, grow_left_count, grow_right_count, min_points_per
     prune_p_prune : float
         The probability of proposing the prune move.
     """
-    other_growable_leaves = grow_move['num_growable'] >= 2
-    new_leaves_growable = grow_move['node'] < grow_move['split_tree'].size // 2
+
+    # calculation in case the move is grow
+    other_growable_leaves = moves['num_growable'] >= 2
+    new_leaves_growable = moves['node'] < moves['var_trees'].shape[1] // 2
     if min_points_per_leaf is not None:
-        any_above_threshold = grow_left_count >= 2 * min_points_per_leaf
-        any_above_threshold |= grow_right_count >= 2 * min_points_per_leaf
+        any_above_threshold = left_count >= 2 * min_points_per_leaf
+        any_above_threshold |= right_count >= 2 * min_points_per_leaf
         new_leaves_growable &= any_above_threshold
     grow_again_allowed = other_growable_leaves | new_leaves_growable
     grow_p_prune = jnp.where(grow_again_allowed, 0.5, 1)
-    prune_p_prune = jnp.where(grow_move['num_growable'], 0.5, 1)
-    return grow_p_prune, prune_p_prune
 
-def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
+    # calculation in case the move is prune
+    prune_p_prune = jnp.where(moves['num_growable'], 0.5, 1)
+
+    return jnp.where(moves['grow'], grow_p_prune, prune_p_prune)
+
+@jaxext.vmap_nodoc
+def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
     """
     Modify leaf values such that the indices of the grow move work on the
     original tree.
@@ -1117,33 +1120,26 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, grow_moves):
         The modified leaf values. The value of the leaf to grow is copied to
         what would be its children if the grow move was accepted.
     """
-    ntree, _ = leaf_trees.shape
-    tree_indices = jnp.arange(ntree)
-    values_at_node = leaf_trees[tree_indices, grow_moves['node']]
+    values_at_node = leaf_trees[moves['node']]
     return (leaf_trees
-        .at[tree_indices, grow_moves['left']]
+        .at[jnp.where(moves['grow'], moves['left'], leaf_trees.size)]
         .set(values_at_node)
-        .at[tree_indices, grow_moves['right']]
+        .at[jnp.where(moves['grow'], moves['right'], leaf_trees.size)]
         .set(values_at_node)
     )
 
 def precompute_likelihood_terms(count_trees, sigma2, move_counts):
     ntree = len(count_trees)
     sigma_mu2 = 1 / ntree
-    def compute_one_move(counts):
-        terms = dict()
-        terms['sigma2_left'] = sigma2 + counts['left'] * sigma_mu2
-        terms['sigma2_right'] = sigma2 + counts['right'] * sigma_mu2
-        terms['sigma2_total'] = sigma2 + counts['total'] * sigma_mu2
-        terms['sqrt_term'] = jnp.log(
-            sigma2 * terms['sigma2_total'] /
-            (terms['sigma2_left'] * terms['sigma2_right'])
-        ) / 2
-        return terms
-    return dict(
-        grow=compute_one_move(move_counts['grow']),
-        prune=compute_one_move(move_counts['prune']),
-    ), dict(
+    prelkv = dict()
+    prelkv['sigma2_left'] = sigma2 + move_counts['left'] * sigma_mu2
+    prelkv['sigma2_right'] = sigma2 + move_counts['right'] * sigma_mu2
+    prelkv['sigma2_total'] = sigma2 + move_counts['total'] * sigma_mu2
+    prelkv['sqrt_term'] = jnp.log(
+        sigma2 * prelkv['sigma2_total'] /
+        (prelkv['sigma2_left'] * prelkv['sigma2_right'])
+    ) / 2
+    return prelkv, dict(
         exp_factor=sigma_mu2 / (2 * sigma2),
     )
 
@@ -1157,7 +1153,7 @@ def precompute_leaf_terms(count_trees, sigma2, key):
         centered_leaves=z * jnp.sqrt(var_post),
     )
 
-def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, move_counts, prelkv, prelk, prelf):
+def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv, prelk, prelf):
     """
     The part of accepting the moves that has to be done one tree at a time.
 
@@ -1186,11 +1182,10 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
         The indicators of proposals and acceptances for grow and prune moves.
     """
     bart = bart.copy()
-    grow_moves = grow_moves.copy()
-    prune_moves = prune_moves.copy()
+    moves = moves.copy()
 
     def loop(resid, item):
-        resid, leaf_tree, do_grow, do_prune, ratios = accept_move_and_sample_leaves(
+        resid, leaf_tree, acc, to_prune, ratios = accept_move_and_sample_leaves(
             bart['X'],
             len(bart['leaf_trees']),
             bart['opt']['resid_batch_size'],
@@ -1200,25 +1195,25 @@ def accept_moves_sequential_stage(bart, count_trees, grow_moves, prune_moves, mo
             prelk,
             *item,
         )
-        return resid, (leaf_tree, do_grow, do_prune, ratios)
+        return resid, (leaf_tree, acc, to_prune, ratios)
 
     items = (
         bart['leaf_trees'], count_trees,
-        grow_moves, prune_moves, move_counts,
+        moves, move_counts,
         bart['leaf_indices'],
         prelkv, prelf,
     )
-    resid, (leaf_trees, do_grow, do_prune, ratios) = lax.scan(loop, bart['resid'], items)
+    resid, (leaf_trees, acc, to_prune, ratios) = lax.scan(loop, bart['resid'], items)
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
     bart.get('ratios', {}).update(ratios)
-    grow_moves['acc'] = do_grow
-    prune_moves['acc'] = do_prune
+    moves['acc'] = acc
+    moves['to_prune'] = to_prune
 
-    return bart, grow_moves, prune_moves
+    return bart, moves
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, grow_move, prune_move, move_counts, grow_leaf_indices, prelkv, prelf):
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, move, move_counts, leaf_indices, prelkv, prelf):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -1267,92 +1262,58 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
     """
 
     # sum residuals and count units per leaf, in tree proposed by grow move
-    resid_tree = sum_resid(resid, grow_leaf_indices, leaf_tree.size, resid_batch_size)
+    resid_tree = sum_resid(resid, leaf_indices, leaf_tree.size, resid_batch_size)
 
     # subtract starting tree from function
     resid_tree += count_tree * leaf_tree
 
-    # get indices of grow move
-    grow_node = grow_move['node']
-    assert grow_node.dtype == jnp.int32
-    grow_left = grow_move['left']
-    grow_right = grow_move['right']
+    # get indices of move
+    node = move['node']
+    assert node.dtype == jnp.int32
+    left = move['left']
+    right = move['right']
 
-    # sum residuals in leaf to grow
-    grow_resid_left = resid_tree[grow_left]
-    grow_resid_right = resid_tree[grow_right]
-    grow_resid_total = grow_resid_left + grow_resid_right
-    resid_tree = resid_tree.at[grow_node].set(grow_resid_total)
+    # sum residuals in parent node modified by move
+    resid_left = resid_tree[left]
+    resid_right = resid_tree[right]
+    resid_total = resid_left + resid_right
+    resid_tree = resid_tree.at[node].set(resid_total)
 
-    # get indices of prune move
-    prune_node = prune_move['node']
-    assert prune_node.dtype == jnp.int32
-    prune_left = prune_move['left']
-    prune_right = prune_move['right']
-
-    # sum residuals in node to prune
-    prune_resid_left = resid_tree[prune_left]
-    prune_resid_right = resid_tree[prune_right]
-    prune_resid_total = prune_resid_left + prune_resid_right
-    resid_tree = resid_tree.at[prune_node].set(prune_resid_total)
-
-    # Now resid_tree and count_tree contain correct values whatever move is
-    # accepted.
-
-    # compute likelihood ratios
-    grow_log_lk_ratio = compute_likelihood_ratio(grow_resid_total, grow_resid_left, grow_resid_right, prelkv['grow'], prelk)
-    prune_log_lk_ratio = compute_likelihood_ratio(prune_resid_total, prune_resid_left, prune_resid_right, prelkv['prune'], prelk)
-
-    # compute acceptance ratios
-    grow_log_ratio = grow_move['log_trans_prior_ratio'] + grow_log_lk_ratio
-    prune_log_ratio = prune_move['log_trans_prior_ratio'] + prune_log_lk_ratio
-    prune_log_ratio = -prune_log_ratio
-
-    # save acceptance ratios
+    # compute acceptance ratio
+    log_lk_ratio = compute_likelihood_ratio(resid_total, resid_left, resid_right, prelkv, prelk)
+    log_ratio = move['log_trans_prior_ratio'] + log_lk_ratio
+    log_ratio = jnp.where(move['grow'], log_ratio, -log_ratio)
     ratios = {}
     if save_ratios:
         ratios.update(
-            grow=dict(
-                log_trans_prior=grow_move['log_trans_prior_ratio'],
-                log_likelihood=grow_log_lk_ratio,
-            ),
-            prune=dict(
-                log_trans_prior=lax.reciprocal(prune_move['log_trans_prior_ratio']),
-                log_likelihood=lax.reciprocal(prune_log_lk_ratio),
-            ),
+            log_trans_prior=move['log_trans_prior_ratio'],
+            log_likelihood=log_lk_ratio,
         )
 
     # determine whether to accept the move
-    logu = grow_move['logu']
-    do_grow = grow_move['prop'] & (logu <= grow_log_ratio)
+    acc = move['allowed'] & (move['logu'] <= log_ratio)
     if min_points_per_leaf is not None:
-        do_grow &= move_counts['grow']['left'] >= min_points_per_leaf
-        do_grow &= move_counts['grow']['right'] >= min_points_per_leaf
-    do_prune = prune_move['prop'] & (logu <= prune_log_ratio)
+        acc &= move_counts['left'] >= min_points_per_leaf
+        acc &= move_counts['right'] >= min_points_per_leaf
 
     # compute leaves posterior and sample leaves
     initial_leaf_tree = leaf_tree
     mean_post = resid_tree * prelf['mean_factor']
     leaf_tree = mean_post + prelf['centered_leaves']
 
-    # copy leaves around such that the grow leaf indices select the right leaf
+    # copy leaves around such that the leaf indices select the right leaf
+    to_prune = acc ^ move['grow']
     leaf_tree = (leaf_tree
-        .at[jnp.where(do_prune, prune_left, leaf_tree.size)]
-        .set(leaf_tree[prune_node])
-        .at[jnp.where(do_prune, prune_right, leaf_tree.size)]
-        .set(leaf_tree[prune_node])
-    )
-    leaf_tree = (leaf_tree
-        .at[jnp.where(do_grow, leaf_tree.size, grow_left)]
-        .set(leaf_tree[grow_node])
-        .at[jnp.where(do_grow, leaf_tree.size, grow_right)]
-        .set(leaf_tree[grow_node])
+        .at[jnp.where(to_prune, left, leaf_tree.size)]
+        .set(leaf_tree[node])
+        .at[jnp.where(to_prune, right, leaf_tree.size)]
+        .set(leaf_tree[node])
     )
 
     # replace old tree with new tree in function values
-    resid += (initial_leaf_tree - leaf_tree)[grow_leaf_indices]
+    resid += (initial_leaf_tree - leaf_tree)[leaf_indices]
 
-    return resid, leaf_tree, do_grow, do_prune, ratios
+    return resid, leaf_tree, acc, to_prune, ratios
 
 def sum_resid(resid, leaf_indices, tree_size, batch_size):
     """
@@ -1423,7 +1384,7 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
     )
     return prelkv['sqrt_term'] + exp_term
 
-def accept_moves_final_stage(bart, grow_moves, prune_moves):
+def accept_moves_final_stage(bart, moves):
     """
     The final part of accepting the moves, in parallel across trees.
 
@@ -1442,14 +1403,14 @@ def accept_moves_final_stage(bart, grow_moves, prune_moves):
         The fully updated BART mcmc state.
     """
     bart = bart.copy()
-    bart['grow_acc_count'] = jnp.sum(grow_moves['acc'])
-    bart['prune_acc_count'] = jnp.sum(prune_moves['acc'])
-    bart['leaf_indices'] = apply_moves_to_indices(bart['leaf_indices'], grow_moves, prune_moves)
-    bart['split_trees'] = apply_move_to_split_trees(grow_moves, prune_moves)
+    bart['grow_acc_count'] = jnp.sum(moves['acc'] & moves['grow'])
+    bart['prune_acc_count'] = jnp.sum(moves['acc'] & ~moves['grow'])
+    bart['leaf_indices'] = apply_moves_to_leaf_indices(bart['leaf_indices'], moves)
+    bart['split_trees'] = apply_moves_to_split_trees(bart['split_trees'], moves)
     return bart
 
 @jax.vmap
-def apply_moves_to_indices(leaf_indices, grow_moves, prune_moves):
+def apply_moves_to_leaf_indices(leaf_indices, moves):
     """
     Update the leaf indices to match the accepted move.
 
@@ -1469,25 +1430,28 @@ def apply_moves_to_indices(leaf_indices, grow_moves, prune_moves):
         The updated leaf indices.
     """
     mask = ~jnp.array(1, leaf_indices.dtype) # ...1111111110
-    cond = (leaf_indices & mask) == grow_moves['left']
-    leaf_indices = jnp.where(
-        cond & ~grow_moves['acc'],
-        grow_moves['node'].astype(leaf_indices.dtype),
-        leaf_indices,
-    )
-    cond = (leaf_indices & mask) == prune_moves['left']
+    is_child = (leaf_indices & mask) == moves['left']
     return jnp.where(
-        cond & prune_moves['acc'],
-        prune_moves['node'].astype(leaf_indices.dtype),
+        is_child & moves['to_prune'],
+        moves['node'].astype(leaf_indices.dtype),
         leaf_indices,
     )
 
 @jax.vmap
-def apply_move_to_split_trees(grow_moves, prune_moves):
-    tree_size = grow_moves['split_tree'].size
-    return (grow_moves['split_tree']
-        .at[jnp.where(grow_moves['acc'], tree_size, grow_moves['node'])].set(0)
-        .at[jnp.where(prune_moves['acc'], prune_moves['node'], tree_size)].set(0)
+def apply_moves_to_split_trees(split_trees, moves):
+    return (split_trees
+        .at[jnp.where(
+            moves['grow'],
+            moves['node'],
+            split_trees.size,
+        )]
+        .set(moves['grow_split'].astype(split_trees.dtype))
+        .at[jnp.where(
+            moves['to_prune'],
+            moves['node'],
+            split_trees.size,
+        )]
+        .set(0)
     )
 
 def sample_sigma(bart, key):
