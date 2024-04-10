@@ -389,7 +389,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
     split_tree = split_tree.at[leaf_to_grow].set(split.astype(split_tree.dtype))
 
-    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow, split_tree)
+    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow)
 
     left = leaf_to_grow << 1
     return dict(
@@ -671,7 +671,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow, new_split_tree):
+def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow):
     """
     Compute the product of the transition and prior ratios of a grow move.
 
@@ -712,7 +712,7 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
 
     inv_trans_ratio = p_grow * prob_choose * num_prunable
 
-    depth = grove.tree_depths(new_split_tree.size)[leaf_to_grow]
+    depth = grove.tree_depths(2 ** (p_nonterminal.size - 1))[leaf_to_grow]
     p_parent = p_nonterminal[depth]
     cp_children = 1 - p_nonterminal[depth + 1]
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
@@ -759,7 +759,7 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p
     node_to_prune, num_prunable, prob_choose = choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key)
     allowed = split_tree[1].astype(bool) # allowed iff the tree is not a root
 
-    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune, split_tree)
+    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune)
 
     left = node_to_prune << 1
     return dict(
