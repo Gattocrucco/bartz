@@ -161,7 +161,7 @@ def init(*,
     small_float = jnp.dtype(small_float)
     large_float = jnp.dtype(large_float)
     y = jnp.asarray(y, small_float)
-    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y)
+    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, 2 ** max_depth * num_trees)
     sigma2 = jnp.array(sigma2_beta / sigma2_alpha, large_float)
     sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
 
@@ -208,7 +208,7 @@ def init(*,
 
     return bart
 
-def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
+def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_size):
 
     @functools.cache
     def get_platform():
@@ -238,6 +238,10 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y):
             n = max(1, y.size)
             count_batch_size = 2 ** int(round(math.log2(n) / 2 - 2)) # n^1/2
                 # /4 is good on V100, /2 on L4/T4, still haven't tried A100
+            max_memory = 2 ** 29
+            itemsize = 4
+            min_batch_size = int(math.ceil(forest_size * itemsize * n / max_memory))
+            count_batch_size = max(count_batch_size, min_batch_size)
             count_batch_size = max(1, count_batch_size)
 
     return resid_batch_size, count_batch_size
