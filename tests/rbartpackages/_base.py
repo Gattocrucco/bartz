@@ -127,11 +127,11 @@ class RObjectABC(abc.ABC):
 
     @staticmethod
     def _tryagain_withtimeout(func, timeoutpercall, maxretries):
-        import wrapt_timeout_decorator as wtd
         """ decorate `func` to time its execution, time out over a threshold,
         and optionally retries up to a maximum number of calls """
+        import wrapt_timeout_decorator as wtd
         timedfunc = wtd.timeout(timeoutpercall, use_signals=False)(func)
-        # do not use signals because they are intercepted by R
+            # do not use signals because they are intercepted by R
         @functools.wraps(func)
         def newfunc(*args, **kw):
             for _ in range(maxretries):
