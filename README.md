@@ -8,7 +8,9 @@ BART is a nonparametric Bayesian regression technique. Given predictors $X$ and 
 
 This Python module provides an implementation of BART that runs on GPU, to process large datasets faster. It is also good on CPU. Most other implementations of BART are for R, and run on CPU only.
 
-On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of), but using half the memory. On GPU, the speed premium depends on sample size; with 50000 datapoints and 5000 trees, on an Nvidia Tesla V100 GPU it's 12 times faster than an Apple M1 CPU, and this factor is linearly proportional to the number of datapoints.
+On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of), but using half the memory. On GPU, the speed premium depends on sample size; with 50000 datapoints and 5000 trees, on an Nvidia Tesla V100 GPU it's 12 times faster than a single Apple M1 CPU core, and this factor is linearly proportional to the number of datapoints.
+
+The maximum practically realizable speedup is currently 200x.
 
 ## Links
 
