@@ -57,6 +57,8 @@ packaging = "^24.0"
 xgboost = "^2.0.3"
 pre-commit = "^3.7.0"
 polars = "^0.20.19"
+scikit-learn = "^1.4.2"
+matplotlib-label-lines = "^0.7.0"
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"
