@@ -148,6 +148,14 @@ def init(*,
                 Whether the `min_points_per_leaf` parameter is specified.
             'resid_batch_size', 'count_batch_size' : int or None
                 The data batch sizes for computing the sufficient statistics.
+        'ratios' : dict, optional
+            If `save_ratios` is True, this field is present. It has the fields:
+
+            'log_trans_prior' : large_float array (num_trees,)
+                The log transition and prior Metropolis-Hastings ratio for the
+                proposed move on each tree.
+            'log_likelihood' : large_float array (num_trees,)
+                The log likelihood ratio.
     """
 
     p_nonterminal = jnp.asarray(p_nonterminal, large_float)
@@ -303,8 +311,32 @@ def sample_moves(bart, key):
 
     Returns
     -------
-    grow_moves, prune_moves : dict
-        The proposals for grow and prune moves. See `grow_move` and `prune_move`.
+    moves : dict
+        A dictionary with fields:
+
+        'allowed' : bool array (num_trees,)
+            Whether the move is possible.
+        'grow' : bool array (num_trees,)
+            Whether the move is a grow move or a prune move.
+        'num_growable' : int array (num_trees,)
+            The number of growable leaves in the original tree.
+        'node' : int array (num_trees,)
+            The index of the leaf to grow or node to prune.
+        'left', 'right' : int array (num_trees,)
+            The indices of the children of 'node'.
+        'partial_ratio' : float array (num_trees,)
+            A factor of the Metropolis-Hastings ratio of the move. It lacks
+            the likelihood ratio and the probability of proposing the prune
+            move. If the move is Prune, the ratio is inverted.
+        'grow_var' : int array (num_trees,)
+            The decision axes of the new rules.
+        'grow_split' : int array (num_trees,)
+            The decision boundaries of the new rules.
+        'var_trees' : int array (num_trees, 2 ** (d - 1))
+            The updated decision axes of the trees, valid whatever move.
+        'logu' : float array (num_trees,)
+            The logarithm of a uniform (0, 1] random variable to be used to
+            accept the move. It's in (-oo, 0].
     """
     ntree = bart['leaf_trees'].shape[0]
     key = random.split(key, 1 + ntree)
@@ -382,16 +414,14 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
         'node' : int
             The index of the leaf to grow. ``2 ** d`` if there are no growable
             leaves.
-        'left', 'right' : int
-            The indices of the children of 'node'.
         'var', 'split' : int
             The decision axis and boundary of the new rule.
         'partial_ratio' : float
             A factor of the Metropolis-Hastings ratio of the move. It lacks
             the likelihood ratio and the probability of proposing the prune
             move.
-        'var_tree', 'split_tree' : array (2 ** (d - 1),)
-            The updated decision axes and boundaries of the tree.
+        'var_tree' : array (2 ** (d - 1),)
+            The updated decision axes of the tree.
     """
 
     key, key1, key2 = random.split(key, 3)
@@ -696,8 +726,6 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
         The probability of a nonterminal node at each depth.
     leaf_to_grow : int
         The index of the leaf to grow.
-    new_split_tree : array (2 ** (d - 1),)
-        The splitting points of the tree, after the leaf is grown.
 
     Returns
     -------
@@ -759,8 +787,6 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p
             Whether the move is possible.
         'node' : int
             The index of the node to prune. ``2 ** d`` if no node can be pruned.
-        'left', 'right' : int
-            The indices of the children of 'node'.
         'partial_ratio' : float
             A factor of the Metropolis-Hastings ratio of the move. It lacks
             the likelihood ratio and the probability of proposing the prune
@@ -847,12 +873,8 @@ def accept_moves_and_sample_leaves(bart, moves, key):
     ----------
     bart : dict
         A BART mcmc state.
-    grow_moves : dict
-        The proposals for grow moves, batched over the first axis. See
-        `grow_move`.
-    prune_moves : dict
-        The proposals for prune moves, batched over the first axis. See
-        `prune_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -873,9 +895,8 @@ def accept_moves_parallel_stage(bart, moves, key):
     ----------
     bart : dict
         A BART mcmc state.
-    grow_moves, prune_moves : dict
-        The proposals for the moves, batched over the first axis. See
-        `grow_move` and `prune_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     key : jax.dtypes.prng_key array
         A jax random key.
 
@@ -883,18 +904,17 @@ def accept_moves_parallel_stage(bart, moves, key):
     -------
     bart : dict
         A partially updated BART mcmc state.
-    grow_moves, prune_moves : dict
-        The proposals for the moves, with the field 'partial_ratio' replaced
-        by 'trans_prior_ratio'.
-    count_trees : array (num_trees, 2 ** (d - 1))
+    moves : dict
+        The proposed moves, with the field 'partial_ratio' replaced
+        by 'log_trans_prior_ratio'.
+    count_trees : array (num_trees, 2 ** d)
         The number of points in each potential or actual leaf node.
     move_counts : dict
         The counts of the number of points in the the nodes modified by the
         moves.
-    u : float array (num_trees, 2)
-        Random uniform values used to accept the moves.
-    z : float array (num_trees, 2 ** d)
-        Random standard normal values used to sample the new leaf values.
+    prelkv, prelk, prelf : dict
+        Dictionary with pre-computed terms of the likelihood ratios and leaf
+        samples.
     """
     bart = bart.copy()
 
@@ -926,8 +946,8 @@ def apply_grow_to_indices(moves, leaf_indices, X):
 
     Parameters
     ----------
-    grow_moves : dict
-        The proposals for grow moves. See `grow_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     leaf_indices : array (num_trees, n)
         The index of the leaf each datapoint falls into.
     X : array (p, n)
@@ -957,8 +977,8 @@ def compute_count_trees(leaf_indices, moves, batch_size):
     grow_leaf_indices : int array (num_trees, n)
         The index of the leaf each datapoint falls into, if the grow move is
         accepted.
-    grow_moves, prune_moves : dict
-        The proposals for the moves. See `grow_move` and `prune_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     batch_size : int or None
         The data batch size to use for the summation.
 
@@ -1049,8 +1069,8 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
 
     Parameters
     ----------
-    grow_moves, prune_moves : dict
-        The proposals for the moves. See `grow_move` and `prune_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     move_counts : dict
         The counts of the number of points in the the nodes modified by the
         moves.
@@ -1059,9 +1079,9 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
 
     Returns
     -------
-    grow_moves, prune_moves : dict
-        The proposals for the moves, with the field 'partial_ratio' replaced
-        by 'trans_prior_ratio'.
+    moves : dict
+        The updated moves, with the field 'partial_ratio' replaced by
+        'log_trans_prior_ratio'.
     """
     moves = moves.copy()
     p_prune = compute_p_prune(moves, move_counts['left'], move_counts['right'], min_points_per_leaf)
@@ -1074,20 +1094,18 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
 
     Parameters
     ----------
-    grow_move : dict
-        The proposal for the grow move, see `grow_move`.
-    grow_left_count, grow_right_count : int
+    moves : dict
+        The proposed moves, see `sample_moves`.
+    left_count, right_count : int
         The number of datapoints in the proposed children of the leaf to grow.
     min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
 
     Returns
     -------
-    grow_p_prune : float
-        The probability of proposing a prune move, after accepting the grow
-        move.
-    prune_p_prune : float
-        The probability of proposing the prune move.
+    p_prune : float
+        The probability of proposing a prune move. If grow: after accepting the
+        grow move, if prune: right away.
     """
 
     # calculation in case the move is grow
@@ -1108,15 +1126,15 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
 @jaxext.vmap_nodoc
 def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
     """
-    Modify leaf values such that the indices of the grow move work on the
+    Modify leaf values such that the indices of the grow moves work on the
     original tree.
 
     Parameters
     ----------
     leaf_trees : float array (num_trees, 2 ** d)
         The leaf values.
-    grow_moves : dict
-        The proposals for grow moves. See `grow_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
 
     Returns
     -------
@@ -1133,6 +1151,28 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
     )
 
 def precompute_likelihood_terms(count_trees, sigma2, move_counts):
+    """
+    Pre-compute terms used in the likelihood ratio of the acceptance step.
+
+    Parameters
+    ----------
+    count_trees : array (num_trees, 2 ** d)
+        The number of points in each potential or actual leaf node.
+    sigma2 : float
+        The noise variance.
+    move_counts : dict
+        The counts of the number of points in the the nodes modified by the
+        moves.
+
+    Returns
+    -------
+    prelkv : dict
+        Dictionary with pre-computed terms of the likelihood ratio, one per
+        tree.
+    prelk : dict
+        Dictionary with pre-computed terms of the likelihood ratio, shared by
+        all trees.
+    """
     ntree = len(count_trees)
     sigma_mu2 = 1 / ntree
     prelkv = dict()
@@ -1148,6 +1188,30 @@ def precompute_likelihood_terms(count_trees, sigma2, move_counts):
     )
 
 def precompute_leaf_terms(count_trees, sigma2, key):
+    """
+    Pre-compute terms used to sample leaves from their posterior.
+
+    Parameters
+    ----------
+    count_trees : array (num_trees, 2 ** d)
+        The number of points in each potential or actual leaf node.
+    sigma2 : float
+        The noise variance.
+    key : jax.dtypes.prng_key array
+        A jax random key.
+
+    Returns
+    -------
+    prelf : dict
+        Dictionary with pre-computed terms of the leaf sampling, with fields:
+
+        'mean_factor' : float array (num_trees, 2 ** d)
+            The factor to be multiplied by the sum of residuals to obtain the
+            posterior mean.
+        'centered_leaves' : float array (num_trees, 2 ** d)
+            The mean-zero normal values to be added to the posterior mean to
+            obtain the posterior leaf samples.
+    """
     ntree = len(count_trees)
     prec_lk = count_trees / sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
@@ -1165,25 +1229,29 @@ def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv,
     ----------
     bart : dict
         A partially updated BART mcmc state.
-    count_trees : array (num_trees, 2 ** (d - 1))
+    count_trees : array (num_trees, 2 ** d)
         The number of points in each potential or actual leaf node.
-    grow_moves, prune_moves : dict
-        The proposals for the moves, with completed ratios. See `grow_move` and
-        `prune_move`.
+    moves : dict
+        The proposed moves, see `sample_moves`.
     move_counts : dict
         The counts of the number of points in the the nodes modified by the
         moves.
-    u : float array (num_trees, 2)
-        Random uniform values used to for proposal and accept decisions.
-    z : float array (num_trees, 2 ** d)
-        Random standard normal values used to sample the new leaf values.
+    prelkv, prelk, prelf : dict
+        Dictionaries with pre-computed terms of the likelihood ratios and leaf
+        samples.
 
     Returns
     -------
     bart : dict
         A partially updated BART mcmc state.
-    counts : dict
-        The indicators of proposals and acceptances for grow and prune moves.
+    moves : dict
+        The proposed moves, with these additional fields:
+
+        'acc' : bool array (num_trees,)
+            Whether the move was accepted.
+        'to_prune' : bool array (num_trees,)
+            Whether, to reflect the acceptance status of the move, the state
+            should be updated by pruning the leaves involved in the move.
     """
     bart = bart.copy()
     moves = moves.copy()
@@ -1231,25 +1299,25 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
         The batch size for computing the sum of residuals in each leaf.
     resid : float array (n,)
         The residuals (data minus forest value).
-    sigma2 : float
-        The noise variance.
     min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
     save_ratios : bool
         Whether to save the acceptance ratios.
+    prelk : dict
+        The pre-computed terms of the likelihood ratio which are shared across
+        trees.
     leaf_tree : float array (2 ** d,)
         The leaf values of the tree.
     count_tree : int array (2 ** d,)
         The number of datapoints in each leaf.
-    grow_move, prune_move : dict
-        The proposals for the moves, with completed ratios. See `grow_move` and
-        `prune_move`.
-    grow_leaf_indices : int array (n,)
-        The leaf indices of the tree proposed by the grow move.
-    u : float array (2,)
-        Two uniform random values in [0, 1).
-    z : float array (2 ** d,)
-        Standard normal random values.
+    move : dict
+        The proposed move, see `sample_moves`.
+    leaf_indices : int array (n,)
+        The leaf indices for the largest version of the tree compatible with
+        the move.
+    prelkv, prelf : dict
+        The pre-computed terms of the likelihood ratio and leaf sampling which
+        are specific to the tree.
 
     Returns
     -------
@@ -1257,10 +1325,11 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
         The updated residuals (data minus forest value).
     leaf_tree : float array (2 ** d,)
         The new leaf values of the tree.
-    split_tree : int array (2 ** (d - 1),)
-        The updated decision boundaries of the tree.
-    counts : dict
-        The indicators of proposals and acceptances for grow and prune moves.
+    acc : bool
+        Whether the move was accepted.
+    to_prune : bool
+        Whether, to reflect the acceptance status of the move, the state should
+        be updated by pruning the leaves involved in the move.
     ratios : dict
         The acceptance ratios for the moves. Empty if not to be saved.
     """
@@ -1367,14 +1436,9 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
         The sum of the residuals in the leaf to grow.
     left_resid, right_resid : float
         The sum of the residuals in the left/right child of the leaf to grow.
-    total_count : int
-        The number of datapoints in the leaf to grow.
-    left_count, right_count : int
-        The number of datapoints in the left/right child of the leaf to grow.
-    sigma2 : float
-        The noise variance.
-    n_tree : int
-        The number of trees in the forest.
+    prelkv, prelk : dict
+        The pre-computed terms of the likelihood ratio, see
+        `precompute_likelihood_terms`.
 
     Returns
     -------
@@ -1398,8 +1462,9 @@ def accept_moves_final_stage(bart, moves):
         A partially updated BART mcmc state.
     counts : dict
         The indicators of proposals and acceptances for grow and prune moves.
-    grow_moves, prune_moves : dict
-        The proposals for the moves. See `grow_move` and `prune_move`.
+    moves : dict
+        The proposed moves (see `sample_moves`) as updated by
+        `accept_moves_sequential_stage`.
 
     Returns
     -------
@@ -1423,10 +1488,9 @@ def apply_moves_to_leaf_indices(leaf_indices, moves):
     leaf_indices : int array (num_trees, n)
         The index of the leaf each datapoint falls into, if the grow move was
         accepted.
-    counts : dict
-        The indicators of proposals and acceptances for grow and prune moves.
-    grow_moves, prune_moves : dict
-        The proposals for the moves. See `grow_move` and `prune_move`.
+    moves : dict
+        The proposed moves (see `sample_moves`), as updated by
+        `accept_moves_sequential_stage`.
 
     Returns
     -------
@@ -1443,6 +1507,22 @@ def apply_moves_to_leaf_indices(leaf_indices, moves):
 
 @jax.vmap
 def apply_moves_to_split_trees(split_trees, moves):
+    """
+    Update the split trees to match the accepted move.
+
+    Parameters
+    ----------
+    split_trees : int array (num_trees, 2 ** (d - 1))
+        The cutpoints of the decision nodes in the initial trees.
+    moves : dict
+        The proposed moves (see `sample_moves`), as updated by
+        `accept_moves_sequential_stage`.
+
+    Returns
+    -------
+    split_trees : int array (num_trees, 2 ** (d - 1))
+        The updated split trees.
+    """
     return (split_trees
         .at[jnp.where(
             moves['grow'],

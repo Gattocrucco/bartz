@@ -26,6 +26,13 @@ SOFTWARE.
 
 # Changelog
 
+## 0.4.0
+
+* 2x faster on GPU, due to parallelizing better the tree sampling step.
+* Uses less memory, now can do $n=100\,000$ with $10\,000$ trees on a V100. This was mostly an excessively large batch size for counting datapoints per leaf.
+* The Metropolis-Hastings ratio is saved only for the proposed move.
+* The grow and prune moves are merged into one object.
+
 ## 0.3.0
 
 * 2-3x faster on CPU.
