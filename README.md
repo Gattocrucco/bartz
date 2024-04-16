@@ -36,6 +36,7 @@ The maximum practically realizable speedup is currently 200x.
 - [bartCause](https://github.com/vdorie/bartCause) R package, pre-made BART-based workflows for causal inference
 - [stan4bart](https://github.com/vdorie/stan4bart)
 - [VCBART](https://github.com/skdeshpande91/VCBART)
+- [lsqfitgp](https://github.com/Gattocrucco/lsqfitgp) implements the infinite trees limit of BART
 - [monbart](https://github.com/jaredsmurray/monbart)
 - [mBART](https://github.com/remcc/mBART_shlib)
 - [SequentialBART](https://github.com/mjdaniels/SequentialBART)
