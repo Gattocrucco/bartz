@@ -56,3 +56,31 @@ class rbart_vi(bart2):
     """
 
     _rfuncname = 'dbarts::rbart_vi'
+
+class dbarts(_base.RObjectABC):
+
+    _rfuncname = 'dbarts::dbarts'
+    _methods = (
+        'run',
+        'sampleTreesFromPrior',
+        'sampleNodeParametersFromPrior',
+        'copy',
+        'show',
+        'predict',
+        'setControl',
+        'setModel',
+        'setData',
+        'setResponse',
+        'setOffset',
+        'setSigma',
+        'setPredictor',
+        'setTestPredictor',
+        'setTestPredictorAndOffset',
+        'setTestOffset',
+        'printTrees',
+        'plotTree',
+    )
+
+class dbartsControl(_base.RObjectABC):
+
+    _rfuncname = 'dbarts::dbartsControl'

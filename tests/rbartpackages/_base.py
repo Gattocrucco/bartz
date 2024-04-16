@@ -2,19 +2,19 @@ import functools
 import abc
 
 from rpy2 import robjects
-from rpy2.robjects import numpy2ri
+from rpy2.robjects import conversion, numpy2ri, methods
 import numpy as np
 
 # converter for pandas
-pandas_converter = robjects.conversion.Converter('pandas')
+pandas_converter = conversion.Converter('pandas')
 try:
     from rpy2.robjects import pandas2ri
     pandas_converter = pandas2ri.converter
 except ImportError:
-    pandas_converter = robjects.conversion.Converter('pandas')
+    pandas_converter = conversion.Converter('pandas')
 
 # converter for polars
-polars_converter = robjects.conversion.Converter('polars')
+polars_converter = conversion.Converter('polars')
 try:
     import polars
     from rpy2.robjects import pandas2ri
@@ -27,7 +27,7 @@ except ImportError:
     pass
 
 # converter for jax
-jax_converter = robjects.conversion.Converter('jax')
+jax_converter = conversion.Converter('jax')
 try:
     import jax
     def jax_to_r(x):
@@ -40,7 +40,7 @@ except ImportError:
     pass
 
 # alternative numpy converter because the default one produces conflicts
-# numpy_converter = robjects.conversion.Converter('numpy')
+# numpy_converter = conversion.Converter('numpy')
 # def numpy_to_r(x):
 #     return numpy2ri.py2rpy(x)
 # numpy_converter.py2rpy.register(np.ndarray, numpy_to_r)
@@ -48,7 +48,7 @@ except ImportError:
 numpy_converter = numpy2ri.converter
 
 # converter for python dictionaries
-dict_converter = robjects.conversion.Converter('dict')
+dict_converter = conversion.Converter('dict')
 def dict_to_r(x):
     return robjects.ListVector(x)
 dict_converter.py2rpy.register(dict, dict_to_r)
@@ -86,21 +86,21 @@ class RObjectABC(abc.ABC):
         + jax_converter
         + dict_converter
     )
-    _convctx = robjects.conversion.localconverter(_converter)
-    
+    _convctx = conversion.localconverter(_converter)
+
     def _py2r(self, x):
         if isinstance(x, __class__):
             return x._robject
         with self._convctx:
             return self._converter.py2rpy(x)
-    
+
     def _r2py(self, x):
         with self._convctx:
             return self._converter.rpy2py(x)
-    
+
     def _args2r(self, args):
         return tuple(map(self._py2r, args))
-    
+
     def _kw2r(self, kw):
         return {key: self._py2r(value) for key, value in kw.items()}
 
@@ -121,8 +121,9 @@ class RObjectABC(abc.ABC):
             dofunc = self._tryagain_withtimeout(dofunc, timeout, retries)
         obj = dofunc()
         self._robject = obj
-        for s, v in obj.items():
-            setattr(self, s.replace('.', '_'), self._r2py(v))
+        if hasattr(obj, 'items'):
+            for s, v in obj.items():
+                setattr(self, s.replace('.', '_'), self._r2py(v))
 
     @staticmethod
     def _tryagain_withtimeout(func, timeoutpercall, maxretries):
@@ -149,8 +150,12 @@ class RObjectABC(abc.ABC):
         # missing
         def implof(method):
             def impl(self, *args, **kw):
-                func = robjects.r(method)
-                out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
+                if isinstance(self._robject, methods.RS4):
+                    func = robjects.r['$'](self._robject, method)
+                    out = func(*self._args2r(args), **self._kw2r(kw))
+                else:
+                    func = robjects.r(method)
+                    out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
                 return self._r2py(out)
             return impl
         for method in getattr(cls, '_methods', []):
