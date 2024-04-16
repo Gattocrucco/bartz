@@ -26,7 +26,10 @@ name: tests-docs
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+    tags:
+      - v*
 
 jobs:
 
