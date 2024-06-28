@@ -11,3 +11,11 @@ repos:
     -   id: check-ast
     -   id: check-case-conflict
     -   id: check-docstring-first
+-   repo: https://github.com/sbrunner/hooks
+    rev: 1.0.0
+    hooks:
+    -   id: copyright
+# -   repo: https://github.com/nanoufo/copyright-hook
+#     rev: v1.1.0
+#     hooks:
+#     -   id: update-copyright

@@ -12,6 +12,8 @@ On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of)
 
 The maximum practically realizable speedup is currently 200x.
 
+Use [this Colab notebook](https://colab.research.google.com/drive/1BHl_Nnh0VY-cUvCe5Topub4mgnOkGGO5?usp=sharing) as a starting point to use a GPU if you don't have your own GPU.
+
 ## Links
 
 - [Documentation (latest release)](https://gattocrucco.github.io/bartz/docs)
