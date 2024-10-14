@@ -14,6 +14,7 @@ except ImportError:
     pandas_converter = conversion.Converter('pandas')
 
 # converter for polars
+# TODO i'd like to copy the code of the pandas converter to relinquish the dependency on pandas
 polars_converter = conversion.Converter('polars')
 try:
     import polars
@@ -40,6 +41,7 @@ except ImportError:
     pass
 
 # alternative numpy converter because the default one produces conflicts
+# => the problem with this is that it does not handle r -> numpy
 # numpy_converter = conversion.Converter('numpy')
 # def numpy_to_r(x):
 #     return numpy2ri.py2rpy(x)

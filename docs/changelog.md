@@ -24,14 +24,20 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
 
+<!--- This changelog is written in Markdown and without line splits to make it
+  copy-pastable to github releases. -->
+
+
 # Changelog
 
-## 0.4.0
+
+## 0.4.0 The real treasure was the Markov chain samples we made along the way
 
 * 2x faster on GPU, due to parallelizing better the tree sampling step.
 * Uses less memory, now can do $n=100\,000$ with $10\,000$ trees on a V100. This was mostly an excessively large batch size for counting datapoints per leaf.
 * The Metropolis-Hastings ratio is saved only for the proposed move.
 * The grow and prune moves are merged into one object.
+
 
 ## 0.3.0
 
@@ -49,9 +55,11 @@ SOFTWARE.
 * Sweeping changes to the tree move internals, more computations are parallel across trees.
 * Added support for `dbarts` in the unit tests.
 
+
 ## 0.2.1
 
 * Fix a bug that prevented using bart in a compiled function.
+
 
 ## 0.2.0
 
@@ -62,11 +70,13 @@ SOFTWARE.
 * 2x faster on CPU.
 * Use less temporary memory to quantilize covariates, avoiding out-of-memory errors on GPU.
 
+
 ## 0.1.0
 
 * Optimize the MCMC step to only traverse each tree once.
 * Now `bartz` runs at the same speed as the R package `BART` (tested at $p=10$, $n=100\ldots 10000$).
 * The MCMC functions are heavily changed, but the interface is the same.
+
 
 ## 0.0.1
 
@@ -74,6 +84,7 @@ SOFTWARE.
 * Fix errors with scaling of noise variance prior.
 * Fix iteration report when `keepevery` is not 1.
 * Lower required versions of dependencies to allow running on Colab.
+
 
 ## 0.0
 

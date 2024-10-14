@@ -41,6 +41,7 @@ all:
 	@echo "- $$ make release (repeat until it goes smoothly)"
 	@echo "- push and check CI completes"
 	@echo "- $$ make upload"
+	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- push something again to update the online docs"
 
 .PHONY: release
