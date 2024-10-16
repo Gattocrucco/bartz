@@ -14,7 +14,7 @@ On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of)
 
 The maximum practically realizable speedup is currently 200x.
 
-Use [this Colab notebook](https://colab.research.google.com/drive/1BHl_Nnh0VY-cUvCe5Topub4mgnOkGGO5?usp=sharing) as a starting point to use a GPU if you don't have your own GPU.
+[This Colab notebook](https://colab.research.google.com/drive/1BHl_Nnh0VY-cUvCe5Topub4mgnOkGGO5?usp=sharing) runs BART with $n=100\,000$ observations, $p=1000$ predictors, $10\,000$ trees, for 1000 MCMC iterations, in 5 minutes.
 
 ## Links
 
@@ -38,6 +38,7 @@ Use [this Colab notebook](https://colab.research.google.com/drive/1BHl_Nnh0VY-cU
 - [XBCF](https://github.com/socket778/XBCF) XBART BCF
 - [BayesTree](https://cran.r-project.org/package=BayesTree) R package, original BART implementation
 - [bartCause](https://github.com/vdorie/bartCause) R package, pre-made BART-based workflows for causal inference
+- [OpenBT](https://bitbucket.org/mpratola/openbt) Heteroskedastic BART, rotate & perturb proposals, C++ library with R interface
 - [stan4bart](https://github.com/vdorie/stan4bart)
 - [VCBART](https://github.com/skdeshpande91/VCBART)
 - [lsqfitgp](https://github.com/Gattocrucco/lsqfitgp) Infinite trees limit of BART
@@ -60,6 +61,5 @@ Use [this Colab notebook](https://colab.research.google.com/drive/1BHl_Nnh0VY-cU
 - [BayesTree.jl](https://github.com/mathcg/BayesTree.jl)
 - [longbet](https://github.com/google/longbet)
 - [XSBART](https://github.com/richael008/XSBART) Accelerated SoftBart
-- [OpenBT](https://bitbucket.org/mpratola/openbt) Heteroskedastic BART, rotate & perturb proposals, C++ library with R interface
 - [mpibart](https://matthewpratola.com/mpibart) Old parallel implementation
 - [bartMan](https://github.com/AlanInglis/bartMan) R package, posterior analysis and diagnostics

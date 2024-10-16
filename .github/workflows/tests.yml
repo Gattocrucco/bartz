@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: [ubuntu-latest] # use linux to have it different from my local env
         python-version: ["3.12"]
         # include:
         #   - os: windows-latest
@@ -80,10 +80,12 @@ jobs:
         shell: micromamba-shell {0}
 
       - name: Save coverage information
-        uses: actions/upload-artifact@v3 # v3 allows uploading to same artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: coverage
+          name: coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
           path: .coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
+          include-hidden-files: true
+          if-no-files-found: error
 
   docs:
 
@@ -115,12 +117,6 @@ jobs:
           python -m pip install --upgrade pip
           poetry-venv/bin/poetry install
 
-      # - name: Run examples
-      #   run: make COVERAGE_SUFFIX=-ubuntu-latest-py3.11 examples
-
-      # - name: Run documentation code
-      #   run: make COVERAGE_SUFFIX=-ubuntu-latest-py3.11 docscode
-
       - name: Generate documentation
         run: |
           source package-venv/bin/activate
@@ -133,18 +129,7 @@ jobs:
           path: |
             _site/docs
             _site/docs-dev
-
-      # - name: Save coverage from examples
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: coverage
-      #     path: .coverage.examples-macos-latest-py3.11
-
-      # - name: Save coverage from documentation
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: coverage
-      #     path: .coverage.docs-macos-latest-py3.11
+          if-no-files-found: error
 
   covreport:
 
@@ -167,9 +152,10 @@ jobs:
           python -m pip install coverage
 
       - name: Get coverage files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: coverage
+          pattern: coverage.*
+          merge-multiple: true
 
       - name: List files
         run: |
