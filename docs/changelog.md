@@ -31,7 +31,7 @@ SOFTWARE.
 # Changelog
 
 
-## 0.4.0 The real treasure was the Markov chain samples we made along the way
+## 0.4.0 The real treasure was the Markov chain samples we made along the way (2024-04-16)
 
 * 2x faster on GPU, due to parallelizing better the tree sampling step.
 * Uses less memory, now can do $n=100\,000$ with $10\,000$ trees on a V100. This was mostly an excessively large batch size for counting datapoints per leaf.

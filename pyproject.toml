@@ -29,8 +29,8 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 name = "bartz"
 version = "0.4.0"
-description = "A JAX implementation of BART"
-authors = ["Giacomo Petrillo <info@giacomopetrillo.com>"]
+description = "Super-fast BART (Bayesian Additive Regression Trees) in Python"
+authors = ["Giacomo Petrillo"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Gattocrucco/bartz"

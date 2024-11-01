@@ -10,10 +10,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -55,7 +55,7 @@ elif variant == 'latest':
     # list git tags
     tags = subprocess.check_output(['git', 'tag'], text=True).splitlines()
     print(f'git tags: {tags}')
-    
+
     # find final versions in tags
     versions = []
     for i, t in enumerate(tags):
@@ -71,12 +71,12 @@ elif variant == 'latest':
     # find latest versions
     versions.sort(key=lambda x: x[0])
     version, tag = versions[-1]
-    
+
     # check it out and check it matches the version in the package
     subprocess.run(['git', 'checkout', tag], check=True)
     import bartz
     assert packaging.version.parse(bartz.__version__) == version
-    
+
     version = str(version)
     uncommitted_stuff = False
 
@@ -141,7 +141,7 @@ html_theme = 'alabaster'
 html_title = f'{project} documentation'
 
 html_theme_options = dict(
-    description = 'A jax implementation of BART',
+    description = 'Super-fast BART (Bayesian Additive Regression Trees) in Python',
     fixed_sidebar = True,
     github_button = True,
     github_type = 'star',
@@ -204,7 +204,7 @@ def linkcode_resolve(domain, info):
 
     # Use the original function object if it is wrapped.
     obj = inspect.unwrap(obj)
-    
+
     try:
         fn = inspect.getsourcefile(obj)
     except Exception:
