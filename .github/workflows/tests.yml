@@ -1,6 +1,6 @@
 # bartz/workflows/tests.yml
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -30,6 +30,7 @@ on:
       - main
     tags:
       - v*
+  workflow_dispatch:
 
 jobs:
 

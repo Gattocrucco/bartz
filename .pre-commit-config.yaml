@@ -12,7 +12,7 @@ repos:
     -   id: check-case-conflict
     -   id: check-docstring-first
 -   repo: https://github.com/sbrunner/hooks
-    rev: 1.0.0
+    rev: 1.4.1
     hooks:
     -   id: copyright
 # -   repo: https://github.com/nanoufo/copyright-hook

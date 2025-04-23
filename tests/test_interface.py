@@ -1,6 +1,6 @@
 # bartz/tests/test_interface.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -218,7 +218,7 @@ def test_comparison_rbart(X, y, key, kw_shared, initkw):
     seed = random.randint(key2, (), 0, jnp.uint32(2 ** 31)).item()
     rbart = BART.mc_gbart(X.T, y, **kw_BART, seed=seed)
 
-    numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6)
+    numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
 
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10

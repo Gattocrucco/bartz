@@ -1,7 +1,7 @@
 <!--
 bartz/docs/changelog.md
 
-Copyright (c) 2024, Giacomo Petrillo
+Copyright (c) 2024-2025, Giacomo Petrillo
 
 This file is part of bartz.
 
@@ -29,6 +29,15 @@ SOFTWARE.
 
 
 # Changelog
+
+
+## 0.4.1 Told it was, nigh the end of times, version numbers of dependencies all would rise (2025-04-23)
+
+Somehow 1 year went by before I had some time to spend on this software.
+
+Somehow 1 year was sufficient to break most of my dependency specifications, despite having only 4 dependencies.
+
+This release provides no new features, it's only a quick fix to make bartz go well with the latest jax and numpy versions.
 
 
 ## 0.4.0 The real treasure was the Markov chain samples we made along the way (2024-04-16)

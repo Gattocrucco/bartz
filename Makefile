@@ -1,6 +1,6 @@
 # bartz/Makefile
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -42,7 +42,7 @@ all:
 	@echo "- push and check CI completes"
 	@echo "- $$ make upload"
 	@echo "- publish github release (updates zenodo automatically)"
-	@echo "- push something again to update the online docs"
+	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
 .PHONY: release
 release: tests docs
@@ -52,7 +52,7 @@ release: tests docs
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
-	python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
+	python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 PY = MPLBACKEND=agg coverage run
 TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)

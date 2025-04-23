@@ -1,6 +1,6 @@
 # bartz/docs/conf.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -174,7 +174,7 @@ default_role = 'py:obj'
 intersphinx_mapping = dict(
     scipy=('https://docs.scipy.org/doc/scipy', None),
     numpy=('https://numpy.org/doc/stable', None),
-    jax=('https://jax.readthedocs.io/en/latest/', None),
+    jax=('https://docs.jax.dev/en/latest', None),
 )
 
 viewcode_line_numbers = True # for 'viewcode' extension

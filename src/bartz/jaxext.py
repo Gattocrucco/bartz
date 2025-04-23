@@ -1,6 +1,6 @@
 # bartz/src/bartz/jaxext.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -45,27 +45,6 @@ def castto(func, type):
         return func(*args, **kw).astype(type)
     return newfunc
 
-def pure_callback_ufunc(callback, dtype, *args, excluded=None, **kwargs):
-    """ version of `jax.pure_callback` that deals correctly with ufuncs,
-    see `<https://github.com/google/jax/issues/17187>`_ """
-    if excluded is None:
-        excluded = ()
-    shape = jnp.broadcast_shapes(*(
-        a.shape
-        for i, a in enumerate(args)
-        if i not in excluded
-    ))
-    ndim = len(shape)
-    padded_args = [
-        a if i in excluded
-        else jnp.expand_dims(a, tuple(range(ndim - a.ndim)))
-        for i, a in enumerate(args)
-    ]
-    result = jax.ShapeDtypeStruct(shape, dtype)
-    return jax.pure_callback(callback, result, *padded_args, vectorized=True, **kwargs)
-
-    # TODO when jax solves this, check version and piggyback on original if new
-
 class scipy:
 
     class special:
@@ -74,9 +53,11 @@ class scipy:
         def gammainccinv(a, y):
             a = jnp.asarray(a)
             y = jnp.asarray(y)
+            shape = jnp.broadcast_shapes(a.shape, y.shape)
             dtype = float_type(a.dtype, y.dtype)
+            dummy = jax.ShapeDtypeStruct(shape, dtype)
             ufunc = castto(special.gammainccinv, dtype)
-            return pure_callback_ufunc(ufunc, dtype, a, y)
+            return jax.pure_callback(ufunc, dummy, a, y, vmap_method='expand_dims')
 
     class stats:
 

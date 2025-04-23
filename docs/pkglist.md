@@ -1,7 +1,7 @@
 <!--
 bartz/docs/pkglist.md
 
-Copyright (c) 2024, Giacomo Petrillo
+Copyright (c) 2024-2025, Giacomo Petrillo
 
 This file is part of bartz.
 
@@ -29,7 +29,7 @@ SOFTWARE.
 - [StochasticTree](https://github.com/StochasticTree) C++ library with R and Python bindings taylored to researchers who want to make their own BART variants
 - [bnptools](https://github.com/rsparapa/bnptools) Feature-rich R packages for BART and some variants
 - [dbarts](https://github.com/vdorie/dbarts) Fast R package
-- [bartMachine](https://github.com/kapelner/bartMachine) Fast R package, supports missing predictors imputation
+- [bartMachine](https://github.com/kapelner/bartMachine) R package, supports missing predictors imputation
 - [SoftBART](https://github.com/theodds/SoftBART) R package with a smooth version of BART
 - [bcf](https://github.com/jaredsmurray/bcf) R package for BCF, version of BART for causal inference
 - [flexBART](https://github.com/skdeshpande91/flexBART) Fast R package, supports categorical predictors
@@ -61,6 +61,7 @@ SOFTWARE.
 - [longbet](https://github.com/google/longbet)
 - [XSBART](https://github.com/richael008/XSBART) Accelerated SoftBart
 - [bartMan](https://github.com/AlanInglis/bartMan) R package, posterior analysis and diagnostics
+- [drbart](https://github.com/vittorioorlandi/drbart) Density regression with BART
 - [bcf2](https://github.com/JingyuHe/bcf2) BCF warm-started with XBCF
 - [BART-BMA](https://github.com/BelindaHernandez/BART-BMA) (superseded by bartBMAnew)
 - [XBCF](https://github.com/socket778/XBCF) (superseded by StochasticTree)

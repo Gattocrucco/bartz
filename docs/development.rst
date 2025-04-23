@@ -1,6 +1,6 @@
 .. bartz/docs/development.rst
 ..
-.. Copyright (c) 2024, Giacomo Petrillo
+.. Copyright (c) 2024-2025, Giacomo Petrillo
 ..
 .. This file is part of bartz.
 ..
@@ -46,6 +46,7 @@ Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/instal
 .. code-block:: shell
 
     brew install micromamba
+    micromamba shell init
 
 Create a virtual environment from the file spec:
 

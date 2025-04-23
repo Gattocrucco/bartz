@@ -1,6 +1,6 @@
 # bartz/pyproject.toml
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -23,33 +23,35 @@
 # SOFTWARE.
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry]
+[project]
 name = "bartz"
-version = "0.4.0"
+version = "0.4.1"
 description = "Super-fast BART (Bayesian Additive Regression Trees) in Python"
-authors = ["Giacomo Petrillo"]
+authors = [
+    {name = "Giacomo Petrillo", email = "info@giacomopetrillo.com"},
+]
 license = "MIT"
 readme = "README.md"
+requires-python = ">=3.10"
 repository = "https://github.com/Gattocrucco/bartz"
 packages = [
     { include = "bartz", from = "src" },
+]
+dependencies = [
+    "jax >=0.4.35,<1",
+    "jaxlib >=0.4.35,<1",
+    "numpy >=1.25.2,<3",
+    "scipy >=1.11.4,<2",
 ]
 
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/Gattocrucco/bartz/issues"
 
-[tool.poetry.dependencies]
-python = "^3.10"
-jax = "^0.4.23"
-jaxlib = "^0.4.23"
-numpy = "^1.25.2"
-scipy = "^1.11.4"
-
 [tool.poetry.group.dev.dependencies]
-ipython = "^8.22.2"
+ipython = ">=8.22.2"
 matplotlib = "^3.8.3"
 appnope = "^0.1.4"
 tomli = "^2.0.1"
@@ -58,16 +60,16 @@ xgboost = "^2.0.3"
 pre-commit = "^3.7.0"
 scikit-learn = "^1.4.2"
 matplotlib-label-lines = "^0.7.0"
-polars = {version = "^0.20.19", extras = ["pandas", "pyarrow"]}
+polars = {version = "^1.0.0", extras = ["pandas", "pyarrow"]}
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"
 pytest = "^8.1.1"
 
 [tool.poetry.group.docs.dependencies]
-Sphinx = "^7.2.6"
+Sphinx = ">=7.2.6,<9"
 numpydoc = "^1.6.0"
-myst-parser = "^2.0.0"
+myst-parser = "^4.0.1"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
