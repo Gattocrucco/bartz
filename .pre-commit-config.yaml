@@ -15,7 +15,3 @@ repos:
     rev: 1.4.1
     hooks:
     -   id: copyright
-# -   repo: https://github.com/nanoufo/copyright-hook
-#     rev: v1.1.0
-#     hooks:
-#     -   id: update-copyright

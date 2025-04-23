@@ -1,6 +1,6 @@
 # bartz/src/bartz/mcmcstep.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -1478,7 +1478,7 @@ def accept_moves_final_stage(bart, moves):
     bart['split_trees'] = apply_moves_to_split_trees(bart['split_trees'], moves)
     return bart
 
-@jax.vmap
+@jaxext.vmap_nodoc
 def apply_moves_to_leaf_indices(leaf_indices, moves):
     """
     Update the leaf indices to match the accepted move.
@@ -1505,7 +1505,7 @@ def apply_moves_to_leaf_indices(leaf_indices, moves):
         leaf_indices,
     )
 
-@jax.vmap
+@jaxext.vmap_nodoc
 def apply_moves_to_split_trees(split_trees, moves):
     """
     Update the split trees to match the accepted move.

@@ -41,6 +41,9 @@ all:
 	@echo "- $$ make release (repeat until it goes smoothly)"
 	@echo "- push and check CI completes"
 	@echo "- $$ make upload"
+	## make upload should also update the docs automatically because it pushes
+	## a tag which triggers a workflow, however last time it didn't work. I made
+	## a change to try to fix it, see if it works on the next release.
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
@@ -67,7 +70,7 @@ tests: copy-version
 .PHONY: docs-latest
 docs-latest:
 	BARTZ_DOC_VARIANT=latest make -C docs html
-	git switch -
+	git switch - || git switch main
 	test ! -d _site/docs || rm -r _site/docs
 	mv docs/_build/html _site/docs
 

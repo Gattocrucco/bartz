@@ -1,6 +1,6 @@
 # bartz/src/bartz/BART.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -53,10 +53,11 @@ class gbart:
         Whether to use predictors quantiles instead of a uniform grid to bin
         predictors.
     sigest : float, optional
-        An estimate of the residual standard deviation on `y_train`, used to
-        set `lamda`. If not specified, it is estimated by linear regression.
-        If `y_train` has less than two elements, it is set to 1. If n <= p, it
-        is set to the variance of `y_train`. Ignored if `lamda` is specified.
+        An estimate of the residual standard deviation on `y_train`, used to set
+        `lamda`. If not specified, it is estimated by linear regression (with
+        intercept). If `y_train` has less than two elements, it is set to 1. If
+        n <= p, it is set to the variance of `y_train`. Ignored if `lamda` is
+        specified.
     sigdf : int, default 3
         The degrees of freedom of the scaled inverse-chisquared prior on the
         noise variance.
@@ -108,6 +109,8 @@ class gbart:
         The number of iterations (including skipped ones) between each log.
     seed : int or jax random key, default 0
         The seed for the random number generator.
+    initkw : dict
+        Additional arguments passed to `mcmcstep.init`.
 
     Attributes
     ----------
@@ -135,8 +138,6 @@ class gbart:
         The number of trees.
     maxdepth : int
         The maximum depth of the trees.
-    initkw : dict
-        Additional arguments passed to `mcmcstep.init`.
 
     Methods
     -------
@@ -158,7 +159,6 @@ class gbart:
     - A lot of functionality is missing (variable selection, discrete response).
     - There are some additional attributes, and some missing.
 
-    The linear regression used to set `sigest` adds an intercept.
     """
 
     def __init__(self, x_train, y_train, *,
@@ -239,7 +239,7 @@ class gbart:
 
         Parameters
         ----------
-        x_test : array (m, p) or DataFrame
+        x_test : array (p, m) or DataFrame
             The test predictors.
 
         Returns
