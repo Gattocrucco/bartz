@@ -66,10 +66,12 @@ class scipy:
             def ppf(q, a):
                 return 1 / scipy.special.gammainccinv(a, q)
 
-@functools.wraps(jax.vmap)
 def vmap_nodoc(fun, *args, **kw):
     """
-    Version of `jax.vmap` that preserves the docstring of the input function.
+    Wrapper of `jax.vmap` that preserves the docstring of the input function.
+
+    This is useful if the docstring already takes into account that the
+    arguments have additional axes due to vmap.
     """
     doc = fun.__doc__
     fun = jax.vmap(fun, *args, **kw)

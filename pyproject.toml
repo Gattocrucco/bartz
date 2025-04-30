@@ -61,6 +61,8 @@ pre-commit = "^3.7.0"
 scikit-learn = "^1.4.2"
 matplotlib-label-lines = "^0.7.0"
 polars = {version = "^1.0.0", extras = ["pandas", "pyarrow"]}
+virtualenv = "^20.30.0"
+asv = "^0.6.4"
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"

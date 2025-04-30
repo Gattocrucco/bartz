@@ -87,6 +87,7 @@ There is a separate repository to run and save benchmarks with `asv <https://asv
 
     git clone https://github.com/Gattocrucco/bartz-benchmark.git
     cd bartz-benchmark
+    micromamba activate bartz
     asv run
     asv publish
     asv preview
