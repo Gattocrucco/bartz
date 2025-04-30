@@ -77,3 +77,16 @@ Commands
 --------
 
 Development commands are defined in a makefile. Run :literal:`make` without arguments to list the targets.
+
+Benchmarks
+----------
+
+There is a separate repository to run and save benchmarks with `asv <https://asv.readthedocs.io>`_. I run the benchmarks myself and show them at https://gattocrucco.github.io/bartz-benchmark. To run and visualize them locally, do:
+
+.. code-block:: shell
+
+    git clone https://github.com/Gattocrucco/bartz-benchmark.git
+    cd bartz-benchmark
+    asv run
+    asv publish
+    asv preview
