@@ -1,6 +1,6 @@
 # bartz/src/bartz/mcmcloop.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -33,6 +33,7 @@ from jax import random
 from jax import debug
 from jax import numpy as jnp
 from jax import lax
+from jax import tree
 
 from . import jaxext
 from . import grove
@@ -54,19 +55,20 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         The number of iterations to save.
     n_skip : int
         The number of iterations to skip between each saved iteration, plus 1.
+        The effective burn-in is ``n_burn + n_skip - 1``.
     callback : callable
         An arbitrary function run at each iteration, called with the following
         arguments, passed by keyword:
 
         bart : dict
-            The current MCMC state.
+            The MCMC state just after updating it.
         burnin : bool
             Whether the last iteration was in the burn-in phase.
         i_total : int
             The index of the last iteration (0-based).
         i_skip : int
-            The index of the last iteration, starting from the last saved
-            iteration.
+            The number of MCMC updates from the last saved state. The initial
+            state counts as saved, even if it's not copied into the trace.
         n_burn, n_save, n_skip : int
             The corresponding arguments as-is.
 
@@ -80,56 +82,74 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     -------
     bart : dict
         The final MCMC state.
-    burnin_trace : dict
+    burnin_trace : dict of (n_burn, ...) arrays
         The trace of the burn-in phase, containing the following subset of
         fields from the `bart` dictionary, with an additional head index that
         runs over MCMC iterations: 'sigma2', 'grow_prop_count',
         'grow_acc_count', 'prune_prop_count', 'prune_acc_count'.
-    main_trace : dict
+    main_trace : dict of (n_save, ...) arrays
         The trace of the main phase, containing the following subset of fields
         from the `bart` dictionary, with an additional head index that runs
         over MCMC iterations: 'leaf_trees', 'var_trees', 'split_trees', plus
         the fields in `burnin_trace`.
+
+    Notes
+    -----
+    The number of MCMC updates is ``n_burn + n_skip * n_save``. The traces do
+    not include the initial state, and include the final state.
     """
 
-    tracelist_burnin = 'sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count', 'ratios'
+    tracevars_light = ('sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count', 'ratios')
+    tracevars_heavy = ('leaf_trees', 'var_trees', 'split_trees')
 
-    tracelist_main = tracelist_burnin + ('leaf_trees', 'var_trees', 'split_trees')
+    def empty_trace(length, bart, tracelist):
+        bart = {k: v for k, v in bart.items() if k in tracelist}
+        return jax.vmap(lambda x: x, in_axes=None, out_axes=0, axis_size=length)(bart)
+
+    trace_light = empty_trace(n_burn + n_save, bart, tracevars_light)
+    trace_heavy = empty_trace(         n_save, bart, tracevars_heavy)
 
     callback_kw = dict(n_burn=n_burn, n_save=n_save, n_skip=n_skip)
 
-    def inner_loop(carry, _, tracelist, burnin):
-        bart, i_total, i_skip, key = carry
+    carry = (bart, 0, key, trace_light, trace_heavy)
+
+    def loop(carry, _):
+        bart, i_total, key, trace_light, trace_heavy = carry
+
         key, subkey = random.split(key)
         bart = mcmcstep.step(bart, subkey)
+
+        burnin = i_total < n_burn
+        i_skip = jnp.where(
+            burnin,
+            i_total + 1,
+            (i_total + 1) % n_skip + jnp.where(i_total + 1 < n_skip, n_burn, 0),
+        )
         callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw)
-        output = {key: bart[key] for key in tracelist if key in bart}
-        return (bart, i_total + 1, i_skip + 1, key), output
 
-    def empty_trace(bart, tracelist):
-        return jax.vmap(lambda x: x, in_axes=None, out_axes=0, axis_size=0)(bart)
+        i_heavy = jnp.where(burnin, 0, (i_total - n_burn) // n_skip)
+        i_light = jnp.where(burnin, i_total, n_burn + i_heavy)
 
-    if n_burn > 0:
-        carry = bart, 0, 0, key
-        burnin_loop = functools.partial(inner_loop, tracelist=tracelist_burnin, burnin=True)
-        (bart, i_total, _, key), burnin_trace = lax.scan(burnin_loop, carry, None, n_burn)
-    else:
-        i_total = 0
-        burnin_trace = empty_trace(bart, tracelist_burnin)
+        def update_trace(index, trace, bart):
+            bart = {k: v for k, v in bart.items() if k in trace}
+            def assign_at_index(trace_array, state_array):
+                return trace_array.at[index, ...].set(state_array)
+            return tree.map(assign_at_index, trace, bart)
 
-    def outer_loop(carry, _):
-        bart, i_total, key = carry
-        main_loop = functools.partial(inner_loop, tracelist=[], burnin=False)
-        inner_carry = bart, i_total, 0, key
-        (bart, i_total, _, key), _ = lax.scan(main_loop, inner_carry, None, n_skip)
-        output = {key: bart[key] for key in tracelist_main if key in bart}
-        return (bart, i_total, key), output
+        trace_heavy = update_trace(i_heavy, trace_heavy, bart)
+        trace_light = update_trace(i_light, trace_light, bart)
 
-    if n_save > 0:
-        carry = bart, i_total, key
-        (bart, _, _), main_trace = lax.scan(outer_loop, carry, None, n_save)
-    else:
-        main_trace = empty_trace(bart, tracelist_main)
+        i_total += 1
+        carry = (bart, i_total, key, trace_light, trace_heavy)
+        return carry, None
+
+    carry, _ = lax.scan(loop, carry, None, n_burn + n_skip * n_save)
+
+    bart, _, _, trace_light, trace_heavy = carry
+
+    burnin_trace = tree.map(lambda x: x[:n_burn, ...], trace_light)
+    main_trace = tree.map(lambda x: x[n_burn:, ...], trace_light)
+    main_trace.update(trace_heavy)
 
     return bart, burnin_trace, main_trace
 
