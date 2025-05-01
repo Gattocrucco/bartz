@@ -133,7 +133,13 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         def update_trace(index, trace, bart):
             bart = {k: v for k, v in bart.items() if k in trace}
             def assign_at_index(trace_array, state_array):
-                return trace_array.at[index, ...].set(state_array)
+                if trace_array.size:
+                    return trace_array.at[index, ...].set(state_array)
+                else:
+                    # this handles the case where a trace is empty (e.g.,
+                    # no burn-in) because jax refuses to index into an array
+                    # of length 0
+                    return trace_array
             return tree.map(assign_at_index, trace, bart)
 
         trace_heavy = update_trace(i_heavy, trace_heavy, bart)
