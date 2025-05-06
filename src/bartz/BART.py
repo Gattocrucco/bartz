@@ -55,9 +55,9 @@ class gbart:
     sigest : float, optional
         An estimate of the residual standard deviation on `y_train`, used to set
         `lamda`. If not specified, it is estimated by linear regression (with
-        intercept). If `y_train` has less than two elements, it is set to 1. If
-        n <= p, it is set to the variance of `y_train`. Ignored if `lamda` is
-        specified.
+        intercept, and without taking into account `w`). If `y_train` has less
+        than two elements, it is set to 1. If n <= p, it is set to the standard
+        deviation of `y_train`. Ignored if `lamda` is specified.
     sigdf : int, default 3
         The degrees of freedom of the scaled inverse-chisquared prior on the
         noise variance.
@@ -83,6 +83,12 @@ class gbart:
     offset : float, optional
         The prior mean of the latent mean function. If not specified, it is set
         to the mean of `y_train`. If `y_train` is empty, it is set to 0.
+    w : array (n,), optional
+        Coefficients that rescale the error standard deviation on each
+        datapoint. Not specifying `w` is equivalent to setting it to 1 for all
+        datapoints. Note: `w` is ignored in the automatic determination of
+        `sigest`, so either the weights should be O(1), or `sigest` should be
+        specified by the user.
     ntree : int, default 200
         The number of trees used to represent the latent mean function.
     numcut : int, default 255
@@ -173,6 +179,7 @@ class gbart:
         maxdepth=6,
         lamda=None,
         offset=None,
+        w=None,
         ntree=200,
         numcut=255,
         ndpost=1000,
@@ -184,9 +191,11 @@ class gbart:
         ):
 
         x_train, x_train_fmt = self._process_predictor_input(x_train)
-
-        y_train, y_train_fmt = self._process_response_input(y_train)
+        y_train, _ = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
+        if w is not None:
+            w, _ = self._process_response_input(w)
+            self._check_same_length(x_train, w)
 
         offset = self._process_offset_settings(y_train, offset)
         scale = self._process_scale_settings(y_train, k)
@@ -194,11 +203,9 @@ class gbart:
 
         splits, max_split = self._determine_splits(x_train, usequants, numcut)
         x_train = self._bin_predictors(x_train, splits)
+        y_train, w, lamda_scaled = self._transform_input(y_train, w, lamda, offset, scale)
 
-        y_train = self._transform_input(y_train, offset, scale)
-        lamda_scaled = lamda / (scale * scale)
-
-        mcmc_state = self._setup_mcmc(x_train, y_train, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree, initkw)
+        mcmc_state = self._setup_mcmc(x_train, y_train, w, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree, initkw)
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
 
         sigma = self._extract_sigma(main_trace, scale)
@@ -336,11 +343,15 @@ class gbart:
         return prepcovars.bin_predictors(x, splits)
 
     @staticmethod
-    def _transform_input(y, offset, scale):
-        return (y - offset) / scale
+    def _transform_input(y, w, lamda, offset, scale):
+        y = (y - offset) / scale
+        if w is not None:
+            w = w / scale
+        lamda = lamda / (scale * scale)
+        return y, w, lamda
 
     @staticmethod
-    def _setup_mcmc(x_train, y_train, max_split, lamda, sigdf, power, base, maxdepth, ntree, initkw):
+    def _setup_mcmc(x_train, y_train, w, max_split, lamda, sigdf, power, base, maxdepth, ntree, initkw):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
@@ -348,6 +359,7 @@ class gbart:
         kw = dict(
             X=x_train,
             y=y_train,
+            error_scale=w,
             max_split=max_split,
             num_trees=ntree,
             p_nonterminal=p_nonterminal,

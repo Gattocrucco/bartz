@@ -52,6 +52,7 @@ def init(*,
     p_nonterminal,
     sigma2_alpha,
     sigma2_beta,
+    error_scale=None,
     small_float=jnp.float32,
     large_float=jnp.float32,
     min_points_per_leaf=None,
@@ -76,9 +77,12 @@ def init(*,
         The probability of a nonterminal node at each depth. The maximum depth
         of trees is fixed by the length of this array.
     sigma2_alpha : float
-        The shape parameter of the inverse gamma prior on the noise variance.
+        The shape parameter of the inverse gamma prior on the error variance.
     sigma2_beta : float
-        The scale parameter of the inverse gamma prior on the noise variance.
+        The scale parameter of the inverse gamma prior on the error variance.
+    error_scale : float array (n,), optional
+        Each error is scaled by the corresponding factor in `error_scale`, so
+        the error variance for ``y[i]`` is ``sigma2 * error_scale[i] ** 2``.
     small_float : dtype, default float32
         The dtype for large arrays used in the algorithm.
     large_float : dtype, default float32
@@ -110,6 +114,8 @@ def init(*,
             roundoff.
         'sigma2' : large_float
             The noise variance.
+        'error_scale' : large_float array (n,)
+            The argument `error_scale`.
         'grow_prop_count', 'prune_prop_count' : int
             The number of grow/prune proposals made during one full MCMC cycle.
         'grow_acc_count', 'prune_acc_count' : int
@@ -179,6 +185,10 @@ def init(*,
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float),
         sigma2=sigma2,
+        error_scale=(
+            None if error_scale is None else
+            jnp.asarray(error_scale, large_float)
+        ),
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
         prune_prop_count=jnp.zeros((), int),
@@ -1558,6 +1568,8 @@ def sample_sigma(bart, key):
 
     resid = bart['resid']
     alpha = bart['sigma2_alpha'] + resid.size / 2
+    if bart['error_scale'] is not None:
+        resid = resid / bart['error_scale']
     norm2 = jnp.dot(resid, resid, preferred_element_type=bart['opt']['large_float'])
     beta = bart['sigma2_beta'] + norm2 / 2
 
