@@ -34,6 +34,8 @@ def rng(request):
     return np.random.default_rng(seed)
 
 class ListOfRandomKeys:
+    # I could move this into a public jaxext.split function (with a shorter
+    # name)
 
     def __init__(self, key):
         self._keys = list(jax.random.split(key, 128))

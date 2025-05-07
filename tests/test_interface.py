@@ -66,12 +66,17 @@ def f(x): # conditional mean
     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
 
 def gen_y(key, X):
+    # XXX: use weights to scale error?
     sigma = 0.1
     return f(X) + sigma * random.normal(key, (X.shape[1],))
 
 @pytest.fixture
-def y(X, keys):
+def y(keys, X):
     return gen_y(keys.pop(), X)
+
+@pytest.fixture
+def w(keys, n):
+    return jnp.exp(random.uniform(keys.pop(), (n,), float, -1, 1))
 
 @pytest.fixture
 def kw():
@@ -195,13 +200,15 @@ def test_few_datapoints(X, y, kw, keys):
     [False, dict(usequants=True), dict(resid_batch_size=None, count_batch_size=None, save_ratios=True)],
     [True, dict(usequants=False, numcut=5), dict(resid_batch_size=16, count_batch_size=16, save_ratios=False)],
 ])
-def test_comparison_rbart(X, y, keys, use_w, kw_shared, initkw):
+def test_comparison_rbart(X, y, w, keys, use_w, kw_shared, initkw):
     kw = dict(
         ntree=2 * X.shape[1],
         nskip=1000,
         ndpost=1000,
         numcut=255,
     )
+    if use_w:
+        kw.update(w=w)
     kw.update(kw_shared)
 
     kw_bartz = dict(**kw, initkw=initkw)
@@ -217,6 +224,8 @@ def test_comparison_rbart(X, y, keys, use_w, kw_shared, initkw):
     rbart = BART.mc_gbart(X.T, y, **kw_BART, seed=seed)
 
     numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
+    # I would check sigest as well, but it's not in the R object despite what
+    # the documentation says
 
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10

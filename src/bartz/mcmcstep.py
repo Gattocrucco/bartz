@@ -531,6 +531,8 @@ def categorical(key, distr):
     u : int
         A random integer in the range ``[0, n)``. If all probabilities are zero,
         return ``n``.
+    norm : float
+        The sum of `distr`.
     """
     ecdf = jnp.cumsum(distr)
     u = random.uniform(key, (), ecdf.dtype, 0, ecdf[-1])
@@ -944,7 +946,7 @@ def accept_moves_parallel_stage(bart, moves, key):
     bart['grow_prop_count'] = jnp.sum(moves['grow'])
     bart['prune_prop_count'] = jnp.sum(moves['allowed'] & ~moves['grow'])
 
-    prelkv, prelk = precompute_likelihood_terms(count_trees, bart['sigma2'], move_counts)
+    prelkv, prelk = precompute_likelihood_terms(bart['sigma2'], move_counts)
     prelf = precompute_leaf_terms(count_trees, bart['sigma2'], key)
 
     return bart, moves, count_trees, move_counts, prelkv, prelk, prelf
@@ -997,9 +999,8 @@ def compute_count_trees(leaf_indices, moves, batch_size):
     count_trees : int array (num_trees, 2 ** (d - 1))
         The number of points in each potential or actual leaf node.
     counts : dict
-        The counts of the number of points in the the nodes modified by the
-        moves, organized as two dictionaries 'grow' and 'prune', with subfields
-        'left', 'right', and 'total'.
+        The counts of the number of points in the leaves grown or pruned by the
+        moves, under keys 'left', 'right', and 'total' (left + right).
     """
 
     ntree, tree_size = moves['var_trees'].shape
@@ -1075,7 +1076,7 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
     """
     Complete non-likelihood MH ratio calculation.
 
-    This functions adds the probability of choosing the prune move.
+    This function adds the probability of choosing the prune move.
 
     Parameters
     ----------
@@ -1160,14 +1161,12 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
         .set(values_at_node)
     )
 
-def precompute_likelihood_terms(count_trees, sigma2, move_counts):
+def precompute_likelihood_terms(sigma2, move_counts):
     """
     Pre-compute terms used in the likelihood ratio of the acceptance step.
 
     Parameters
     ----------
-    count_trees : array (num_trees, 2 ** d)
-        The number of points in each potential or actual leaf node.
     sigma2 : float
         The noise variance.
     move_counts : dict
@@ -1183,7 +1182,7 @@ def precompute_likelihood_terms(count_trees, sigma2, move_counts):
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
-    ntree = len(count_trees)
+    ntree = len(move_counts['total'])
     sigma_mu2 = 1 / ntree
     prelkv = dict()
     prelkv['sigma2_left'] = sigma2 + move_counts['left'] * sigma_mu2
@@ -1384,7 +1383,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
     mean_post = resid_tree * prelf['mean_factor']
     leaf_tree = mean_post + prelf['centered_leaves']
 
-    # copy leaves around such that the leaf indices select the right leaf
+    # copy leaves around such that the leaf indices point to the correct leaf
     to_prune = acc ^ move['grow']
     leaf_tree = (leaf_tree
         .at[jnp.where(to_prune, left, leaf_tree.size)]
