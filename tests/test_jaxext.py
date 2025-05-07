@@ -1,6 +1,6 @@
 # bartz/tests/test_jaxext.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -62,7 +62,7 @@ class TestAutoBatch:
     @pytest.mark.parametrize('target_nbatches', [1, 7])
     @pytest.mark.parametrize('with_margin', [False, True])
     @pytest.mark.parametrize('additional_size', [3, 0])
-    def test_batch_size(self, key, target_nbatches, with_margin, additional_size):
+    def test_batch_size(self, keys, target_nbatches, with_margin, additional_size):
 
         def func(a, b, c):
             return (a * b[:, None]).sum(1), c * b[None, :]
@@ -74,10 +74,9 @@ class TestAutoBatch:
             batch_size += 1
         size = target_nbatches * multiplier
 
-        key = random.split(key, 3)
-        a = random.uniform(key[0], (size, additional_size))
-        b = random.uniform(key[1], (size,))
-        c = random.uniform(key[2], (5, size))
+        a = random.uniform(keys.pop(), (size, additional_size))
+        b = random.uniform(keys.pop(), (size,))
+        c = random.uniform(keys.pop(), (5, size))
 
         assert atomic_batch_size == a.shape[1] + 1 + c.shape[0] + 1 + c.shape[0]
 

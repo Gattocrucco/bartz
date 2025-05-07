@@ -1,6 +1,6 @@
 # bartz/tests/test_meta.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -26,12 +26,26 @@ import pytest
 from jax import numpy as jnp
 
 @pytest.fixture
-def key1(key):
-    return key
+def keys1(keys):
+    return keys
 
 @pytest.fixture
-def key2(key):
-    return key
+def keys2(keys):
+    return keys
 
-def test_random_key_does_not_depend_on_fixture(key1, key2):
-    assert jnp.all(key1 == key2)
+def test_random_keys_do_not_depend_on_fixture(keys1, keys2):
+    assert keys1 is keys2
+
+def test_number_of_random_keys(keys):
+    assert len(keys) == 128
+
+@pytest.fixture
+def consume_one_key(keys):
+    return keys.pop()
+
+@pytest.fixture
+def consume_another_key(keys):
+    return keys.pop()
+
+def test_random_keys_are_consumed(consume_one_key, consume_another_key, keys):
+    assert len(keys) == 126
