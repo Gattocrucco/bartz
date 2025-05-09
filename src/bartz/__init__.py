@@ -1,6 +1,6 @@
 # bartz/src/bartz/__init__.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -28,13 +28,5 @@ Super-fast BART (Bayesian Additive Regression Trees) in Python
 See the manual at https://gattocrucco.github.io/bartz/docs
 """
 
-from ._version import __version__
-
-from . import BART
-
-from . import debug
-from . import grove
-from . import mcmcstep
-from . import mcmcloop
-from . import prepcovars
-from . import jaxext
+from . import BART, debug, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
+from ._version import __version__  # noqa: F401

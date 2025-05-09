@@ -43,9 +43,8 @@ Since the nodes at the bottom can only be leaves and not decision nodes, the 'va
 import functools
 import math
 
-import jax
-from jax import numpy as jnp
 from jax import lax
+from jax import numpy as jnp
 
 from . import jaxext
 

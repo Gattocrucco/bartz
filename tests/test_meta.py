@@ -23,7 +23,6 @@
 # SOFTWARE.
 
 import pytest
-from jax import numpy as jnp
 
 
 @pytest.fixture

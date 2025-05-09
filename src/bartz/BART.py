@@ -27,11 +27,7 @@ import functools
 import jax
 import jax.numpy as jnp
 
-from . import jaxext
-from . import grove
-from . import mcmcstep
-from . import mcmcloop
-from . import prepcovars
+from . import grove, jaxext, mcmcloop, mcmcstep, prepcovars
 
 
 class gbart:
@@ -192,7 +188,7 @@ class gbart:
         keepevery=1,
         printevery=100,
         seed=0,
-        initkw={},
+        initkw=None,
     ):
         x_train, x_train_fmt = self._process_predictor_input(x_train)
         y_train, _ = self._process_response_input(y_train)
@@ -399,7 +395,8 @@ class gbart:
             sigma2_beta=sigma2_beta,
             min_points_per_leaf=5,
         )
-        kw.update(initkw)
+        if initkw is not None:
+            kw.update(initkw)
         return mcmcstep.init(**kw)
 
     @staticmethod

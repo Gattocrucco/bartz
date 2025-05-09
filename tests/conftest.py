@@ -22,9 +22,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import pytest
-import numpy as np
 import jax
+import numpy as np
+import pytest
 
 
 @pytest.fixture

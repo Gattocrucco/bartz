@@ -1,9 +1,9 @@
-import functools
 import abc
+import functools
 
-from rpy2 import robjects
-from rpy2.robjects import conversion, numpy2ri, methods
 import numpy as np
+from rpy2 import robjects
+from rpy2.robjects import conversion, methods, numpy2ri
 
 # converter for pandas
 pandas_converter = conversion.Converter('pandas')
@@ -137,8 +137,8 @@ class RObjectABC(abc.ABC):
             for s, v in obj.items():
                 setattr(self, s.replace('.', '_'), self._r2py(v))
 
-    @staticmethod
-    def _tryagain_withtimeout(func, timeoutpercall, maxretries):
+    @classmethod
+    def _tryagain_withtimeout(cls, func, timeoutpercall, maxretries):
         """decorate `func` to time its execution, time out over a threshold,
         and optionally retries up to a maximum number of calls"""
         import wrapt_timeout_decorator as wtd
@@ -153,7 +153,7 @@ class RObjectABC(abc.ABC):
                     return timedfunc(*args, **kw)
                 except TimeoutError as exc:
                     print(
-                        f'###### {self._rfuncname}:',
+                        f'###### {cls._rfuncname}:',
                         exc.__class__.__name__,
                         *exc.args,
                         '#######',

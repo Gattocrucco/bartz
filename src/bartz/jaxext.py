@@ -26,11 +26,10 @@ import functools
 import math
 import warnings
 
-from scipy import special
 import jax
+from jax import lax, tree_util
 from jax import numpy as jnp
-from jax import tree_util
-from jax import lax
+from scipy import special
 
 
 def float_type(*args):

@@ -22,10 +22,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import numpy
 import pytest
 from jax import numpy as jnp
 from jax import random
-import numpy
 
 from bartz import jaxext
 
@@ -95,9 +95,9 @@ class TestAutoBatch:
 
         assert nbatches == target_nbatches
 
-        for o2, o3 in zip(out2, out3):
+        for o2, o3 in zip(out2, out3, strict=True):
             numpy.testing.assert_array_max_ulp(o2, o3)
-        for o1, o2 in zip(out1, out2):
+        for o1, o2 in zip(out1, out2, strict=True):
             numpy.testing.assert_array_max_ulp(o1, o2)
 
     def test_unbatched_arg(self):

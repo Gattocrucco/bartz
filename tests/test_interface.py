@@ -22,16 +22,16 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import pytest
 import jax
+import numpy
+import pytest
 from jax import numpy as jnp
 from jax import random
-import numpy
 
 import bartz
 
-from .rbartpackages import BART
 from . import util
+from .rbartpackages import BART
 
 
 @pytest.fixture
@@ -209,7 +209,6 @@ def test_one_datapoint(X, y, kw, keys):
     X = X[:, :1]
     y = y[:1]
     bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
-    ndpost = kw['ndpost']
     assert bart.scale == 1
     assert bart.sigest == 1
 
@@ -218,7 +217,6 @@ def test_two_datapoints(X, y, kw, keys):
     X = X[:, :2]
     y = y[:2]
     bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
-    ndpost = kw['ndpost']
     numpy.testing.assert_allclose(bart.sigest, y.std())
 
 

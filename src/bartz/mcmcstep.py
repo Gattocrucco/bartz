@@ -37,12 +37,10 @@ import functools
 import math
 
 import jax
-from jax import random
+from jax import lax, random
 from jax import numpy as jnp
-from jax import lax
 
-from . import jaxext
-from . import grove
+from . import grove, jaxext
 
 
 def init(

@@ -28,12 +28,12 @@
 # list see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-import sys
-import inspect
-import pathlib
 import datetime
+import inspect
 import os
+import pathlib
 import subprocess
+import sys
 
 import packaging
 
@@ -56,7 +56,7 @@ elif variant == 'latest':
 
     # find final versions in tags
     versions = []
-    for i, t in enumerate(tags):
+    for t in tags:
         try:
             v = packaging.version.parse(t)
         except packaging.version.InvalidVersion:

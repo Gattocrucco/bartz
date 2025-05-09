@@ -1,12 +1,10 @@
 import functools
 
 import jax
-from jax import numpy as jnp
 from jax import lax
+from jax import numpy as jnp
 
-from . import grove
-from . import mcmcstep
-from . import jaxext
+from . import grove, jaxext
 
 
 def print_tree(leaf_tree, var_tree, split_tree, print_all=False):

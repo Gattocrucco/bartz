@@ -63,6 +63,7 @@ matplotlib-label-lines = "^0.7.0"
 polars = {version = "^1.0.0", extras = ["pandas", "pyarrow"]}
 virtualenv = "^20.30.0"
 asv = "^0.6.4"
+ruff = "^0.11.9"
 
 [tool.poetry.group.test.dependencies]
 coverage = "^7.4.3"
@@ -127,3 +128,14 @@ exclude = [".asv", "*.ipynb"]
 
 [tool.ruff.format]
 quote-style = "single"
+
+[tool.ruff.lint]
+select = [
+    "B", # bugbear: grab bag of additional stuff
+    "UP", # pyupgrade: fix some outdated idioms
+    "I", # isort: sort and reformat import statements
+    "F", # flake8
+]
+ignore = [
+    "B028", # warn with stacklevel = 2
+]

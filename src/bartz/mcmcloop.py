@@ -29,15 +29,10 @@ Functions that implement the full BART posterior MCMC loop.
 import functools
 
 import jax
-from jax import random
-from jax import debug
+from jax import debug, lax, random, tree
 from jax import numpy as jnp
-from jax import lax
-from jax import tree
 
-from . import jaxext
-from . import grove
-from . import mcmcstep
+from . import grove, jaxext, mcmcstep
 
 
 @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))

@@ -1,8 +1,9 @@
 import functools
 
+import jax
 from jax import numpy as jnp
 from jax import random
-import jax
+
 import bartz
 
 

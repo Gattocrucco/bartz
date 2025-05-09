@@ -28,7 +28,6 @@ import jax
 from jax import numpy as jnp
 
 from . import jaxext
-from . import grove
 
 
 @functools.partial(jax.jit, static_argnums=(1,))
