@@ -203,7 +203,7 @@ class gbart:
 
         splits, max_split = self._determine_splits(x_train, usequants, numcut)
         x_train = self._bin_predictors(x_train, splits)
-        y_train, w, lamda_scaled = self._transform_input(y_train, w, lamda, offset, scale)
+        y_train, lamda_scaled = self._transform_input(y_train, lamda, offset, scale)
 
         mcmc_state = self._setup_mcmc(x_train, y_train, w, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree, initkw)
         final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
@@ -343,12 +343,10 @@ class gbart:
         return prepcovars.bin_predictors(x, splits)
 
     @staticmethod
-    def _transform_input(y, w, lamda, offset, scale):
+    def _transform_input(y, lamda, offset, scale):
         y = (y - offset) / scale
-        if w is not None:
-            w = w / scale
         lamda = lamda / (scale * scale)
-        return y, w, lamda
+        return y, lamda
 
     @staticmethod
     def _setup_mcmc(x_train, y_train, w, max_split, lamda, sigdf, power, base, maxdepth, ntree, initkw):

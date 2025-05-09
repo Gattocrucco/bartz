@@ -177,7 +177,7 @@ def init(*,
     y = jnp.asarray(y, small_float)
     resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, 2 ** max_depth * num_trees)
     sigma2 = jnp.array(sigma2_beta / sigma2_alpha, large_float)
-    sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
+    sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1) # TODO: I don't like this error check, these functions should be low-level and just do the thing. Why is it here?
 
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
@@ -185,9 +185,9 @@ def init(*,
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float),
         sigma2=sigma2,
-        error_scale=(
+        prec_scale=(
             None if error_scale is None else
-            jnp.asarray(error_scale, large_float)
+            lax.reciprocal(jnp.square(jnp.asarray(error_scale, large_float)))
         ),
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
@@ -895,8 +895,8 @@ def accept_moves_and_sample_leaves(bart, moves, key):
     bart : dict
         The new BART mcmc state.
     """
-    bart, moves, count_trees, move_counts, prelkv, prelk, prelf = accept_moves_parallel_stage(bart, moves, key)
-    bart, moves = accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv, prelk, prelf)
+    bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf = accept_moves_parallel_stage(bart, moves, key)
+    bart, moves = accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf)
     return accept_moves_final_stage(bart, moves)
 
 def accept_moves_parallel_stage(bart, moves, key):
@@ -941,15 +941,22 @@ def accept_moves_parallel_stage(bart, moves, key):
         count_half_trees = count_trees[:, :bart['var_trees'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
 
+    # count number of datapoints per leaf, weighted by error precision scale
+    if bart['prec_scale'] is None:
+        prec_trees = count_trees
+        move_precs = move_counts
+    else:
+        prec_trees, move_precs = compute_prec_trees(bart['prec_scale'], bart['leaf_indices'], moves, bart['opt']['count_batch_size'])
+
     # compute some missing information about moves
     moves = complete_ratio(moves, move_counts, bart['min_points_per_leaf'])
     bart['grow_prop_count'] = jnp.sum(moves['grow'])
     bart['prune_prop_count'] = jnp.sum(moves['allowed'] & ~moves['grow'])
 
-    prelkv, prelk = precompute_likelihood_terms(bart['sigma2'], move_counts)
-    prelf = precompute_leaf_terms(count_trees, bart['sigma2'], key)
+    prelkv, prelk = precompute_likelihood_terms(bart['sigma2'], move_precs)
+    prelf = precompute_leaf_terms(prec_trees, bart['sigma2'], key)
 
-    return bart, moves, count_trees, move_counts, prelkv, prelk, prelf
+    return bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, None))
 def apply_grow_to_indices(moves, leaf_indices, X):
@@ -1072,6 +1079,78 @@ def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
         .sum(axis=2)
     )
 
+def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
+    """
+    Count the number of datapoints in each leaf.
+
+    Parameters
+    ----------
+    grow_leaf_indices : int array (num_trees, n)
+        The index of the leaf each datapoint falls into, if the grow move is
+        accepted.
+    moves : dict
+        The proposed moves, see `sample_moves`.
+    batch_size : int or None
+        The data batch size to use for the summation.
+
+    Returns
+    -------
+    count_trees : int array (num_trees, 2 ** (d - 1))
+        The number of points in each potential or actual leaf node.
+    counts : dict
+        The counts of the number of points in the leaves grown or pruned by the
+        moves, under keys 'left', 'right', and 'total' (left + right).
+    """
+
+    ntree, tree_size = moves['var_trees'].shape
+    tree_size *= 2
+    tree_indices = jnp.arange(ntree)
+
+    prec_trees = prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size)
+
+    # prec datapoints in nodes modified by move
+    precs = dict()
+    precs['left'] = prec_trees[tree_indices, moves['left']]
+    precs['right'] = prec_trees[tree_indices, moves['right']]
+    precs['total'] = precs['left'] + precs['right']
+
+    # write prec into non-leaf node
+    prec_trees = prec_trees.at[tree_indices, moves['node']].set(precs['total'])
+
+    return prec_trees, precs
+
+def prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size):
+    """
+    Count the number of datapoints in each leaf.
+
+    Parameters
+    ----------
+    leaf_indices : int array (num_trees, n)
+        The index of the leaf each datapoint falls into.
+    tree_size : int
+        The size of the leaf tree array (2 ** d).
+    batch_size : int or None
+        The data batch size to use for the summation.
+
+    Returns
+    -------
+    count_trees : int array (num_trees, 2 ** (d - 1))
+        The number of points in each leaf node.
+    """
+    if batch_size is None:
+        return _prec_scan(prec_scale, leaf_indices, tree_size)
+    else:
+        return _prec_vec(prec_scale, leaf_indices, tree_size, batch_size)
+
+def _prec_scan(prec_scale, leaf_indices, tree_size):
+    def loop(_, leaf_indices):
+        return None, _aggregate_scatter(prec_scale, leaf_indices, tree_size, jnp.float32) # TODO: use large_float
+    _, prec_trees = lax.scan(loop, None, leaf_indices)
+    return prec_trees
+
+def _prec_vec(prec_scale, leaf_indices, tree_size, batch_size):
+    return _aggregate_batched_alltrees(prec_scale, leaf_indices, tree_size, jnp.float32, batch_size) # TODO: use large_float
+
 def complete_ratio(moves, move_counts, min_points_per_leaf):
     """
     Complete non-likelihood MH ratio calculation.
@@ -1161,7 +1240,7 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
         .set(values_at_node)
     )
 
-def precompute_likelihood_terms(sigma2, move_counts):
+def precompute_likelihood_terms(sigma2, move_precs):
     """
     Pre-compute terms used in the likelihood ratio of the acceptance step.
 
@@ -1182,12 +1261,12 @@ def precompute_likelihood_terms(sigma2, move_counts):
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
-    ntree = len(move_counts['total'])
+    ntree = len(move_precs['total'])
     sigma_mu2 = 1 / ntree
     prelkv = dict()
-    prelkv['sigma2_left'] = sigma2 + move_counts['left'] * sigma_mu2
-    prelkv['sigma2_right'] = sigma2 + move_counts['right'] * sigma_mu2
-    prelkv['sigma2_total'] = sigma2 + move_counts['total'] * sigma_mu2
+    prelkv['sigma2_left'] = sigma2 + move_precs['left'] * sigma_mu2
+    prelkv['sigma2_right'] = sigma2 + move_precs['right'] * sigma_mu2
+    prelkv['sigma2_total'] = sigma2 + move_precs['total'] * sigma_mu2
     prelkv['sqrt_term'] = jnp.log(
         sigma2 * prelkv['sigma2_total'] /
         (prelkv['sigma2_left'] * prelkv['sigma2_right'])
@@ -1196,7 +1275,7 @@ def precompute_likelihood_terms(sigma2, move_counts):
         exp_factor=sigma_mu2 / (2 * sigma2),
     )
 
-def precompute_leaf_terms(count_trees, sigma2, key):
+def precompute_leaf_terms(prec_trees, sigma2, key):
     """
     Pre-compute terms used to sample leaves from their posterior.
 
@@ -1221,16 +1300,16 @@ def precompute_leaf_terms(count_trees, sigma2, key):
             The mean-zero normal values to be added to the posterior mean to
             obtain the posterior leaf samples.
     """
-    ntree = len(count_trees)
-    prec_lk = count_trees / sigma2
+    ntree = len(prec_trees)
+    prec_lk = prec_trees / sigma2
     var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
-    z = random.normal(key, count_trees.shape, sigma2.dtype)
+    z = random.normal(key, prec_trees.shape, sigma2.dtype)
     return dict(
         mean_factor=var_post / sigma2, # = mean_lk * prec_lk * var_post / resid_tree
         centered_leaves=z * jnp.sqrt(var_post),
     )
 
-def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv, prelk, prelf):
+def accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf):
     """
     The part of accepting the moves that has to be done one tree at a time.
 
@@ -1238,8 +1317,6 @@ def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv,
     ----------
     bart : dict
         A partially updated BART mcmc state.
-    count_trees : array (num_trees, 2 ** d)
-        The number of points in each potential or actual leaf node.
     moves : dict
         The proposed moves, see `sample_moves`.
     move_counts : dict
@@ -1271,6 +1348,7 @@ def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv,
             len(bart['leaf_trees']),
             bart['opt']['resid_batch_size'],
             resid,
+            bart['prec_scale'],
             bart['min_points_per_leaf'],
             'ratios' in bart,
             prelk,
@@ -1279,8 +1357,8 @@ def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv,
         return resid, (leaf_tree, acc, to_prune, ratios)
 
     items = (
-        bart['leaf_trees'], count_trees,
-        moves, move_counts,
+        bart['leaf_trees'], prec_trees,
+        moves, move_counts, move_precs,
         bart['leaf_indices'],
         prelkv, prelf,
     )
@@ -1288,13 +1366,13 @@ def accept_moves_sequential_stage(bart, count_trees, moves, move_counts, prelkv,
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
-    bart.get('ratios', {}).update(ratios)
+    bart.get('ratios', {}).update(ratios) # TODO: this does not make sense, maybe it would with .setdeafault, but if it's how it is I guess it means it's unused
     moves['acc'] = acc
     moves['to_prune'] = to_prune
 
     return bart, moves
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_per_leaf, save_ratios, prelk, leaf_tree, count_tree, move, move_counts, leaf_indices, prelkv, prelf):
+def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale, min_points_per_leaf, save_ratios, prelk, leaf_tree, prec_tree, move, move_counts, move_precs, leaf_indices, prelkv, prelf):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -1321,6 +1399,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
         The number of datapoints in each leaf.
     move : dict
         The proposed move, see `sample_moves`.
+    TODO: move_counts
     leaf_indices : int array (n,)
         The leaf indices for the largest version of the tree compatible with
         the move.
@@ -1343,11 +1422,15 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
         The acceptance ratios for the moves. Empty if not to be saved.
     """
 
-    # sum residuals and count units per leaf, in tree proposed by grow move
-    resid_tree = sum_resid(resid, leaf_indices, leaf_tree.size, resid_batch_size)
+    # sum residuals in each leaf, in tree proposed by grow move
+    if prec_scale is None:
+        scaled_resid = resid
+    else:
+        scaled_resid = resid * prec_scale
+    resid_tree = sum_resid(scaled_resid, leaf_indices, leaf_tree.size, resid_batch_size)
 
     # subtract starting tree from function
-    resid_tree += count_tree * leaf_tree
+    resid_tree += prec_tree * leaf_tree
 
     # get indices of move
     node = move['node']
@@ -1397,7 +1480,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, min_points_
 
     return resid, leaf_tree, acc, to_prune, ratios
 
-def sum_resid(resid, leaf_indices, tree_size, batch_size):
+def sum_resid(scaled_resid, leaf_indices, tree_size, batch_size):
     """
     Sum the residuals in each leaf.
 
@@ -1422,7 +1505,7 @@ def sum_resid(resid, leaf_indices, tree_size, batch_size):
         aggr_func = _aggregate_scatter
     else:
         aggr_func = functools.partial(_aggregate_batched_onetree, batch_size=batch_size)
-    return aggr_func(resid, leaf_indices, tree_size, jnp.float32)
+    return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32) # TODO: use large_float
 
 def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
     n, = indices.shape
@@ -1567,9 +1650,11 @@ def sample_sigma(bart, key):
 
     resid = bart['resid']
     alpha = bart['sigma2_alpha'] + resid.size / 2
-    if bart['error_scale'] is not None:
-        resid = resid / bart['error_scale']
-    norm2 = jnp.dot(resid, resid, preferred_element_type=bart['opt']['large_float'])
+    if bart['prec_scale'] is None:
+        scaled_resid = resid
+    else:
+        scaled_resid = resid * bart['prec_scale']
+    norm2 = resid @ scaled_resid
     beta = bart['sigma2_beta'] + norm2 / 2
 
     sample = random.gamma(key, alpha)
