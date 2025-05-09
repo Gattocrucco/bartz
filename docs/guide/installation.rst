@@ -37,4 +37,10 @@ To install the latest development version, do instead
 
     pip install git+https://github.com/Gattocrucco/bartz.git
 
+To install a specific commit, do
+
+.. code-block:: sh
+
+    pip install git+https://github.com/Gattocrucco/bartz.git@<commit hash>
+
 To use on GPU on a system that doesn't provide `jax` pre-installed, read how to install jax `in its manual <https://docs.jax.dev/en/latest/installation.html>`_.

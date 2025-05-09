@@ -114,8 +114,8 @@ def init(*,
             roundoff.
         'sigma2' : large_float
             The noise variance.
-        'error_scale' : large_float array (n,)
-            The argument `error_scale`.
+        'prec_scale' : large_float array (n,) or None
+            The scale on the error precision, i.e., ``1 / error_scale ** 2``.
         'grow_prop_count', 'prune_prop_count' : int
             The number of grow/prune proposals made during one full MCMC cycle.
         'grow_acc_count', 'prune_acc_count' : int
@@ -919,11 +919,14 @@ def accept_moves_parallel_stage(bart, moves, key):
     moves : dict
         The proposed moves, with the field 'partial_ratio' replaced
         by 'log_trans_prior_ratio'.
-    count_trees : array (num_trees, 2 ** d)
-        The number of points in each potential or actual leaf node.
+    prec_trees : float array (num_trees, 2 ** d)
+        The likelihood precision scale in each potential or actual leaf node. If
+        there is no precision scale, this is the number of points in each leaf.
     move_counts : dict
         The counts of the number of points in the the nodes modified by the
         moves.
+    move_precs : dict
+        The likelihood precision scale in each node modified by the moves.
     prelkv, prelk, prelf : dict
         Dictionary with pre-computed terms of the likelihood ratios and leaf
         samples.
@@ -993,9 +996,9 @@ def compute_count_trees(leaf_indices, moves, batch_size):
 
     Parameters
     ----------
-    grow_leaf_indices : int array (num_trees, n)
-        The index of the leaf each datapoint falls into, if the grow move is
-        accepted.
+    leaf_indices : int array (num_trees, n)
+        The index of the leaf each datapoint falls into, with the deeper version
+        of the tree (post-GROW, pre-PRUNE).
     moves : dict
         The proposed moves, see `sample_moves`.
     batch_size : int or None
@@ -1081,13 +1084,15 @@ def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
 
 def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
     """
-    Count the number of datapoints in each leaf.
+    Compute the likelihood precision scale in each leaf.
 
     Parameters
     ----------
-    grow_leaf_indices : int array (num_trees, n)
-        The index of the leaf each datapoint falls into, if the grow move is
-        accepted.
+    prec_scale : float array (n,)
+        The scale of the precision of the error on each datapoint.
+    leaf_indices : int array (num_trees, n)
+        The index of the leaf each datapoint falls into, with the deeper version
+        of the tree (post-GROW, pre-PRUNE).
     moves : dict
         The proposed moves, see `sample_moves`.
     batch_size : int or None
@@ -1095,10 +1100,10 @@ def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
 
     Returns
     -------
-    count_trees : int array (num_trees, 2 ** (d - 1))
-        The number of points in each potential or actual leaf node.
+    prec_trees : float array (num_trees, 2 ** (d - 1))
+        The likelihood precision scale in each potential or actual leaf node.
     counts : dict
-        The counts of the number of points in the leaves grown or pruned by the
+        The likelihood precision scale in the leaves grown or pruned by the
         moves, under keys 'left', 'right', and 'total' (left + right).
     """
 
@@ -1121,10 +1126,12 @@ def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
 
 def prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size):
     """
-    Count the number of datapoints in each leaf.
+    Compute the likelihood precision scale in each leaf.
 
     Parameters
     ----------
+    prec_scale : float array (n,)
+        The scale of the precision of the error on each datapoint.
     leaf_indices : int array (num_trees, n)
         The index of the leaf each datapoint falls into.
     tree_size : int
@@ -1134,8 +1141,8 @@ def prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size):
 
     Returns
     -------
-    count_trees : int array (num_trees, 2 ** (d - 1))
-        The number of points in each leaf node.
+    prec_trees : int array (num_trees, 2 ** (d - 1))
+        The likelihood precision scale in each leaf node.
     """
     if batch_size is None:
         return _prec_scan(prec_scale, leaf_indices, tree_size)
@@ -1248,9 +1255,9 @@ def precompute_likelihood_terms(sigma2, move_precs):
     ----------
     sigma2 : float
         The noise variance.
-    move_counts : dict
-        The counts of the number of points in the the nodes modified by the
-        moves.
+    move_precs : dict
+        The likelihood precision scale in the leaves grown or pruned by the
+        moves, under keys 'left', 'right', and 'total' (left + right).
 
     Returns
     -------
@@ -1281,8 +1288,8 @@ def precompute_leaf_terms(prec_trees, sigma2, key):
 
     Parameters
     ----------
-    count_trees : array (num_trees, 2 ** d)
-        The number of points in each potential or actual leaf node.
+    prec_trees : array (num_trees, 2 ** d)
+        The likelihood precision scale in each potential or actual leaf node.
     sigma2 : float
         The noise variance.
     key : jax.dtypes.prng_key array
@@ -1294,8 +1301,8 @@ def precompute_leaf_terms(prec_trees, sigma2, key):
         Dictionary with pre-computed terms of the leaf sampling, with fields:
 
         'mean_factor' : float array (num_trees, 2 ** d)
-            The factor to be multiplied by the sum of residuals to obtain the
-            posterior mean.
+            The factor to be multiplied by the sum of the scaled residuals to
+            obtain the posterior mean.
         'centered_leaves' : float array (num_trees, 2 ** d)
             The mean-zero normal values to be added to the posterior mean to
             obtain the posterior leaf samples.
@@ -1317,11 +1324,15 @@ def accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_pre
     ----------
     bart : dict
         A partially updated BART mcmc state.
+    prec_trees : float array (num_trees, 2 ** d)
+        The likelihood precision scale in each potential or actual leaf node.
     moves : dict
         The proposed moves, see `sample_moves`.
     move_counts : dict
         The counts of the number of points in the the nodes modified by the
         moves.
+    move_precs : dict
+        The likelihood precision scale in each node modified by the moves.
     prelkv, prelk, prelf : dict
         Dictionaries with pre-computed terms of the likelihood ratios and leaf
         samples.
@@ -1366,7 +1377,7 @@ def accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_pre
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
-    bart.get('ratios', {}).update(ratios) # TODO: this does not make sense, maybe it would with .setdeafault, but if it's how it is I guess it means it's unused
+    bart.get('ratios', {}).update(ratios) # noop if there are no ratios
     moves['acc'] = acc
     moves['to_prune'] = to_prune
 
@@ -1386,6 +1397,9 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale,
         The batch size for computing the sum of residuals in each leaf.
     resid : float array (n,)
         The residuals (data minus forest value).
+    prec_scale : float array (n,) or None
+        The scale of the precision of the error on each datapoint. If None, it
+        is assumed to be 1.
     min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
     save_ratios : bool
@@ -1395,11 +1409,15 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale,
         trees.
     leaf_tree : float array (2 ** d,)
         The leaf values of the tree.
-    count_tree : int array (2 ** d,)
-        The number of datapoints in each leaf.
+    prec_tree : float array (2 ** d,)
+        The likelihood precision scale in each potential or actual leaf node.
     move : dict
         The proposed move, see `sample_moves`.
-    TODO: move_counts
+    move_counts : dict
+        The counts of the number of points in the the nodes modified by the
+        moves.
+    move_precs : dict
+        The likelihood precision scale in each node modified by the moves.
     leaf_indices : int array (n,)
         The leaf indices for the largest version of the tree compatible with
         the move.
@@ -1486,8 +1504,9 @@ def sum_resid(scaled_resid, leaf_indices, tree_size, batch_size):
 
     Parameters
     ----------
-    resid : float array (n,)
-        The residuals (data minus forest value).
+    scaled_resid : float array (n,)
+        The residuals (data minus forest value) multiplied by the error
+        precision scale.
     leaf_indices : int array (n,)
         The leaf indices of the tree (in which leaf each data point falls into).
     tree_size : int
@@ -1524,10 +1543,9 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
 
     Parameters
     ----------
-    total_resid : float
-        The sum of the residuals in the leaf to grow.
-    left_resid, right_resid : float
-        The sum of the residuals in the left/right child of the leaf to grow.
+    total_resid, left_resid, right_resid : float
+        The sum of the residuals (scaled by error precision scale) of the
+        datapoints falling in the nodes involved in the moves.
     prelkv, prelk : dict
         The pre-computed terms of the likelihood ratio, see
         `precompute_likelihood_terms`.
