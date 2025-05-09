@@ -1,0 +1,9 @@
+{
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro",
+    "machine": "gattocrucco-m1",
+    "num_cpu": "8",
+    "os": "Darwin 24.3.0",
+    "ram": "17179869184",
+    "version": 1
+}

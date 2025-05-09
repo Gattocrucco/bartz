@@ -114,9 +114,14 @@ jobs:
         run: |
           python -m venv package-venv
           source package-venv/bin/activate
-          test `realpath \`which python\`` = `realpath package-venv/bin/python` || echo WRONG PYTHON
+          test `realpath \`which python\`` = `realpath package-venv/bin/python` || echo WRONG PYTHON && exit 1
           python -m pip install --upgrade pip
           poetry-venv/bin/poetry install
+
+      - name: Generate benchmarks visualization
+        run: |
+          source package-venv/bin/activate
+          make benchmark-site
 
       - name: Generate documentation
         run: |
@@ -130,6 +135,7 @@ jobs:
           path: |
             _site/docs
             _site/docs-dev
+            _site/benchmarks
           if-no-files-found: error
 
   covreport:
@@ -178,6 +184,7 @@ jobs:
         with:
           name: covreport
           path: _site/coverage
+          if-no-files-found: error
 
   deploy:
 
@@ -200,7 +207,7 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
-      - name: Get documentation
+      - name: Get documentation and benchmarks
         uses: actions/download-artifact@v4
         with:
           name: docs

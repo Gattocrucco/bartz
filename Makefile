@@ -105,3 +105,11 @@ version-tag: copy-version
 .PHONY: upload
 upload: version-tag
 	poetry publish
+
+.PHONY: benchmark-releases
+benchmark-releases:
+	git tag | asv run --skip-existing HASHFILE:-
+
+.PHONY: benchmark-site
+benchmark-site:
+	asv publish

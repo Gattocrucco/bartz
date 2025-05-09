@@ -13,6 +13,7 @@ docs/_build
 _site/docs
 _site/docs-dev
 _site/coverage
+_site/benchmarks
 
 # Tracing
 jax-trace
