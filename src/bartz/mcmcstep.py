@@ -44,7 +44,9 @@ from jax import lax
 from . import jaxext
 from . import grove
 
-def init(*,
+
+def init(
+    *,
     X,
     y,
     max_split,
@@ -59,7 +61,7 @@ def init(*,
     resid_batch_size='auto',
     count_batch_size='auto',
     save_ratios=False,
-    ):
+):
     """
     Make a BART posterior sampling MCMC initial state.
 
@@ -175,19 +177,26 @@ def init(*,
     small_float = jnp.dtype(small_float)
     large_float = jnp.dtype(large_float)
     y = jnp.asarray(y, small_float)
-    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, 2 ** max_depth * num_trees)
+    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
+        resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
+    )
     sigma2 = jnp.array(sigma2_beta / sigma2_alpha, large_float)
-    sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1) # TODO: I don't like this error check, these functions should be low-level and just do the thing. Why is it here?
+    sigma2 = jnp.where(
+        jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1
+    )  # TODO: I don't like this error check, these functions should be low-level and just do the thing. Why is it here?
 
     bart = dict(
         leaf_trees=make_forest(max_depth, small_float),
-        var_trees=make_forest(max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)),
+        var_trees=make_forest(
+            max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)
+        ),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
         resid=jnp.asarray(y, large_float),
         sigma2=sigma2,
         prec_scale=(
-            None if error_scale is None else
-            lax.reciprocal(jnp.square(jnp.asarray(error_scale, large_float)))
+            None
+            if error_scale is None
+            else lax.reciprocal(jnp.square(jnp.asarray(error_scale, large_float)))
         ),
         grow_prop_count=jnp.zeros((), int),
         grow_acc_count=jnp.zeros((), int),
@@ -200,14 +209,18 @@ def init(*,
         max_split=jnp.asarray(max_split),
         y=y,
         X=jnp.asarray(X),
-        leaf_indices=jnp.ones((num_trees, y.size), jaxext.minimal_unsigned_dtype(2 ** max_depth - 1)),
+        leaf_indices=jnp.ones(
+            (num_trees, y.size), jaxext.minimal_unsigned_dtype(2**max_depth - 1)
+        ),
         min_points_per_leaf=(
-            None if min_points_per_leaf is None else
-            jnp.asarray(min_points_per_leaf)
+            None if min_points_per_leaf is None else jnp.asarray(min_points_per_leaf)
         ),
         affluence_trees=(
-            None if min_points_per_leaf is None else
-            make_forest(max_depth - 1, bool).at[:, 1].set(y.size >= 2 * min_points_per_leaf)
+            None
+            if min_points_per_leaf is None
+            else make_forest(max_depth - 1, bool)
+            .at[:, 1]
+            .set(y.size >= 2 * min_points_per_leaf)
         ),
         opt=jaxext.LeafDict(
             small_float=small_float,
@@ -226,8 +239,8 @@ def init(*,
 
     return bart
 
-def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_size):
 
+def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_size):
     @functools.cache
     def get_platform():
         try:
@@ -243,9 +256,9 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_si
         platform = get_platform()
         n = max(1, y.size)
         if platform == 'cpu':
-            resid_batch_size = 2 ** int(round(math.log2(n / 6))) # n/6
+            resid_batch_size = 2 ** int(round(math.log2(n / 6)))  # n/6
         elif platform == 'gpu':
-            resid_batch_size = 2 ** int(round((1 + math.log2(n)) / 3)) # n^1/3
+            resid_batch_size = 2 ** int(round((1 + math.log2(n)) / 3))  # n^1/3
         resid_batch_size = max(1, resid_batch_size)
 
     if count_batch_size == 'auto':
@@ -254,15 +267,16 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_si
             count_batch_size = None
         elif platform == 'gpu':
             n = max(1, y.size)
-            count_batch_size = 2 ** int(round(math.log2(n) / 2 - 2)) # n^1/2
-                # /4 is good on V100, /2 on L4/T4, still haven't tried A100
-            max_memory = 2 ** 29
+            count_batch_size = 2 ** int(round(math.log2(n) / 2 - 2))  # n^1/2
+            # /4 is good on V100, /2 on L4/T4, still haven't tried A100
+            max_memory = 2**29
             itemsize = 4
             min_batch_size = int(math.ceil(forest_size * itemsize * n / max_memory))
             count_batch_size = max(count_batch_size, min_batch_size)
             count_batch_size = max(1, count_batch_size)
 
     return resid_batch_size, count_batch_size
+
 
 def step(bart, key):
     """
@@ -283,6 +297,7 @@ def step(bart, key):
     key, subkey = random.split(key)
     bart = sample_trees(bart, subkey)
     return sample_sigma(bart, key)
+
 
 def sample_trees(bart, key):
     """
@@ -307,6 +322,7 @@ def sample_trees(bart, key):
     key, subkey = random.split(key)
     moves = sample_moves(bart, subkey)
     return accept_moves_and_sample_leaves(bart, moves, key)
+
 
 def sample_moves(bart, key):
     """
@@ -353,14 +369,22 @@ def sample_moves(bart, key):
     key, subkey = key[0], key[1:]
 
     # compute moves
-    grow_moves, prune_moves = _sample_moves_vmap_trees(bart['var_trees'], bart['split_trees'], bart['affluence_trees'], bart['max_split'], bart['p_nonterminal'], bart['p_propose_grow'], subkey)
+    grow_moves, prune_moves = _sample_moves_vmap_trees(
+        bart['var_trees'],
+        bart['split_trees'],
+        bart['affluence_trees'],
+        bart['max_split'],
+        bart['p_nonterminal'],
+        bart['p_propose_grow'],
+        subkey,
+    )
 
     u, logu = random.uniform(key, (2, ntree), bart['opt']['large_float'])
 
     # choose between grow or prune
     grow_allowed = grow_moves['num_growable'].astype(bool)
     p_grow = jnp.where(grow_allowed & prune_moves['allowed'], 0.5, grow_allowed)
-    grow = u < p_grow # use < instead of <= because u is in [0, 1)
+    grow = u < p_grow  # use < instead of <= because u is in [0, 1)
 
     # compute children indices
     node = jnp.where(grow, grow_moves['node'], prune_moves['node'])
@@ -374,12 +398,15 @@ def sample_moves(bart, key):
         node=node,
         left=left,
         right=right,
-        partial_ratio=jnp.where(grow, grow_moves['partial_ratio'], prune_moves['partial_ratio']),
+        partial_ratio=jnp.where(
+            grow, grow_moves['partial_ratio'], prune_moves['partial_ratio']
+        ),
         grow_var=grow_moves['var'],
         grow_split=grow_moves['split'],
         var_trees=grow_moves['var_tree'],
         logu=jnp.log1p(-logu),
     )
+
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, None, 0))
 def _sample_moves_vmap_trees(*args):
@@ -389,7 +416,10 @@ def _sample_moves_vmap_trees(*args):
     prune = prune_move(*args, key1)
     return grow, prune
 
-def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key):
+
+def grow_move(
+    var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key
+):
     """
     Tree structure grow move proposal of BART MCMC.
 
@@ -436,14 +466,18 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
 
     key, key1, key2 = random.split(key, 3)
 
-    leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(split_tree, affluence_tree, p_propose_grow, key)
+    leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(
+        split_tree, affluence_tree, p_propose_grow, key
+    )
 
     var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
 
     split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
 
-    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow)
+    ratio = compute_partial_ratio(
+        prob_choose, num_prunable, p_nonterminal, leaf_to_grow
+    )
 
     return dict(
         num_growable=num_growable,
@@ -453,6 +487,7 @@ def grow_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_
         partial_ratio=ratio,
         var_tree=var_tree,
     )
+
 
 def choose_leaf(split_tree, affluence_tree, p_propose_grow, key):
     """
@@ -492,6 +527,7 @@ def choose_leaf(split_tree, affluence_tree, p_propose_grow, key):
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, prob_choose, num_prunable
 
+
 def growable_leaves(split_tree, affluence_tree):
     """
     Return a mask indicating the leaf nodes that can be proposed for growth.
@@ -515,6 +551,7 @@ def growable_leaves(split_tree, affluence_tree):
         is_growable &= affluence_tree
     return is_growable
 
+
 def categorical(key, distr):
     """
     Return a random integer from an arbitrary distribution.
@@ -537,6 +574,7 @@ def categorical(key, distr):
     ecdf = jnp.cumsum(distr)
     u = random.uniform(key, (), ecdf.dtype, 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right'), ecdf[-1]
+
 
 def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -568,6 +606,7 @@ def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
     var_to_ignore = fully_used_variables(var_tree, split_tree, max_split, leaf_index)
     return randint_exclude(key, max_split.size, var_to_ignore)
 
+
 def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
     """
     Return a list of variables that have an empty split range at a given node.
@@ -598,6 +637,7 @@ def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
     num_split = r - l
     return jnp.where(num_split == 0, var_to_ignore, max_split.size)
 
+
 def ancestor_variables(var_tree, max_split, node_index):
     """
     Return the list of variables in the ancestors of a node.
@@ -618,8 +658,11 @@ def ancestor_variables(var_tree, max_split, node_index):
         the parent. Unused spots are filled with `p`.
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
-    ancestor_vars = jnp.zeros(max_num_ancestors, jaxext.minimal_unsigned_dtype(max_split.size))
+    ancestor_vars = jnp.zeros(
+        max_num_ancestors, jaxext.minimal_unsigned_dtype(max_split.size)
+    )
     carry = ancestor_vars.size - 1, node_index, ancestor_vars
+
     def loop(carry, _):
         i, index, ancestor_vars = carry
         index >>= 1
@@ -627,8 +670,10 @@ def ancestor_variables(var_tree, max_split, node_index):
         var = jnp.where(index, var, max_split.size)
         ancestor_vars = ancestor_vars.at[i].set(var)
         return (i - 1, index, ancestor_vars), None
+
     (_, _, ancestor_vars), _ = lax.scan(loop, carry, None, ancestor_vars.size)
     return ancestor_vars
+
 
 def split_range(var_tree, split_tree, max_split, node_index, ref_var):
     """
@@ -653,8 +698,11 @@ def split_range(var_tree, split_tree, max_split, node_index, ref_var):
         The range of allowed splits is [l, r).
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
-    initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(jnp.int32)
+    initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(
+        jnp.int32
+    )
     carry = 0, initial_r, node_index
+
     def loop(carry, _):
         l, r, index = carry
         right_child = (index & 1).astype(bool)
@@ -664,8 +712,10 @@ def split_range(var_tree, split_tree, max_split, node_index, ref_var):
         l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
         r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
         return (l, r, index), None
+
     (l, r, _), _ = lax.scan(loop, carry, None, max_num_ancestors)
     return l + 1, r
+
 
 def randint_exclude(key, sup, exclude):
     """
@@ -691,10 +741,13 @@ def randint_exclude(key, sup, exclude):
     exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
     num_allowed = sup - jnp.count_nonzero(exclude < sup)
     u = random.randint(key, (), 0, num_allowed)
+
     def loop(u, i):
         return jnp.where(i <= u, u + 1, u), None
+
     u, _ = lax.scan(loop, u, exclude)
     return u
+
 
 def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     """
@@ -722,6 +775,7 @@ def choose_split(var_tree, split_tree, max_split, leaf_index, key):
     var = var_tree[leaf_index]
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
+
 
 def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow):
     """
@@ -754,9 +808,9 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
     # computed in the acceptance phase
 
     prune_allowed = leaf_to_grow != 1
-        # prune allowed  <--->  the initial tree is not a root
-        # leaf to grow is root  -->  the tree can only be a root
-        # tree is a root  -->  the only leaf I can grow is root
+    # prune allowed  <--->  the initial tree is not a root
+    # leaf to grow is root  -->  the tree can only be a root
+    # tree is a root  -->  the only leaf I can grow is root
 
     p_grow = jnp.where(prune_allowed, 0.5, 1)
 
@@ -769,7 +823,10 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
 
     return tree_ratio / inv_trans_ratio
 
-def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key):
+
+def prune_move(
+    var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key
+):
     """
     Tree structure prune move proposal of BART MCMC.
 
@@ -804,16 +861,21 @@ def prune_move(var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p
             the likelihood ratio and the probability of proposing the prune
             move. This ratio is inverted.
     """
-    node_to_prune, num_prunable, prob_choose = choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key)
-    allowed = split_tree[1].astype(bool) # allowed iff the tree is not a root
+    node_to_prune, num_prunable, prob_choose = choose_leaf_parent(
+        split_tree, affluence_tree, p_propose_grow, key
+    )
+    allowed = split_tree[1].astype(bool)  # allowed iff the tree is not a root
 
-    ratio = compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, node_to_prune)
+    ratio = compute_partial_ratio(
+        prob_choose, num_prunable, p_nonterminal, node_to_prune
+    )
 
     return dict(
         allowed=allowed,
         node=node_to_prune,
-        partial_ratio=ratio, # it is inverted in accept_move_and_sample_leaves
+        partial_ratio=ratio,  # it is inverted in accept_move_and_sample_leaves
     )
+
 
 def choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key):
     """
@@ -847,14 +909,14 @@ def choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key):
 
     split_tree = split_tree.at[node_to_prune].set(0)
     affluence_tree = (
-        None if affluence_tree is None else
-        affluence_tree.at[node_to_prune].set(True)
+        None if affluence_tree is None else affluence_tree.at[node_to_prune].set(True)
     )
     is_growable_leaf = growable_leaves(split_tree, affluence_tree)
     prob_choose = p_propose_grow[node_to_prune]
     prob_choose /= jnp.sum(p_propose_grow, where=is_growable_leaf)
 
     return node_to_prune, num_prunable, prob_choose
+
 
 def randint_masked(key, mask):
     """
@@ -877,6 +939,7 @@ def randint_masked(key, mask):
     u = random.randint(key, (), 0, ecdf[-1])
     return jnp.searchsorted(ecdf, u, 'right')
 
+
 def accept_moves_and_sample_leaves(bart, moves, key):
     """
     Accept or reject the proposed moves and sample the new leaf values.
@@ -895,9 +958,14 @@ def accept_moves_and_sample_leaves(bart, moves, key):
     bart : dict
         The new BART mcmc state.
     """
-    bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf = accept_moves_parallel_stage(bart, moves, key)
-    bart, moves = accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf)
+    bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf = (
+        accept_moves_parallel_stage(bart, moves, key)
+    )
+    bart, moves = accept_moves_sequential_stage(
+        bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf
+    )
     return accept_moves_final_stage(bart, moves)
+
 
 def accept_moves_parallel_stage(bart, moves, key):
     """
@@ -939,9 +1007,11 @@ def accept_moves_parallel_stage(bart, moves, key):
     bart['leaf_trees'] = adapt_leaf_trees_to_grow_indices(bart['leaf_trees'], moves)
 
     # count number of datapoints per leaf
-    count_trees, move_counts = compute_count_trees(bart['leaf_indices'], moves, bart['opt']['count_batch_size'])
+    count_trees, move_counts = compute_count_trees(
+        bart['leaf_indices'], moves, bart['opt']['count_batch_size']
+    )
     if bart['opt']['require_min_points']:
-        count_half_trees = count_trees[:, :bart['var_trees'].shape[1]]
+        count_half_trees = count_trees[:, : bart['var_trees'].shape[1]]
         bart['affluence_trees'] = count_half_trees >= 2 * bart['min_points_per_leaf']
 
     # count number of datapoints per leaf, weighted by error precision scale
@@ -949,7 +1019,12 @@ def accept_moves_parallel_stage(bart, moves, key):
         prec_trees = count_trees
         move_precs = move_counts
     else:
-        prec_trees, move_precs = compute_prec_trees(bart['prec_scale'], bart['leaf_indices'], moves, bart['opt']['count_batch_size'])
+        prec_trees, move_precs = compute_prec_trees(
+            bart['prec_scale'],
+            bart['leaf_indices'],
+            moves,
+            bart['opt']['count_batch_size'],
+        )
 
     # compute some missing information about moves
     moves = complete_ratio(moves, move_counts, bart['min_points_per_leaf'])
@@ -960,6 +1035,7 @@ def accept_moves_parallel_stage(bart, moves, key):
     prelf = precompute_leaf_terms(prec_trees, bart['sigma2'], key)
 
     return bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf
+
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, None))
 def apply_grow_to_indices(moves, leaf_indices, X):
@@ -989,6 +1065,7 @@ def apply_grow_to_indices(moves, leaf_indices, X):
         left_child + go_right,
         leaf_indices,
     )
+
 
 def compute_count_trees(leaf_indices, moves, batch_size):
     """
@@ -1030,6 +1107,7 @@ def compute_count_trees(leaf_indices, moves, batch_size):
 
     return count_trees, counts
 
+
 def count_datapoints_per_leaf(leaf_indices, tree_size, batch_size):
     """
     Count the number of datapoints in each leaf.
@@ -1053,34 +1131,38 @@ def count_datapoints_per_leaf(leaf_indices, tree_size, batch_size):
     else:
         return _count_vec(leaf_indices, tree_size, batch_size)
 
+
 def _count_scan(leaf_indices, tree_size):
     def loop(_, leaf_indices):
         return None, _aggregate_scatter(1, leaf_indices, tree_size, jnp.uint32)
+
     _, count_trees = lax.scan(loop, None, leaf_indices)
     return count_trees
 
+
 def _aggregate_scatter(values, indices, size, dtype):
-    return (jnp
-        .zeros(size, dtype)
-        .at[indices]
-        .add(values)
-    )
+    return jnp.zeros(size, dtype).at[indices].add(values)
+
 
 def _count_vec(leaf_indices, tree_size, batch_size):
-    return _aggregate_batched_alltrees(1, leaf_indices, tree_size, jnp.uint32, batch_size)
-        # uint16 is super-slow on gpu, don't use it even if n < 2^16
+    return _aggregate_batched_alltrees(
+        1, leaf_indices, tree_size, jnp.uint32, batch_size
+    )
+    # uint16 is super-slow on gpu, don't use it even if n < 2^16
+
 
 def _aggregate_batched_alltrees(values, indices, size, dtype, batch_size):
     ntree, n = indices.shape
     tree_indices = jnp.arange(ntree)
     nbatches = n // batch_size + bool(n % batch_size)
     batch_indices = jnp.arange(n) % nbatches
-    return (jnp
-        .zeros((ntree, size, nbatches), dtype)
+    return (
+        jnp.zeros((ntree, size, nbatches), dtype)
         .at[tree_indices[:, None], indices, batch_indices]
         .add(values)
         .sum(axis=2)
     )
+
 
 def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
     """
@@ -1124,6 +1206,7 @@ def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
 
     return prec_trees, precs
 
+
 def prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size):
     """
     Compute the likelihood precision scale in each leaf.
@@ -1149,14 +1232,22 @@ def prec_per_leaf(prec_scale, leaf_indices, tree_size, batch_size):
     else:
         return _prec_vec(prec_scale, leaf_indices, tree_size, batch_size)
 
+
 def _prec_scan(prec_scale, leaf_indices, tree_size):
     def loop(_, leaf_indices):
-        return None, _aggregate_scatter(prec_scale, leaf_indices, tree_size, jnp.float32) # TODO: use large_float
+        return None, _aggregate_scatter(
+            prec_scale, leaf_indices, tree_size, jnp.float32
+        )  # TODO: use large_float
+
     _, prec_trees = lax.scan(loop, None, leaf_indices)
     return prec_trees
 
+
 def _prec_vec(prec_scale, leaf_indices, tree_size, batch_size):
-    return _aggregate_batched_alltrees(prec_scale, leaf_indices, tree_size, jnp.float32, batch_size) # TODO: use large_float
+    return _aggregate_batched_alltrees(
+        prec_scale, leaf_indices, tree_size, jnp.float32, batch_size
+    )  # TODO: use large_float
+
 
 def complete_ratio(moves, move_counts, min_points_per_leaf):
     """
@@ -1181,9 +1272,12 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
         'log_trans_prior_ratio'.
     """
     moves = moves.copy()
-    p_prune = compute_p_prune(moves, move_counts['left'], move_counts['right'], min_points_per_leaf)
+    p_prune = compute_p_prune(
+        moves, move_counts['left'], move_counts['right'], min_points_per_leaf
+    )
     moves['log_trans_prior_ratio'] = jnp.log(moves.pop('partial_ratio') * p_prune)
     return moves
+
 
 def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
     """
@@ -1220,6 +1314,7 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
 
     return jnp.where(moves['grow'], grow_p_prune, prune_p_prune)
 
+
 @jaxext.vmap_nodoc
 def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
     """
@@ -1240,12 +1335,13 @@ def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
         what would be its children if the grow move was accepted.
     """
     values_at_node = leaf_trees[moves['node']]
-    return (leaf_trees
-        .at[jnp.where(moves['grow'], moves['left'], leaf_trees.size)]
+    return (
+        leaf_trees.at[jnp.where(moves['grow'], moves['left'], leaf_trees.size)]
         .set(values_at_node)
         .at[jnp.where(moves['grow'], moves['right'], leaf_trees.size)]
         .set(values_at_node)
     )
+
 
 def precompute_likelihood_terms(sigma2, move_precs):
     """
@@ -1274,13 +1370,18 @@ def precompute_likelihood_terms(sigma2, move_precs):
     prelkv['sigma2_left'] = sigma2 + move_precs['left'] * sigma_mu2
     prelkv['sigma2_right'] = sigma2 + move_precs['right'] * sigma_mu2
     prelkv['sigma2_total'] = sigma2 + move_precs['total'] * sigma_mu2
-    prelkv['sqrt_term'] = jnp.log(
-        sigma2 * prelkv['sigma2_total'] /
-        (prelkv['sigma2_left'] * prelkv['sigma2_right'])
-    ) / 2
+    prelkv['sqrt_term'] = (
+        jnp.log(
+            sigma2
+            * prelkv['sigma2_total']
+            / (prelkv['sigma2_left'] * prelkv['sigma2_right'])
+        )
+        / 2
+    )
     return prelkv, dict(
         exp_factor=sigma_mu2 / (2 * sigma2),
     )
+
 
 def precompute_leaf_terms(prec_trees, sigma2, key):
     """
@@ -1309,14 +1410,17 @@ def precompute_leaf_terms(prec_trees, sigma2, key):
     """
     ntree = len(prec_trees)
     prec_lk = prec_trees / sigma2
-    var_post = lax.reciprocal(prec_lk + ntree) # = 1 / (prec_lk + prec_prior)
+    var_post = lax.reciprocal(prec_lk + ntree)  # = 1 / (prec_lk + prec_prior)
     z = random.normal(key, prec_trees.shape, sigma2.dtype)
     return dict(
-        mean_factor=var_post / sigma2, # = mean_lk * prec_lk * var_post / resid_tree
+        mean_factor=var_post / sigma2,  # = mean_lk * prec_lk * var_post / resid_tree
         centered_leaves=z * jnp.sqrt(var_post),
     )
 
-def accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf):
+
+def accept_moves_sequential_stage(
+    bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf
+):
     """
     The part of accepting the moves that has to be done one tree at a time.
 
@@ -1368,22 +1472,44 @@ def accept_moves_sequential_stage(bart, prec_trees, moves, move_counts, move_pre
         return resid, (leaf_tree, acc, to_prune, ratios)
 
     items = (
-        bart['leaf_trees'], prec_trees,
-        moves, move_counts, move_precs,
+        bart['leaf_trees'],
+        prec_trees,
+        moves,
+        move_counts,
+        move_precs,
         bart['leaf_indices'],
-        prelkv, prelf,
+        prelkv,
+        prelf,
     )
     resid, (leaf_trees, acc, to_prune, ratios) = lax.scan(loop, bart['resid'], items)
 
     bart['resid'] = resid
     bart['leaf_trees'] = leaf_trees
-    bart.get('ratios', {}).update(ratios) # noop if there are no ratios
+    bart.get('ratios', {}).update(ratios)  # noop if there are no ratios
     moves['acc'] = acc
     moves['to_prune'] = to_prune
 
     return bart, moves
 
-def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale, min_points_per_leaf, save_ratios, prelk, leaf_tree, prec_tree, move, move_counts, move_precs, leaf_indices, prelkv, prelf):
+
+def accept_move_and_sample_leaves(
+    X,
+    ntree,
+    resid_batch_size,
+    resid,
+    prec_scale,
+    min_points_per_leaf,
+    save_ratios,
+    prelk,
+    leaf_tree,
+    prec_tree,
+    move,
+    move_counts,
+    move_precs,
+    leaf_indices,
+    prelkv,
+    prelf,
+):
     """
     Accept or reject a proposed move and sample the new leaf values.
 
@@ -1463,7 +1589,9 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale,
     resid_tree = resid_tree.at[node].set(resid_total)
 
     # compute acceptance ratio
-    log_lk_ratio = compute_likelihood_ratio(resid_total, resid_left, resid_right, prelkv, prelk)
+    log_lk_ratio = compute_likelihood_ratio(
+        resid_total, resid_left, resid_right, prelkv, prelk
+    )
     log_ratio = move['log_trans_prior_ratio'] + log_lk_ratio
     log_ratio = jnp.where(move['grow'], log_ratio, -log_ratio)
     ratios = {}
@@ -1486,8 +1614,8 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale,
 
     # copy leaves around such that the leaf indices point to the correct leaf
     to_prune = acc ^ move['grow']
-    leaf_tree = (leaf_tree
-        .at[jnp.where(to_prune, left, leaf_tree.size)]
+    leaf_tree = (
+        leaf_tree.at[jnp.where(to_prune, left, leaf_tree.size)]
         .set(leaf_tree[node])
         .at[jnp.where(to_prune, right, leaf_tree.size)]
         .set(leaf_tree[node])
@@ -1497,6 +1625,7 @@ def accept_move_and_sample_leaves(X, ntree, resid_batch_size, resid, prec_scale,
     resid += (initial_leaf_tree - leaf_tree)[leaf_indices]
 
     return resid, leaf_tree, acc, to_prune, ratios
+
 
 def sum_resid(scaled_resid, leaf_indices, tree_size, batch_size):
     """
@@ -1524,18 +1653,22 @@ def sum_resid(scaled_resid, leaf_indices, tree_size, batch_size):
         aggr_func = _aggregate_scatter
     else:
         aggr_func = functools.partial(_aggregate_batched_onetree, batch_size=batch_size)
-    return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32) # TODO: use large_float
+    return aggr_func(
+        scaled_resid, leaf_indices, tree_size, jnp.float32
+    )  # TODO: use large_float
+
 
 def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
-    n, = indices.shape
+    (n,) = indices.shape
     nbatches = n // batch_size + bool(n % batch_size)
     batch_indices = jnp.arange(n) % nbatches
-    return (jnp
-        .zeros((size, nbatches), dtype)
+    return (
+        jnp.zeros((size, nbatches), dtype)
         .at[indices, batch_indices]
         .add(values)
         .sum(axis=1)
     )
+
 
 def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk):
     """
@@ -1556,11 +1689,12 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
         The likelihood ratio P(data | new tree) / P(data | old tree).
     """
     exp_term = prelk['exp_factor'] * (
-        left_resid * left_resid / prelkv['sigma2_left'] +
-        right_resid * right_resid / prelkv['sigma2_right'] -
-        total_resid * total_resid / prelkv['sigma2_total']
+        left_resid * left_resid / prelkv['sigma2_left']
+        + right_resid * right_resid / prelkv['sigma2_right']
+        - total_resid * total_resid / prelkv['sigma2_total']
     )
     return prelkv['sqrt_term'] + exp_term
+
 
 def accept_moves_final_stage(bart, moves):
     """
@@ -1588,6 +1722,7 @@ def accept_moves_final_stage(bart, moves):
     bart['split_trees'] = apply_moves_to_split_trees(bart['split_trees'], moves)
     return bart
 
+
 @jaxext.vmap_nodoc
 def apply_moves_to_leaf_indices(leaf_indices, moves):
     """
@@ -1607,13 +1742,14 @@ def apply_moves_to_leaf_indices(leaf_indices, moves):
     leaf_indices : int array (num_trees, n)
         The updated leaf indices.
     """
-    mask = ~jnp.array(1, leaf_indices.dtype) # ...1111111110
+    mask = ~jnp.array(1, leaf_indices.dtype)  # ...1111111110
     is_child = (leaf_indices & mask) == moves['left']
     return jnp.where(
         is_child & moves['to_prune'],
         moves['node'].astype(leaf_indices.dtype),
         leaf_indices,
     )
+
 
 @jaxext.vmap_nodoc
 def apply_moves_to_split_trees(split_trees, moves):
@@ -1633,20 +1769,25 @@ def apply_moves_to_split_trees(split_trees, moves):
     split_trees : int array (num_trees, 2 ** (d - 1))
         The updated split trees.
     """
-    return (split_trees
-        .at[jnp.where(
-            moves['grow'],
-            moves['node'],
-            split_trees.size,
-        )]
+    return (
+        split_trees.at[
+            jnp.where(
+                moves['grow'],
+                moves['node'],
+                split_trees.size,
+            )
+        ]
         .set(moves['grow_split'].astype(split_trees.dtype))
-        .at[jnp.where(
-            moves['to_prune'],
-            moves['node'],
-            split_trees.size,
-        )]
+        .at[
+            jnp.where(
+                moves['to_prune'],
+                moves['node'],
+                split_trees.size,
+            )
+        ]
         .set(0)
     )
+
 
 def sample_sigma(bart, key):
     """

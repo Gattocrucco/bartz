@@ -32,6 +32,7 @@ from jax import numpy as jnp
 from jax import tree_util
 from jax import lax
 
+
 def float_type(*args):
     """
     Determine the jax floating point result type given operands/types.
@@ -39,16 +40,17 @@ def float_type(*args):
     t = jnp.result_type(*args)
     return jnp.sin(jnp.empty(0, t)).dtype
 
+
 def castto(func, type):
     @functools.wraps(func)
     def newfunc(*args, **kw):
         return func(*args, **kw).astype(type)
+
     return newfunc
 
+
 class scipy:
-
     class special:
-
         @functools.wraps(special.gammainccinv)
         def gammainccinv(a, y):
             a = jnp.asarray(a)
@@ -60,11 +62,10 @@ class scipy:
             return jax.pure_callback(ufunc, dummy, a, y, vmap_method='expand_dims')
 
     class stats:
-
         class invgamma:
-
             def ppf(q, a):
                 return 1 / scipy.special.gammainccinv(a, q)
+
 
 def vmap_nodoc(fun, *args, **kw):
     """
@@ -77,6 +78,7 @@ def vmap_nodoc(fun, *args, **kw):
     fun = jax.vmap(fun, *args, **kw)
     fun.__doc__ = doc
     return fun
+
 
 def huge_value(x):
     """
@@ -97,18 +99,20 @@ def huge_value(x):
     else:
         return jnp.inf
 
+
 def minimal_unsigned_dtype(max_value):
     """
     Return the smallest unsigned integer dtype that can represent a given
     maximum value (inclusive).
     """
-    if max_value < 2 ** 8:
+    if max_value < 2**8:
         return jnp.uint8
-    if max_value < 2 ** 16:
+    if max_value < 2**16:
         return jnp.uint16
-    if max_value < 2 ** 32:
+    if max_value < 2**32:
         return jnp.uint32
     return jnp.uint64
+
 
 def signed_to_unsigned(int_dtype):
     """
@@ -127,11 +131,13 @@ def signed_to_unsigned(int_dtype):
     if int_dtype == jnp.int64:
         return jnp.uint64
 
+
 def ensure_unsigned(x):
     """
     If x has signed integer type, cast it to the unsigned dtype of the same size.
     """
     return x.astype(signed_to_unsigned(x.dtype))
+
 
 @functools.partial(jax.jit, static_argnums=(1,))
 def unique(x, size, fill_value):
@@ -160,14 +166,17 @@ def unique(x, size, fill_value):
     if size == 0:
         return jnp.empty(0, x.dtype), 0
     x = jnp.sort(x)
+
     def loop(carry, x):
         i_out, i_in, last, out = carry
         i_out = jnp.where(x == last, i_out, i_out + 1)
         out = out.at[i_out].set(x)
         return (i_out, i_in + 1, x, out), None
+
     carry = 0, 0, x[0], jnp.full(size, fill_value, x.dtype)
     (actual_length, _, _, out), _ = jax.lax.scan(loop, carry, x[:size])
     return out, actual_length + 1
+
 
 def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False):
     """
@@ -205,6 +214,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     def check_no_nones(axes, tree):
         def check_not_none(_, axis):
             assert axis is not None
+
         tree_util.tree_map(check_not_none, tree, axes)
 
     def extract_size(axes, tree):
@@ -213,6 +223,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
                 return None
             else:
                 return x.shape[axis]
+
         sizes = tree_util.tree_map(get_size, tree, axes)
         sizes, _ = tree_util.tree_flatten(sizes)
         assert all(s == sizes[0] for s in sizes)
@@ -221,6 +232,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     def sum_nbytes(tree):
         def nbytes(x):
             return math.prod(x.shape) * x.dtype.itemsize
+
         return tree_util.tree_reduce(lambda size, x: size + nbytes(x), tree, 0)
 
     def next_divisor_small(dividend, min_divisor):
@@ -249,6 +261,7 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
                 return None
             else:
                 return x
+
         return tree_util.tree_map(pull_nonbatched, tree, axes), tree
 
     def push_nonbatched(axes, tree, original_tree):
@@ -257,32 +270,38 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
                 return original_x
             else:
                 return x
+
         return tree_util.tree_map(push_nonbatched, original_tree, tree, axes)
 
     def move_axes_out(axes, tree):
         def move_axis_out(x, axis):
             return jnp.moveaxis(x, axis, 0)
+
         return tree_util.tree_map(move_axis_out, tree, axes)
 
     def move_axes_in(axes, tree):
         def move_axis_in(x, axis):
             return jnp.moveaxis(x, 0, axis)
+
         return tree_util.tree_map(move_axis_in, tree, axes)
 
     def batch(tree, nbatches):
         def batch(x):
             return x.reshape((nbatches, x.shape[0] // nbatches) + x.shape[1:])
+
         return tree_util.tree_map(batch, tree)
 
     def unbatch(tree):
         def unbatch(x):
             return x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
+
         return tree_util.tree_map(unbatch, tree)
 
     def check_same(tree1, tree2):
         def check_same(x1, x2):
             assert x1.shape == x2.shape
             assert x1.dtype == x2.dtype
+
         tree_util.tree_map(check_same, tree1, tree2)
 
     initial_in_axes = in_axes
@@ -302,7 +321,9 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         args, nonbatched_args = pull_nonbatched(in_axes, args)
 
         total_nbytes = sum_nbytes((args, example_result))
-        min_nbatches = total_nbytes // max_io_nbytes + bool(total_nbytes % max_io_nbytes)
+        min_nbatches = total_nbytes // max_io_nbytes + bool(
+            total_nbytes % max_io_nbytes
+        )
         min_nbatches = max(1, min_nbatches)
         nbatches = next_divisor(size, min_nbatches)
         assert 1 <= nbatches <= max(1, size)
@@ -312,7 +333,9 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
         batch_nbytes = total_nbytes // nbatches
         if batch_nbytes > max_io_nbytes:
             assert size == nbatches
-            warnings.warn(f'batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}')
+            warnings.warn(
+                f'batch_nbytes = {batch_nbytes} > max_io_nbytes = {max_io_nbytes}'
+            )
 
         def loop(_, args):
             args = move_axes_in(in_axes, args)
@@ -335,10 +358,11 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
     return batched_func
 
+
 @tree_util.register_pytree_node_class
 class LeafDict(dict):
-    """ dictionary that acts as a leaf in jax pytrees, to store compile-time
-    values """
+    """dictionary that acts as a leaf in jax pytrees, to store compile-time
+    values"""
 
     def tree_flatten(self):
         return (), self

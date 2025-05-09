@@ -26,12 +26,14 @@ import pytest
 import numpy as np
 import jax
 
+
 @pytest.fixture
 def rng(request):
-    """ A deterministic per-test numpy random number generator """
+    """A deterministic per-test numpy random number generator"""
     nodeid = request.node.nodeid
     seed = np.array([nodeid], np.bytes_).view(np.uint8)
     return np.random.default_rng(seed)
+
 
 class ListOfRandomKeys:
     # I could move this into a public jaxext.split function (with a shorter
@@ -45,8 +47,9 @@ class ListOfRandomKeys:
 
     def pop(self):
         if not self._keys:
-            raise IndexError("No more keys available")
+            raise IndexError('No more keys available')
         return self._keys.pop()
+
 
 @pytest.fixture
 def keys(rng):
@@ -57,5 +60,5 @@ def keys(rng):
     """
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
-    key = jax.random.fold_in(key, 0xcc755e92)
+    key = jax.random.fold_in(key, 0xCC755E92)
     return ListOfRandomKeys(key)

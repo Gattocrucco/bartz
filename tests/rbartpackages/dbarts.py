@@ -2,6 +2,7 @@ from rpy2 import robjects
 
 from . import _base
 
+
 class bart(_base.RObjectABC):
     """
 
@@ -17,7 +18,6 @@ class bart(_base.RObjectABC):
     _split_probs = 'splitprobs'
 
     def __init__(self, *args, **kw):
-
         split_probs = kw.get(self._split_probs)
         if isinstance(split_probs, dict):
             values = list(split_probs.values())
@@ -27,6 +27,7 @@ class bart(_base.RObjectABC):
             kw[self._split_probs] = split_probs
 
         super().__init__(*args, **kw)
+
 
 class bart2(bart):
     """
@@ -45,6 +46,7 @@ class bart2(bart):
         formula = robjects.Formula(formula)
         super().__init__(formula, *args, **kw)
 
+
 class rbart_vi(bart2):
     """
 
@@ -57,8 +59,8 @@ class rbart_vi(bart2):
 
     _rfuncname = 'dbarts::rbart_vi'
 
-class dbarts(_base.RObjectABC):
 
+class dbarts(_base.RObjectABC):
     _rfuncname = 'dbarts::dbarts'
     _methods = (
         'run',
@@ -81,6 +83,6 @@ class dbarts(_base.RObjectABC):
         'plotTree',
     )
 
-class dbartsControl(_base.RObjectABC):
 
+class dbartsControl(_base.RObjectABC):
     _rfuncname = 'dbarts::dbartsControl'

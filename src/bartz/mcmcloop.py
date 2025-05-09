@@ -39,6 +39,7 @@ from . import jaxext
 from . import grove
 from . import mcmcstep
 
+
 @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
 def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     """
@@ -99,7 +100,14 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
     not include the initial state, and include the final state.
     """
 
-    tracevars_light = ('sigma2', 'grow_prop_count', 'grow_acc_count', 'prune_prop_count', 'prune_acc_count', 'ratios')
+    tracevars_light = (
+        'sigma2',
+        'grow_prop_count',
+        'grow_acc_count',
+        'prune_prop_count',
+        'prune_acc_count',
+        'ratios',
+    )
     tracevars_heavy = ('leaf_trees', 'var_trees', 'split_trees')
 
     def empty_trace(length, bart, tracelist):
@@ -107,7 +115,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         return jax.vmap(lambda x: x, in_axes=None, out_axes=0, axis_size=length)(bart)
 
     trace_light = empty_trace(n_burn + n_save, bart, tracevars_light)
-    trace_heavy = empty_trace(         n_save, bart, tracevars_heavy)
+    trace_heavy = empty_trace(n_save, bart, tracevars_heavy)
 
     callback_kw = dict(n_burn=n_burn, n_save=n_save, n_skip=n_skip)
 
@@ -125,13 +133,16 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
             i_total + 1,
             (i_total + 1) % n_skip + jnp.where(i_total + 1 < n_skip, n_burn, 0),
         )
-        callback(bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw)
+        callback(
+            bart=bart, burnin=burnin, i_total=i_total, i_skip=i_skip, **callback_kw
+        )
 
         i_heavy = jnp.where(burnin, 0, (i_total - n_burn) // n_skip)
         i_light = jnp.where(burnin, i_total, n_burn + i_heavy)
 
         def update_trace(index, trace, bart):
             bart = {k: v for k, v in bart.items() if k in trace}
+
             def assign_at_index(trace_array, state_array):
                 if trace_array.size:
                     return trace_array.at[index, ...].set(state_array)
@@ -140,6 +151,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
                     # no burn-in) because jax refuses to index into an array
                     # of length 0
                     return trace_array
+
             return tree.map(assign_at_index, trace, bart)
 
         trace_heavy = update_trace(i_heavy, trace_heavy, bart)
@@ -159,9 +171,10 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
 
     return bart, burnin_trace, main_trace
 
+
 @functools.lru_cache
-    # cache to make the callback function object unique, such that the jit
-    # of run_mcmc recognizes it
+# cache to make the callback function object unique, such that the jit
+# of run_mcmc recognizes it
 def make_simple_print_callback(printevery):
     """
     Create a logging callback function for MCMC iterations.
@@ -176,6 +189,7 @@ def make_simple_print_callback(printevery):
     callback : callable
         A function in the format required by `run_mcmc`.
     """
+
     def callback(*, bart, burnin, i_total, i_skip, n_burn, n_save, n_skip):
         prop_total = len(bart['leaf_trees'])
         grow_prop = bart['grow_prop_count'] / prop_total
@@ -184,18 +198,35 @@ def make_simple_print_callback(printevery):
         prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
         n_total = n_burn + n_save * n_skip
         printcond = (i_total + 1) % printevery == 0
-        debug.callback(_simple_print_callback, burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond)
+        debug.callback(
+            _simple_print_callback,
+            burnin,
+            i_total,
+            n_total,
+            grow_prop,
+            grow_acc,
+            prune_prop,
+            prune_acc,
+            printcond,
+        )
+
     return callback
 
-def _simple_print_callback(burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond):
+
+def _simple_print_callback(
+    burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond
+):
     if printcond:
         burnin_flag = ' (burnin)' if burnin else ''
         total_str = str(n_total)
         ndigits = len(total_str)
         i_str = str(i_total + 1).rjust(ndigits)
-        print(f'Iteration {i_str}/{total_str} '
+        print(
+            f'Iteration {i_str}/{total_str} '
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
-            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}{burnin_flag}')
+            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}{burnin_flag}'
+        )
+
 
 @jax.jit
 def evaluate_trace(trace, X):
@@ -215,9 +246,13 @@ def evaluate_trace(trace, X):
         The predictions for each iteration of the MCMC.
     """
     evaluate_trees = functools.partial(grove.evaluate_forest, sum_trees=False)
-    evaluate_trees = jaxext.autobatch(evaluate_trees, 2 ** 29, (None, 0, 0, 0))
+    evaluate_trees = jaxext.autobatch(evaluate_trees, 2**29, (None, 0, 0, 0))
+
     def loop(_, state):
-        values = evaluate_trees(X, state['leaf_trees'], state['var_trees'], state['split_trees'])
+        values = evaluate_trees(
+            X, state['leaf_trees'], state['var_trees'], state['split_trees']
+        )
         return None, jnp.sum(values, axis=0, dtype=jnp.float32)
+
     _, y = lax.scan(loop, None, trace)
     return y

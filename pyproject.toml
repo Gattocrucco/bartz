@@ -121,3 +121,9 @@ local = [
     '/opt/hostedtoolcache/Python/*/*/lib/python*/site-packages/bartz/',
     'C:\hostedtoolcache\windows\Python\*\*\Lib\site-packages\bartz\',
 ]
+
+[tool.ruff]
+exclude = [".asv", "*.ipynb"]
+
+[tool.ruff.format]
+quote-style = "single"

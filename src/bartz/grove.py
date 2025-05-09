@@ -1,6 +1,6 @@
 # bartz/src/bartz/grove.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -49,6 +49,7 @@ from jax import lax
 
 from . import jaxext
 
+
 def make_tree(depth, dtype):
     """
     Make an array to represent a binary tree.
@@ -66,7 +67,8 @@ def make_tree(depth, dtype):
     tree : array
         An array of zeroes with shape (2 ** depth,).
     """
-    return jnp.zeros(2 ** depth, dtype)
+    return jnp.zeros(2**depth, dtype)
+
 
 def tree_depth(tree):
     """
@@ -84,6 +86,7 @@ def tree_depth(tree):
         The maximum depth of the tree.
     """
     return int(round(math.log2(tree.shape[-1])))
+
 
 def traverse_tree(x, var_tree, split_tree):
     """
@@ -125,6 +128,7 @@ def traverse_tree(x, var_tree, split_tree):
     (_, index), _ = lax.scan(loop, carry, None, depth, unroll=16)
     return index
 
+
 @functools.partial(jaxext.vmap_nodoc, in_axes=(None, 0, 0))
 @functools.partial(jaxext.vmap_nodoc, in_axes=(1, None, None))
 def traverse_forest(X, var_trees, split_trees):
@@ -146,6 +150,7 @@ def traverse_forest(X, var_trees, split_trees):
         The indices of the leaves.
     """
     return traverse_tree(X, var_trees, split_trees)
+
 
 def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees=True):
     """
@@ -178,10 +183,11 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees
     leaves = leaf_trees[tree_index[:, None], indices]
     if sum_trees:
         return jnp.sum(leaves, axis=0, dtype=dtype)
-            # this sum suggests to swap the vmaps, but I think it's better for X
-            # copying to keep it that way
+    # this sum suggests to swap the vmaps, but I think it's better for X
+    # copying to keep it that way
     else:
         return leaves
+
 
 def is_actual_leaf(split_tree, *, add_bottom_level=False):
     """
@@ -211,6 +217,7 @@ def is_actual_leaf(split_tree, *, add_bottom_level=False):
     parent_nonleaf = parent_nonleaf.at[1].set(True)
     return is_leaf & parent_nonleaf
 
+
 def is_leaves_parent(split_tree):
     """
     Return a mask indicating the nodes with leaf (and only leaf) children.
@@ -225,14 +232,17 @@ def is_leaves_parent(split_tree):
     is_leaves_parent : bool array (2 ** (d - 1),)
         The mask indicating which nodes have leaf children.
     """
-    index = jnp.arange(split_tree.size, dtype=jaxext.minimal_unsigned_dtype(2 * split_tree.size - 1))
-    left_index = index << 1 # left child
-    right_index = left_index + 1 # right child
+    index = jnp.arange(
+        split_tree.size, dtype=jaxext.minimal_unsigned_dtype(2 * split_tree.size - 1)
+    )
+    left_index = index << 1  # left child
+    right_index = left_index + 1  # right child
     left_leaf = split_tree.at[left_index].get(mode='fill', fill_value=0) == 0
     right_leaf = split_tree.at[right_index].get(mode='fill', fill_value=0) == 0
     is_not_leaf = split_tree.astype(bool)
     return is_not_leaf & left_leaf & right_leaf
-        # the 0-th item has split == 0, so it's not counted
+    # the 0-th item has split == 0, so it's not counted
+
 
 def tree_depths(tree_length):
     """
@@ -253,7 +263,7 @@ def tree_depths(tree_length):
     depths = []
     depth = 0
     for i in range(tree_length):
-        if i == 2 ** depth:
+        if i == 2**depth:
             depth += 1
         depths.append(depth - 1)
     depths[0] = 0

@@ -1,6 +1,6 @@
 # bartz/tests/test_prepcovars.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -28,9 +28,9 @@ import numpy
 
 import bartz
 
-class TestQuantilizer:
 
-    @pytest.mark.parametrize('fill_value', [jnp.inf, 2 ** 31 - 1])
+class TestQuantilizer:
+    @pytest.mark.parametrize('fill_value', [jnp.inf, 2**31 - 1])
     def test_splits_fill(self, fill_value):
         fill_value = jnp.array(fill_value)
         x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], fill_value.dtype)
@@ -39,17 +39,19 @@ class TestQuantilizer:
         numpy.testing.assert_array_equal(splits, expected_splits)
 
     def test_max_splits(self):
-        x = jnp.array([
-            [1, 1, 1, 1],
-            [4, 4, 1, 1],
-            [2, 1, 3, 2],
-            [1, 4, 2, 3],
-        ])
+        x = jnp.array(
+            [
+                [1, 1, 1, 1],
+                [4, 4, 1, 1],
+                [2, 1, 3, 2],
+                [1, 4, 2, 3],
+            ]
+        )
         _, max_split = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         numpy.testing.assert_array_equal(max_split, jnp.arange(4))
 
     def test_integer_splits_overflow(self):
-        x = jnp.array([[-2 ** 31, 2 ** 31 - 2]])
+        x = jnp.array([[-(2**31), 2**31 - 2]])
         splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         expected_splits = [[-1]]
         numpy.testing.assert_array_equal(splits, expected_splits)
@@ -81,6 +83,7 @@ class TestQuantilizer:
         b = bartz.prepcovars.bin_predictors(x, splits)
         numpy.testing.assert_array_equal(x, b)
 
+
 def test_binner_left_boundary():
     splits = jnp.array([[1, 2, 3]])
 
@@ -88,9 +91,10 @@ def test_binner_left_boundary():
     b = bartz.prepcovars.bin_predictors(x, splits)
     numpy.testing.assert_array_equal(b, [[0, 0]])
 
-def test_binner_right_boundary():
-    splits = jnp.array([[1, 2, 3, 2 ** 31 - 1]])
 
-    x = jnp.array([[2 ** 31 - 1]])
+def test_binner_right_boundary():
+    splits = jnp.array([[1, 2, 3, 2**31 - 1]])
+
+    x = jnp.array([[2**31 - 1]])
     b = bartz.prepcovars.bin_predictors(x, splits)
     numpy.testing.assert_array_equal(b, [[3]])

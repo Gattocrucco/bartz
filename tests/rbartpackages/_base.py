@@ -9,6 +9,7 @@ import numpy as np
 pandas_converter = conversion.Converter('pandas')
 try:
     from rpy2.robjects import pandas2ri
+
     pandas_converter = pandas2ri.converter
 except ImportError:
     pandas_converter = conversion.Converter('pandas')
@@ -19,9 +20,11 @@ polars_converter = conversion.Converter('polars')
 try:
     import polars
     from rpy2.robjects import pandas2ri
+
     def polars_to_r(df):
         df = df.to_pandas()
         return pandas2ri.py2rpy(df)
+
     polars_converter.py2rpy.register(polars.DataFrame, polars_to_r)
     polars_converter.py2rpy.register(polars.Series, polars_to_r)
 except ImportError:
@@ -31,11 +34,13 @@ except ImportError:
 jax_converter = conversion.Converter('jax')
 try:
     import jax
+
     def jax_to_r(x):
         x = np.asarray(x)
         if x.ndim == 0:
             x = x[()]
         return numpy2ri.py2rpy(x)
+
     jax_converter.py2rpy.register(jax.Array, jax_to_r)
 except ImportError:
     pass
@@ -51,9 +56,14 @@ numpy_converter = numpy2ri.converter
 
 # converter for python dictionaries
 dict_converter = conversion.Converter('dict')
+
+
 def dict_to_r(x):
     return robjects.ListVector(x)
+
+
 dict_converter.py2rpy.register(dict, dict_to_r)
+
 
 class RObjectABC(abc.ABC):
     """
@@ -109,14 +119,14 @@ class RObjectABC(abc.ABC):
     @property
     @abc.abstractmethod
     def _rfuncname(self):
-        """ function/class to be wrapped written as library::name, override
-        this property with a class string attribute """
+        """function/class to be wrapped written as library::name, override
+        this property with a class string attribute"""
         raise NotImplementedError
 
     def __init__(self, *args, timeout=None, retries=0, **kw):
         library, _ = self._rfuncname.split('::')
         robjects.r(f'library({library})')
-            # TODO I would like to do loadNamespace('<library>') and then always use <library>::<thing>. However this does not work with methods (see __init_subclass__). I have to look up how to reference methods directly in a namespace. Alternatively, I could do library(<library>, quietly=TRUE), but I prefer not to suppress eventual errors.
+        # TODO I would like to do loadNamespace('<library>') and then always use <library>::<thing>. However this does not work with methods (see __init_subclass__). I have to look up how to reference methods directly in a namespace. Alternatively, I could do library(<library>, quietly=TRUE), but I prefer not to suppress eventual errors.
         func = robjects.r(self._rfuncname)
         dofunc = lambda: func(*self._args2r(args), **self._kw2r(kw))
         if timeout is not None:
@@ -129,23 +139,31 @@ class RObjectABC(abc.ABC):
 
     @staticmethod
     def _tryagain_withtimeout(func, timeoutpercall, maxretries):
-        """ decorate `func` to time its execution, time out over a threshold,
-        and optionally retries up to a maximum number of calls """
+        """decorate `func` to time its execution, time out over a threshold,
+        and optionally retries up to a maximum number of calls"""
         import wrapt_timeout_decorator as wtd
+
         timedfunc = wtd.timeout(timeoutpercall, use_signals=False)(func)
-            # do not use signals because they are intercepted by R
+
+        # do not use signals because they are intercepted by R
         @functools.wraps(func)
         def newfunc(*args, **kw):
             for _ in range(maxretries):
                 try:
                     return timedfunc(*args, **kw)
                 except TimeoutError as exc:
-                    print(f'###### {self._rfuncname}:', exc.__class__.__name__, *exc.args, '#######')
+                    print(
+                        f'###### {self._rfuncname}:',
+                        exc.__class__.__name__,
+                        *exc.args,
+                        '#######',
+                    )
             return timedfunc(*args, **kw)
+
         return newfunc
 
     def __init_subclass__(cls, **kw):
-        """ automatically modify subclasses """
+        """automatically modify subclasses"""
 
         # if the subclass had an attribute `_methods` (a list of method
         # names), create automatically Python wrappers for those methods if
@@ -159,7 +177,9 @@ class RObjectABC(abc.ABC):
                     func = robjects.r(method)
                     out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
                 return self._r2py(out)
+
             return impl
+
         for method in getattr(cls, '_methods', []):
             if not hasattr(cls, method):
                 setattr(cls, method, implof(method))

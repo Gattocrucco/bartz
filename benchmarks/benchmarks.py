@@ -5,8 +5,8 @@ from jax import random
 import jax
 import bartz
 
-class TimeCompilation:
 
+class TimeCompilation:
     def setup(self):
         p = 2
         n = 30
@@ -20,7 +20,9 @@ class TimeCompilation:
         bart = bartz.BART.gbart(X, y, ndpost=0, nskip=0)
         self.args = (
             bart._mcmc_state,
-            1, 1, 1,
+            1,
+            1,
+            1,
             bartz.mcmcloop.make_simple_print_callback(100),
             keys.pop(),
         )
@@ -29,4 +31,5 @@ class TimeCompilation:
         @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
         def f(*args):
             return bartz.mcmcloop.run_mcmc(*args)
+
         f.lower(*self.args).compile()

@@ -1,6 +1,6 @@
 # bartz/src/bartz/prepcovars.py
 #
-# Copyright (c) 2024, Giacomo Petrillo
+# Copyright (c) 2024-2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -30,6 +30,7 @@ from jax import numpy as jnp
 from . import jaxext
 from . import grove
 
+
 @functools.partial(jax.jit, static_argnums=(1,))
 def quantilized_splits_from_matrix(X, max_bins):
     """
@@ -54,11 +55,14 @@ def quantilized_splits_from_matrix(X, max_bins):
         The number of actually used values in each row of `splits`.
     """
     out_length = min(max_bins, X.shape[1]) - 1
+
     # return _quantilized_splits_from_matrix(X, out_length)
-    @functools.partial(jaxext.autobatch, max_io_nbytes=2 ** 29)
+    @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
     def quantilize(X):
         return _quantilized_splits_from_matrix(X, out_length)
+
     return quantilize(X)
+
 
 @functools.partial(jax.vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(x, out_length):
@@ -67,20 +71,27 @@ def _quantilized_splits_from_matrix(x, out_length):
     actual_length -= 1
     if jnp.issubdtype(x.dtype, jnp.integer):
         midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
-        indices = jnp.arange(midpoints.size, dtype=jaxext.minimal_unsigned_dtype(midpoints.size - 1))
+        indices = jnp.arange(
+            midpoints.size, dtype=jaxext.minimal_unsigned_dtype(midpoints.size - 1)
+        )
         midpoints = jnp.where(indices < actual_length, midpoints, huge)
     else:
         midpoints = (u[1:] + u[:-1]) / 2
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]
-    indices = jnp.around(indices).astype(jaxext.minimal_unsigned_dtype(midpoints.size - 1))
-        # indices calculation with float rather than int to avoid potential
-        # overflow with int32, and to round to nearest instead of rounding down
+    indices = jnp.around(indices).astype(
+        jaxext.minimal_unsigned_dtype(midpoints.size - 1)
+    )
+    # indices calculation with float rather than int to avoid potential
+    # overflow with int32, and to round to nearest instead of rounding down
     decimated_midpoints = midpoints[indices]
     truncated_midpoints = midpoints[:out_length]
-    splits = jnp.where(actual_length > out_length, decimated_midpoints, truncated_midpoints)
+    splits = jnp.where(
+        actual_length > out_length, decimated_midpoints, truncated_midpoints
+    )
     max_split = jnp.minimum(actual_length, out_length)
     max_split = max_split.astype(jaxext.minimal_unsigned_dtype(out_length))
     return splits, max_split
+
 
 @functools.partial(jax.jit, static_argnums=(1,))
 def uniform_splits_from_matrix(X, num_bins):
@@ -110,6 +121,7 @@ def uniform_splits_from_matrix(X, num_bins):
     max_split = jnp.full(*splits.shape, jaxext.minimal_unsigned_dtype(num_bins - 1))
     return splits, max_split
 
+
 @functools.partial(jax.jit, static_argnames=('method',))
 def bin_predictors(X, splits, **kw):
     """
@@ -135,9 +147,11 @@ def bin_predictors(X, splits, **kw):
         A matrix with `p` predictors and `n` observations, where each predictor
         has been replaced by the index of the bin it falls into.
     """
-    @functools.partial(jaxext.autobatch, max_io_nbytes=2 ** 29)
+
+    @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
     @jax.vmap
     def bin_predictors(x, splits):
         dtype = jaxext.minimal_unsigned_dtype(splits.size)
         return jnp.searchsorted(splits, x, **kw).astype(dtype)
+
     return bin_predictors(X, splits)

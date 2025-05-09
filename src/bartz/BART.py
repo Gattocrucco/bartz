@@ -33,6 +33,7 @@ from . import mcmcstep
 from . import mcmcloop
 from . import prepcovars
 
+
 class gbart:
     """
     Nonparametric regression with Bayesian Additive Regression Trees (BART).
@@ -167,7 +168,11 @@ class gbart:
 
     """
 
-    def __init__(self, x_train, y_train, *,
+    def __init__(
+        self,
+        x_train,
+        y_train,
+        *,
         x_test=None,
         usequants=False,
         sigest=None,
@@ -188,8 +193,7 @@ class gbart:
         printevery=100,
         seed=0,
         initkw={},
-        ):
-
+    ):
         x_train, x_train_fmt = self._process_predictor_input(x_train)
         y_train, _ = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
@@ -199,14 +203,30 @@ class gbart:
 
         offset = self._process_offset_settings(y_train, offset)
         scale = self._process_scale_settings(y_train, k)
-        lamda, sigest = self._process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, offset)
+        lamda, sigest = self._process_noise_variance_settings(
+            x_train, y_train, sigest, sigdf, sigquant, lamda, offset
+        )
 
         splits, max_split = self._determine_splits(x_train, usequants, numcut)
         x_train = self._bin_predictors(x_train, splits)
         y_train, lamda_scaled = self._transform_input(y_train, lamda, offset, scale)
 
-        mcmc_state = self._setup_mcmc(x_train, y_train, w, max_split, lamda_scaled, sigdf, power, base, maxdepth, ntree, initkw)
-        final_state, burnin_trace, main_trace = self._run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed)
+        mcmc_state = self._setup_mcmc(
+            x_train,
+            y_train,
+            w,
+            max_split,
+            lamda_scaled,
+            sigdf,
+            power,
+            base,
+            maxdepth,
+            ntree,
+            initkw,
+        )
+        final_state, burnin_trace, main_trace = self._run_mcmc(
+            mcmc_state, ndpost, nskip, keepevery, printevery, seed
+        )
 
         sigma = self._extract_sigma(main_trace, scale)
         first_sigma = self._extract_sigma(burnin_trace, scale)
@@ -292,7 +312,9 @@ class gbart:
         assert get_length(x1) == get_length(x2)
 
     @staticmethod
-    def _process_noise_variance_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, offset):
+    def _process_noise_variance_settings(
+        x_train, y_train, sigest, sigdf, sigquant, lamda, offset
+    ):
         if lamda is not None:
             return lamda, None
         else:
@@ -305,7 +327,7 @@ class gbart:
             else:
                 x_centered = x_train.T - x_train.mean(axis=1)
                 y_centered = y_train - y_train.mean()
-                    # centering is equivalent to adding an intercept column
+                # centering is equivalent to adding an intercept column
                 _, chisq, rank, _ = jnp.linalg.lstsq(x_centered, y_centered)
                 chisq = chisq.squeeze(0)
                 dof = len(y_train) - rank
@@ -349,7 +371,19 @@ class gbart:
         return y, lamda
 
     @staticmethod
-    def _setup_mcmc(x_train, y_train, w, max_split, lamda, sigdf, power, base, maxdepth, ntree, initkw):
+    def _setup_mcmc(
+        x_train,
+        y_train,
+        w,
+        max_split,
+        lamda,
+        sigdf,
+        power,
+        base,
+        maxdepth,
+        ntree,
+        initkw,
+    ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
         sigma2_alpha = sigdf / 2
@@ -370,7 +404,9 @@ class gbart:
 
     @staticmethod
     def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed):
-        if isinstance(seed, jax.Array) and jnp.issubdtype(seed.dtype, jax.dtypes.prng_key):
+        if isinstance(seed, jax.Array) and jnp.issubdtype(
+            seed.dtype, jax.dtypes.prng_key
+        ):
             key = seed
         else:
             key = jax.random.key(seed)
@@ -389,9 +425,9 @@ class gbart:
     def _extract_sigma(trace, scale):
         return scale * jnp.sqrt(trace['sigma2'])
 
-
     def _show_tree(self, i_sample, i_tree, print_all=False):
         from . import debug
+
         trace = self._main_trace
         leaf_tree = trace['leaf_trees'][i_sample, i_tree]
         var_tree = trace['var_trees'][i_sample, i_tree]
@@ -406,7 +442,9 @@ class gbart:
         else:
             resid = bart['resid']
             alpha = bart['sigma2_alpha'] + resid.size / 2
-            norm2 = jnp.dot(resid, resid, preferred_element_type=bart['sigma2_beta'].dtype)
+            norm2 = jnp.dot(
+                resid, resid, preferred_element_type=bart['sigma2_beta'].dtype
+            )
             beta = bart['sigma2_beta'] + norm2 / 2
         sigma2 = beta / alpha
         return jnp.sqrt(sigma2) * self.scale
@@ -414,22 +452,32 @@ class gbart:
     def _compare_resid(self):
         bart = self._mcmc_state
         resid1 = bart['resid']
-        yhat = grove.evaluate_forest(bart['X'], bart['leaf_trees'], bart['var_trees'], bart['split_trees'], jnp.float32)
+        yhat = grove.evaluate_forest(
+            bart['X'],
+            bart['leaf_trees'],
+            bart['var_trees'],
+            bart['split_trees'],
+            jnp.float32,
+        )
         resid2 = bart['y'] - yhat
         return resid1, resid2
 
     def _avg_acc(self):
         trace = self._main_trace
+
         def acc(prefix):
             acc = trace[f'{prefix}_acc_count']
             prop = trace[f'{prefix}_prop_count']
             return acc.sum() / prop.sum()
+
         return acc('grow'), acc('prune')
 
     def _avg_prop(self):
         trace = self._main_trace
+
         def prop(prefix):
             return trace[f'{prefix}_prop_count'].sum()
+
         pgrow = prop('grow')
         pprune = prop('prune')
         total = pgrow + pprune
@@ -442,16 +490,21 @@ class gbart:
 
     def _depth_distr(self):
         from . import debug
+
         trace = self._main_trace
         split_trees = trace['split_trees']
         return debug.trace_depth_distr(split_trees)
 
     def _points_per_leaf_distr(self):
         from . import debug
-        return debug.trace_points_per_leaf_distr(self._main_trace, self._mcmc_state['X'])
+
+        return debug.trace_points_per_leaf_distr(
+            self._main_trace, self._mcmc_state['X']
+        )
 
     def _check_trees(self):
         from . import debug
+
         return debug.check_trace(self._main_trace, self._mcmc_state)
 
     def _tree_goes_bad(self):

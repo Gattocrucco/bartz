@@ -43,7 +43,6 @@ variant = os.environ.get('BARTZ_DOC_VARIANT', 'dev')
 assert variant in ('dev', 'latest')
 
 if variant == 'dev':
-
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     modif = subprocess.run(['git', 'diff', '--quiet']).returncode
     modif_staged = subprocess.run(['git', 'diff', '--quiet', '--staged']).returncode
@@ -51,7 +50,6 @@ if variant == 'dev':
     version = f'{commit[:7]}{"+" if uncommitted_stuff else ""}'
 
 elif variant == 'latest':
-
     # list git tags
     tags = subprocess.check_output(['git', 'tag'], text=True).splitlines()
     print(f'git tags: {tags}')
@@ -75,6 +73,7 @@ elif variant == 'latest':
     # check it out and check it matches the version in the package
     subprocess.run(['git', 'checkout', tag], check=True)
     import bartz
+
     assert packaging.version.parse(bartz.__version__) == version
 
     version = str(version)
@@ -103,23 +102,25 @@ release = version
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.mathjax',
-    'numpydoc', # process numpy format docstrings
-    'sphinx.ext.intersphinx', # link to other documentations automatically
-    'myst_parser', # markdown support
+    'numpydoc',  # process numpy format docstrings
+    'sphinx.ext.intersphinx',  # link to other documentations automatically
+    'myst_parser',  # markdown support
 ]
 
 # decide whether to use viewcode or linkcode extension
-ext = 'viewcode' # copy source code in static website
+ext = 'viewcode'  # copy source code in static website
 if not uncommitted_stuff:
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    commit_on_github = subprocess.check_output(['git', 'branch', '--remotes', '--contains', commit], text=True)
+    commit_on_github = subprocess.check_output(
+        ['git', 'branch', '--remotes', '--contains', commit], text=True
+    )
     if commit_on_github.strip():
-        ext = 'linkcode' # links to code on github
+        ext = 'linkcode'  # links to code on github
 extensions.append(f'sphinx.ext.{ext}')
 
 myst_enable_extensions = [
     # "amsmath",
-    "dollarmath",
+    'dollarmath',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -141,13 +142,13 @@ html_theme = 'alabaster'
 html_title = f'{project} documentation'
 
 html_theme_options = dict(
-    description = 'Super-fast BART (Bayesian Additive Regression Trees) in Python',
-    fixed_sidebar = True,
-    github_button = True,
-    github_type = 'star',
-    github_repo = 'bartz',
-    github_user = 'Gattocrucco',
-    show_relbars = True,
+    description='Super-fast BART (Bayesian Additive Regression Trees) in Python',
+    fixed_sidebar=True,
+    github_button=True,
+    github_type='star',
+    github_repo='bartz',
+    github_user='Gattocrucco',
+    show_relbars=True,
 )
 
 # Add any paths that contain custom static files (such as style sheets) here,
@@ -159,9 +160,10 @@ master_doc = 'index'
 
 # -- Other options -------------------------------------------------
 
-autoclass_content = 'both' # concatenate the class and __init__ docstrings
-autodoc_preserve_defaults = True # default arguments are printed as in source
-                                 # instead of being evaluated
+autoclass_content = 'both'  # concatenate the class and __init__ docstrings
+autodoc_preserve_defaults = (
+    True  # default arguments are printed as in source instead of being evaluated
+)
 autodoc_default_options = {
     'member-order': 'bysource',
 }
@@ -177,7 +179,8 @@ intersphinx_mapping = dict(
     jax=('https://docs.jax.dev/en/latest', None),
 )
 
-viewcode_line_numbers = True # for 'viewcode' extension
+viewcode_line_numbers = True  # for 'viewcode' extension
+
 
 def linkcode_resolve(domain, info):
     """
