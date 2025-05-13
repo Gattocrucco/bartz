@@ -7,6 +7,7 @@ __pycache__
 poetry.toml
 dist/
 .coverage*
+.venv/
 
 # Documentation
 docs/_build

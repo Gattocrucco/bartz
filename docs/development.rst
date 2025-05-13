@@ -35,11 +35,7 @@ Initial setup
     git clone git@github.com:YourGithubUserName/bartz.git
     cd bartz
 
-Install `poetry <https://python-poetry.org/docs/#installation>`_. My favorite complete installation route on macOS:
-
-* Install `brew <https://brew.sh/>`_, then add :literal:`brew` to the :literal:`PATH`
-* :literal:`brew install pipx`, then add :literal:`pipx`'s directory to the :literal:`PATH`
-* :literal:`pipx install poetry`
+Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_. My favorite installation route on macOS would be to install `brew <https://brew.sh/>`_ and then :literal:`brew install uv`.
 
 Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html>`_ or an equivalent package manager like :literal:`mamba` or :literal:`micromamba`. My favorite is :literal:`micromamba`:
 
@@ -48,30 +44,13 @@ Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/instal
     brew install micromamba
     micromamba shell init
 
-Create a virtual environment from the file spec:
+Finally, run
 
 .. code-block:: shell
 
-    micromamba env create --file condaenv.yml
-    micromamba activate bartz
-    poetry config virtualenvs.create false --local # to make sure poetry does not create another virtualenv
+    make setup
 
-Finally, install the package with
-
-.. code-block:: shell
-
-    poetry install
-    pre-commit install
-
-Routine setup
--------------
-
-Each time you want to work on `bartz` in a terminal, do
-
-.. code-block:: shell
-
-    cd <...>/bartz
-    micromamba activate bartz # or the activation command for your env
+This creates a conda virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
 
 Commands
 --------
@@ -81,13 +60,12 @@ Development commands are defined in a makefile. Run :literal:`make` without argu
 Benchmarks
 ----------
 
-There is a separate repository to run and save benchmarks with `asv <https://asv.readthedocs.io>`_. I run the benchmarks myself and show them at https://gattocrucco.github.io/bartz-benchmark. To run and visualize them locally, do:
+The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. Basic workflow:
 
 .. code-block:: shell
 
-    git clone https://github.com/Gattocrucco/bartz-benchmark.git
-    cd bartz-benchmark
-    micromamba activate bartz
-    asv run
-    asv publish
-    asv preview
+    uv run asv run
+    uv run asv publish
+    uv run asv preview
+
+:literal:`asv run` writes the results into files saved in :literal:`./benchmarks`. These files are tracked by git; consider deliberately not committing all results generated while developing.

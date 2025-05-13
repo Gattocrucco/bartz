@@ -25,10 +25,12 @@
 # Makefile for running tests, prepare and upload a release.
 
 COVERAGE_SUFFIX=
+PYTHON_VERSION='*'
 
 .PHONY: all
 all:
 	@echo "Available targets:"
+	@echo "- setup: create a python environment and install everything"
 	@echo "- tests: run unit tests, saving coverage information"
 	@echo "- docs: build html documentation"
 	@echo "- covreport: build html coverage report"
@@ -36,10 +38,10 @@ all:
 	@echo "- upload: upload release to PyPI"
 	@echo
 	@echo "Release instructions:"
-	@echo "- $$ poetry version <rule>"
+	@echo "- $$ uv version --bump major|minor|patch"
 	@echo "- describe release in docs/changelog.md"
 	@echo "- $$ make release (repeat until it goes smoothly)"
-	@echo "- push and check CI completes"
+	@echo "- push and check CI completes (if it doesn't, go to previous step)"
 	@echo "- $$ make upload"
 	## make upload should also update the docs automatically because it pushes
 	## a tag which triggers a workflow, however last time it didn't work. I made
@@ -47,36 +49,42 @@ all:
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
+.PHONY: setup-ci
+setup-ci:
+	micromamba env create --file condaenv.yml --prefix ./.venv --yes python=$(PYTHON_VERSION)
+	uv sync --locked --inexact --all-groups
+
+.PHONY: setup
+setup: setup-ci
+	uv run pre-commit install
+
 .PHONY: release
 release: tests docs
 	test ! -d dist || rm -r dist
-	poetry build
+	uv build
 
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
-	python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
-
-PY = MPLBACKEND=agg coverage run
-TESTSPY = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(PY) --context=tests$(COVERAGE_SUFFIX)
+	uv run python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 .PHONY: tests
 tests: copy-version
-	$(TESTSPY) -m pytest tests
+	COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) MPLBACKEND=agg uv run coverage run --context=tests$(COVERAGE_SUFFIX) -m pytest tests
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
 
 .PHONY: docs-latest
 docs-latest:
-	BARTZ_DOC_VARIANT=latest make -C docs html
+	BARTZ_DOC_VARIANT=latest uv run make -C docs html
 	git switch - || git switch main
 	test ! -d _site/docs || rm -r _site/docs
 	mv docs/_build/html _site/docs
 
 .PHONY: docs
 docs:
-	make -C docs html
+	uv run make -C docs html
 	test ! -d _site/docs-dev || rm -r _site/docs-dev
 	mv docs/_build/html _site/docs-dev
 
@@ -87,8 +95,8 @@ docs-all: copy-version docs-latest docs
 
 .PHONY: covreport
 covreport:
-	coverage combine
-	coverage html
+	uv run coverage combine
+	uv run coverage html
 	test ! -d _site/coverage || rm -r _site/coverage
 	mv htmlcov _site/coverage
 	@echo
@@ -104,12 +112,12 @@ version-tag: copy-version
 
 .PHONY: upload
 upload: version-tag
-	poetry publish
+	uv publish
 
-.PHONY: benchmark-releases
-benchmark-releases:
-	git tag | asv run --skip-existing HASHFILE:-
+.PHONY: benchmark-tags
+benchmark-tags:
+	git tag | uv run asv run --skip-existing HASHFILE:-
 
 .PHONY: benchmark-site
 benchmark-site:
-	asv publish
+	uv run asv publish

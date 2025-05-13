@@ -27,7 +27,7 @@ name: tests-docs
 on:
   push:
     branches:
-      - main
+      - uv
     tags:
       - v*
   workflow_dispatch:
@@ -54,31 +54,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up micromamba
-        uses: mamba-org/setup-micromamba@v1
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          micromamba-version: 1.5.7-0
-          environment-file: condaenv.yml
-          create-args: python=${{ matrix.python-version }}
+          version: "0.7.3"
 
-      - name: Install poetry
-        run: |
-          python -m pip install --upgrade pip
-          python -m venv poetry-venv
-          source poetry-venv/bin/activate
-          python -m pip install poetry
-          poetry config virtualenvs.create false
-        shell: micromamba-shell {0}
+      - name: Install micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: "2.1.1-0"
 
-      - name: Install package
+      - name: Create venv and install package
         run: |
-          poetry-venv/bin/poetry install
-        shell: micromamba-shell {0}
+          make setup-ci PYTHON_VERSION=${{ matrix.python-version }}
 
       - name: Run unit tests
         run: |
           make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
-        shell: micromamba-shell {0}
 
       - name: Save coverage information
         uses: actions/upload-artifact@v4
@@ -96,36 +88,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # this fetches the full history
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          version: "0.7.3"
 
-      - name: Install poetry
-        run: |
-          python -m venv poetry-venv
-          poetry-venv/bin/python -m pip install --upgrade pip
-          poetry-venv/bin/python -m pip install poetry
-          poetry-venv/bin/poetry config virtualenvs.create false
+      - name: Install micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: "2.1.1-0"
 
-      - name: Install package
+      - name: Create venv and install package
         run: |
-          python -m venv package-venv
-          source package-venv/bin/activate
-          test `realpath \`which python\`` = `realpath package-venv/bin/python` || (echo WRONG PYTHON && exit 31)
-          python -m pip install --upgrade pip
-          poetry-venv/bin/poetry install
+          make setup-ci
 
       - name: Generate benchmarks visualization
         run: |
-          source package-venv/bin/activate
           make benchmark-site
 
       - name: Generate documentation
         run: |
-          source package-venv/bin/activate
           make docs-all
 
       - name: Save documentation
@@ -148,15 +132,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
+          version: "0.7.3"
 
-      - name: Install coverage
+      - name: Install micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: "2.1.1-0"
+
+      - name: Create venv and install package
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install coverage
+          make setup-ci
 
       - name: Get coverage files
         uses: actions/download-artifact@v4
@@ -172,9 +160,9 @@ jobs:
 
       - name: Print coverage debug
         run: |
-          coverage debug config
-          coverage debug sys
-          coverage debug data
+          uv run coverage debug config
+          uv run coverage debug sys
+          uv run coverage debug data
 
       - name: Generate coverage report
         run: make covreport
