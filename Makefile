@@ -59,7 +59,9 @@ setup: setup-ci
 	uv run pre-commit install
 
 .PHONY: release
-release: tests docs
+release: copy-version tests docs
+	git diff --quiet
+	git diff --quiet --staged
 	test ! -d dist || rm -r dist
 	uv build
 
@@ -69,7 +71,7 @@ src/bartz/_version.py: pyproject.toml
 	uv run python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 .PHONY: tests
-tests: copy-version
+tests:
 	COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) MPLBACKEND=agg uv run coverage run --context=tests$(COVERAGE_SUFFIX) -m pytest tests
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
@@ -107,12 +109,30 @@ version-tag: copy-version
 	git diff --quiet
 	git diff --quiet --staged
 	git fetch --tags
-	git tag v$(shell python -c 'import bartz; print(bartz.__version__)')
+	git tag v$(shell uv run python -c 'import bartz; print(bartz.__version__)')
 	git push --tags
 
 .PHONY: upload
 upload: version-tag
+	@echo "Enter PyPI token:"
+	@read -s UV_PUBLISH_TOKEN && \
+	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish
+	@VERSION=$$(uv run python -c 'import bartz; print(bartz.__version__)') && \
+	echo "Try to install bartz $$VERSION from PyPI" && \
+	uv tool run --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
+
+.PHONY: upload-test
+upload-test:
+	git diff --quiet
+	git diff --quiet --staged
+	@echo "Enter TestPyPI token:"
+	@read -s UV_PUBLISH_TOKEN && \
+	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
+	uv publish --check-url https://test.pypi.org/simple/ --publish-url https://test.pypi.org/legacy/
+	@VERSION=$$(uv run python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	echo "Try to install bartz $$VERSION from TestPyPI" && \
+	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 .PHONY: benchmark-tags
 benchmark-tags:
