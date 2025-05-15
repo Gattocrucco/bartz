@@ -66,8 +66,9 @@ setup-ci: setup-micromamba
 .PHONY: setup-ci-old
 setup-ci-old: setup-micromamba
 	cp uv.lock uv.lock.backup
-	mv uv-lowest.lock uv.lock
+	cp uv-lowest.lock uv.lock
 	uv sync --locked --inexact --group ci --resolution lowest-direct
+	mv uv.lock.backup uv.lock
 
 .PHONY: lock-old
 lock-old:

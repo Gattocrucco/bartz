@@ -215,7 +215,12 @@ def _simple_print_callback(
         burnin_flag = ' (burnin)' if burnin else ''
         total_str = str(n_total)
         ndigits = len(total_str)
-        i_str = str(i_total + 1).rjust(ndigits)
+        i_str = str(i_total.item() + 1).rjust(ndigits)
+        # I do i_total.item() + 1 instead of just i_total + 1 to solve a bug
+        # originating when jax is combined with some outdated dependencies. (I
+        # did not track down which dependencies exactly.) Doing .item() makes
+        # the + 1 operation be done by Python instead of by jax. The bug is that
+        # jax hangs completely, with a secondary thread blocked at this line.
         print(
             f'Iteration {i_str}/{total_str} '
             f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '

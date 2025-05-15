@@ -62,6 +62,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
+          cache-downloads: true
 
       - name: Create venv and install package
         if: matrix.python-version == '3.12'
@@ -104,6 +105,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
+          cache-downloads: true
 
       - name: Create venv and install package
         run: |
@@ -146,6 +148,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
+          cache-downloads: true
 
       - name: Create venv and install package
         run: |
