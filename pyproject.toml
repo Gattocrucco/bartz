@@ -52,13 +52,11 @@ Documentation = "https://gattocrucco.github.io/bartz/docs-dev"
 Issues = "https://github.com/Gattocrucco/bartz/issues"
 
 [dependency-groups]
-dev = [
+only-local = [
     "appnope>=0.1.4",
-    "asv>=0.6.4",
     "ipython>=8.36.0",
     "matplotlib>=3.10.3",
     "matplotlib-label-lines>=0.8.1",
-    "packaging>=25.0",
     "polars[pandas,pyarrow]>=1.29.0",
     "pre-commit>=4.2.0",
     "ruff>=0.11.9",
@@ -67,14 +65,14 @@ dev = [
     "virtualenv>=20.31.2",
     "xgboost>=3.0.0",
 ]
-docs = [
+ci = [
+    "asv>=0.6.4",
+    "coverage>=7.8.0",
     "myst-parser>=4.0.1",
     "numpydoc>=1.8.0",
-    "sphinx>=8.1.3",
-]
-test = [
-    "coverage>=7.8.0",
+    "packaging>=25.0",
     "pytest>=8.3.5",
+    "sphinx>=8.1.3",
 ]
 
 [tool.pytest.ini_options]

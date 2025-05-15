@@ -26,6 +26,7 @@
 
 COVERAGE_SUFFIX=
 PYTHON_VERSION='*'
+UV_RUN=uv run --no-sync
 
 .PHONY: all
 all:
@@ -49,14 +50,31 @@ all:
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
-.PHONY: setup-ci
-setup-ci:
+.PHONY: setup-micromamba
+setup-micromamba:
 	micromamba env create --file condaenv.yml --prefix ./.venv --yes python=$(PYTHON_VERSION)
-	uv sync --locked --inexact --all-groups
 
 .PHONY: setup
-setup: setup-ci
-	uv run pre-commit install
+setup: setup-micromamba
+	uv sync --locked --inexact --all-groups
+	$(UV_RUN) pre-commit install
+
+.PHONY: setup-ci
+setup-ci: setup-micromamba
+	uv sync --locked --inexact --group ci
+
+.PHONY: setup-ci-old
+setup-ci-old: setup-micromamba
+	cp uv.lock uv.lock.backup
+	mv uv-lowest.lock uv.lock
+	uv sync --locked --inexact --group ci --resolution lowest-direct
+
+.PHONY: lock-old
+lock-old:
+	cp uv.lock uv.lock.backup
+	uv lock --resolution lowest-direct
+	cp uv.lock uv-lowest.lock
+	mv uv.lock.backup uv.lock
 
 .PHONY: release
 release: copy-version tests docs
@@ -68,25 +86,25 @@ release: copy-version tests docs
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
-	uv run python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
+	$(UV_RUN) python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 .PHONY: tests
 tests:
-	COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) MPLBACKEND=agg uv run coverage run --context=tests$(COVERAGE_SUFFIX) -m pytest tests
+	COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(UV_RUN) coverage run --context=tests$(COVERAGE_SUFFIX) -m pytest tests
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
 
 .PHONY: docs-latest
 docs-latest:
-	BARTZ_DOC_VARIANT=latest uv run make -C docs html
+	BARTZ_DOC_VARIANT=latest $(UV_RUN) make -C docs html
 	git switch - || git switch main
 	test ! -d _site/docs || rm -r _site/docs
 	mv docs/_build/html _site/docs
 
 .PHONY: docs
 docs:
-	uv run make -C docs html
+	$(UV_RUN) make -C docs html
 	test ! -d _site/docs-dev || rm -r _site/docs-dev
 	mv docs/_build/html _site/docs-dev
 
@@ -97,8 +115,8 @@ docs-all: copy-version docs-latest docs
 
 .PHONY: covreport
 covreport:
-	uv run coverage combine
-	uv run coverage html
+	$(UV_RUN) coverage combine
+	$(UV_RUN) coverage html
 	test ! -d _site/coverage || rm -r _site/coverage
 	mv htmlcov _site/coverage
 	@echo
@@ -109,7 +127,7 @@ version-tag: copy-version
 	git diff --quiet
 	git diff --quiet --staged
 	git fetch --tags
-	git tag v$(shell uv run python -c 'import bartz; print(bartz.__version__)')
+	git tag v$(shell $(UV_RUN) python -c 'import bartz; print(bartz.__version__)')
 	git push --tags
 
 .PHONY: upload
@@ -118,7 +136,7 @@ upload: version-tag
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish
-	@VERSION=$$(uv run python -c 'import bartz; print(bartz.__version__)') && \
+	@VERSION=$$($(UV_RUN) python -c 'import bartz; print(bartz.__version__)') && \
 	echo "Try to install bartz $$VERSION from PyPI" && \
 	uv tool run --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
@@ -130,14 +148,14 @@ upload-test:
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish --check-url https://test.pypi.org/simple/ --publish-url https://test.pypi.org/legacy/
-	@VERSION=$$(uv run python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	@VERSION=$$($(UV_RUN) python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
 	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 .PHONY: benchmark-tags
 benchmark-tags:
-	git tag | uv run asv run --skip-existing HASHFILE:-
+	git tag | $(UV_RUN) asv run --skip-existing HASHFILE:-
 
 .PHONY: benchmark-site
 benchmark-site:
-	uv run asv publish
+	$(UV_RUN) asv publish
