@@ -29,7 +29,9 @@ COVERAGE_SUFFIX=
 .PHONY: all
 all:
 	@echo "Available targets:"
+	@echo "- lock: determine versions of dependencies and pin them"
 	@echo "- setup: create a python environment and install everything"
+	@echo "- lock-old, setup-old: the same with lowest supported versions"
 	@echo "- tests: run unit tests, saving coverage information"
 	@echo "- docs: build html documentation"
 	@echo "- covreport: build html coverage report"

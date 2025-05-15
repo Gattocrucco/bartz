@@ -37,7 +37,7 @@ Initial setup
 
 Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_. My favorite installation route on macOS would be to install `brew <https://brew.sh/>`_ and then :literal:`brew install uv`.
 
-Install `conda <https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html>`_ or an equivalent package manager like :literal:`mamba` or :literal:`micromamba`. My favorite is :literal:`micromamba`:
+Then install `micromamba <https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html>`_; for example with Homebrew:
 
 .. code-block:: shell
 
@@ -50,10 +50,10 @@ Finally, run
 
     make setup
 
-This creates a conda virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
+This creates a micromamba virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
 
-Commands
---------
+Pre-defined commands
+--------------------
 
 Development commands are defined in a makefile. Run :literal:`make` without arguments to list the targets.
 

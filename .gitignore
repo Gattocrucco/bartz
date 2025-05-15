@@ -4,7 +4,6 @@
 
 # Python
 __pycache__
-poetry.toml
 dist/
 .coverage*
 .venv/

@@ -27,7 +27,7 @@ name: tests-docs
 on:
   push:
     branches:
-      - uv
+      - main
     tags:
       - v*
   workflow_dispatch:
