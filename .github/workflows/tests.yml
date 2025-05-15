@@ -57,12 +57,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           version: "0.7.3"
+          enable-cache: false
 
       - name: Install micromamba
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
-          cache-downloads: true
 
       - name: Create venv and install package
         run: make setup-ci${{ matrix.target-suffix }}
@@ -93,12 +93,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           version: "0.7.3"
+          enable-cache: false
 
       - name: Install micromamba
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
-          cache-downloads: true
 
       - name: Create venv and install package
         run: |
@@ -136,12 +136,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           version: "0.7.3"
+          enable-cache: false
 
       - name: Install micromamba
         uses: mamba-org/setup-micromamba@v2
         with:
           micromamba-version: "2.1.1-0"
-          cache-downloads: true
 
       - name: Create venv and install package
         run: |
