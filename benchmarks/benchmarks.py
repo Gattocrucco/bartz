@@ -20,16 +20,16 @@ class TimeCompilation:
         y = f(X) + sigma * random.normal(keys.pop(), (n,))
         bart = bartz.BART.gbart(X, y, ndpost=0, nskip=0)
         self.args = (
+            keys.pop(),
             bart._mcmc_state,
             1,
             1,
             1,
             bartz.mcmcloop.make_simple_print_callback(100),
-            keys.pop(),
         )
 
     def time_run_mcmc_compile(self):
-        @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
+        @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
         def f(*args):
             return bartz.mcmcloop.run_mcmc(*args)
 

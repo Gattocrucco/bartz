@@ -276,16 +276,16 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_si
     return resid_batch_size, count_batch_size
 
 
-def step(bart, key):
+def step(key, bart):
     """
     Perform one full MCMC step on a BART state.
 
     Parameters
     ----------
-    bart : dict
-        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
+    bart : dict
+        A BART mcmc state, as created by `init`.
 
     Returns
     -------
@@ -293,20 +293,20 @@ def step(bart, key):
         The new BART mcmc state.
     """
     key, subkey = random.split(key)
-    bart = sample_trees(bart, subkey)
-    return sample_sigma(bart, key)
+    bart = sample_trees(subkey, bart)
+    return sample_sigma(key, bart)
 
 
-def sample_trees(bart, key):
+def sample_trees(key, bart):
     """
     Forest sampling step of BART MCMC.
 
     Parameters
     ----------
-    bart : dict
-        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
+    bart : dict
+        A BART mcmc state, as created by `init`.
 
     Returns
     -------
@@ -318,20 +318,20 @@ def sample_trees(bart, key):
     This function zeroes the proposal counters.
     """
     key, subkey = random.split(key)
-    moves = sample_moves(bart, subkey)
-    return accept_moves_and_sample_leaves(bart, moves, key)
+    moves = sample_moves(subkey, bart)
+    return accept_moves_and_sample_leaves(key, bart, moves)
 
 
-def sample_moves(bart, key):
+def sample_moves(key, bart):
     """
     Propose moves for all the trees.
 
     Parameters
     ----------
-    bart : dict
-        BART mcmc state.
     key : jax.dtypes.prng_key array
         A jax random key.
+    bart : dict
+        BART mcmc state.
 
     Returns
     -------
@@ -368,13 +368,13 @@ def sample_moves(bart, key):
 
     # compute moves
     grow_moves, prune_moves = _sample_moves_vmap_trees(
+        subkey,
         bart['var_trees'],
         bart['split_trees'],
         bart['affluence_trees'],
         bart['max_split'],
         bart['p_nonterminal'],
         bart['p_propose_grow'],
-        subkey,
     )
 
     u, logu = random.uniform(key, (2, ntree), bart['opt']['large_float'])
@@ -406,17 +406,17 @@ def sample_moves(bart, key):
     )
 
 
-@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, None, None, None, 0))
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, 0, None, None, None))
 def _sample_moves_vmap_trees(*args):
-    args, key = args[:-1], args[-1]
+    key, args = args[0], args[1:]
     key, key1 = random.split(key)
-    grow = grow_move(*args, key)
-    prune = prune_move(*args, key1)
+    grow = grow_move(key, *args)
+    prune = prune_move(key1, *args)
     return grow, prune
 
 
 def grow_move(
-    var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key
+    key, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow
 ):
     """
     Tree structure grow move proposal of BART MCMC.
@@ -465,13 +465,13 @@ def grow_move(
     key, key1, key2 = random.split(key, 3)
 
     leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(
-        split_tree, affluence_tree, p_propose_grow, key
+        key, split_tree, affluence_tree, p_propose_grow
     )
 
-    var = choose_variable(var_tree, split_tree, max_split, leaf_to_grow, key1)
+    var = choose_variable(key1, var_tree, split_tree, max_split, leaf_to_grow)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
 
-    split = choose_split(var_tree, split_tree, max_split, leaf_to_grow, key2)
+    split = choose_split(key2, var_tree, split_tree, max_split, leaf_to_grow)
 
     ratio = compute_partial_ratio(
         prob_choose, num_prunable, p_nonterminal, leaf_to_grow
@@ -487,7 +487,7 @@ def grow_move(
     )
 
 
-def choose_leaf(split_tree, affluence_tree, p_propose_grow, key):
+def choose_leaf(key, split_tree, affluence_tree, p_propose_grow):
     """
     Choose a leaf node to grow in a tree.
 
@@ -574,7 +574,7 @@ def categorical(key, distr):
     return jnp.searchsorted(ecdf, u, 'right'), ecdf[-1]
 
 
-def choose_variable(var_tree, split_tree, max_split, leaf_index, key):
+def choose_variable(key, var_tree, split_tree, max_split, leaf_index):
     """
     Choose a variable to split on for a new non-terminal node.
 
@@ -747,7 +747,7 @@ def randint_exclude(key, sup, exclude):
     return u
 
 
-def choose_split(var_tree, split_tree, max_split, leaf_index, key):
+def choose_split(key, var_tree, split_tree, max_split, leaf_index):
     """
     Choose a split point for a new non-terminal node.
 
@@ -823,7 +823,7 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
 
 
 def prune_move(
-    var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow, key
+    key, var_tree, split_tree, affluence_tree, max_split, p_nonterminal, p_propose_grow
 ):
     """
     Tree structure prune move proposal of BART MCMC.
@@ -860,7 +860,7 @@ def prune_move(
             move. This ratio is inverted.
     """
     node_to_prune, num_prunable, prob_choose = choose_leaf_parent(
-        split_tree, affluence_tree, p_propose_grow, key
+        key, split_tree, affluence_tree, p_propose_grow
     )
     allowed = split_tree[1].astype(bool)  # allowed iff the tree is not a root
 
@@ -875,7 +875,7 @@ def prune_move(
     )
 
 
-def choose_leaf_parent(split_tree, affluence_tree, p_propose_grow, key):
+def choose_leaf_parent(key, split_tree, affluence_tree, p_propose_grow):
     """
     Pick a non-terminal node with leaf children to prune in a tree.
 
@@ -938,18 +938,18 @@ def randint_masked(key, mask):
     return jnp.searchsorted(ecdf, u, 'right')
 
 
-def accept_moves_and_sample_leaves(bart, moves, key):
+def accept_moves_and_sample_leaves(key, bart, moves):
     """
     Accept or reject the proposed moves and sample the new leaf values.
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     bart : dict
         A BART mcmc state.
     moves : dict
         The proposed moves, see `sample_moves`.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -957,7 +957,7 @@ def accept_moves_and_sample_leaves(bart, moves, key):
         The new BART mcmc state.
     """
     bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf = (
-        accept_moves_parallel_stage(bart, moves, key)
+        accept_moves_parallel_stage(key, bart, moves)
     )
     bart, moves = accept_moves_sequential_stage(
         bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf
@@ -965,18 +965,18 @@ def accept_moves_and_sample_leaves(bart, moves, key):
     return accept_moves_final_stage(bart, moves)
 
 
-def accept_moves_parallel_stage(bart, moves, key):
+def accept_moves_parallel_stage(key, bart, moves):
     """
     Pre-computes quantities used to accept moves, in parallel across trees.
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     bart : dict
         A BART mcmc state.
     moves : dict
         The proposed moves, see `sample_moves`.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -1030,7 +1030,7 @@ def accept_moves_parallel_stage(bart, moves, key):
     bart['prune_prop_count'] = jnp.sum(moves['allowed'] & ~moves['grow'])
 
     prelkv, prelk = precompute_likelihood_terms(bart['sigma2'], move_precs)
-    prelf = precompute_leaf_terms(prec_trees, bart['sigma2'], key)
+    prelf = precompute_leaf_terms(key, prec_trees, bart['sigma2'])
 
     return bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf
 
@@ -1381,18 +1381,18 @@ def precompute_likelihood_terms(sigma2, move_precs):
     )
 
 
-def precompute_leaf_terms(prec_trees, sigma2, key):
+def precompute_leaf_terms(key, prec_trees, sigma2):
     """
     Pre-compute terms used to sample leaves from their posterior.
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     prec_trees : array (num_trees, 2 ** d)
         The likelihood precision scale in each potential or actual leaf node.
     sigma2 : float
         The noise variance.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -1787,16 +1787,16 @@ def apply_moves_to_split_trees(split_trees, moves):
     )
 
 
-def sample_sigma(bart, key):
+def sample_sigma(key, bart):
     """
     Noise variance sampling step of BART MCMC.
 
     Parameters
     ----------
-    bart : dict
-        A BART mcmc state, as created by `init`.
     key : jax.dtypes.prng_key array
         A jax random key.
+    bart : dict
+        A BART mcmc state, as created by `init`.
 
     Returns
     -------

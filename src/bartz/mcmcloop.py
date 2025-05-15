@@ -35,13 +35,15 @@ from jax import numpy as jnp
 from . import grove, jaxext, mcmcstep
 
 
-@functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))
-def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
+def run_mcmc(key, bart, n_burn, n_save, n_skip, callback):
     """
     Run the MCMC for the BART posterior.
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        The key for random number generation.
     bart : dict
         The initial MCMC state, as created and updated by the functions in
         `bartz.mcmcstep`.
@@ -71,8 +73,6 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         Since this function is called under the jax jit, the values are not
         available at the time the Python code is executed. Use the utilities in
         `jax.debug` to access the values at actual runtime.
-    key : jax.dtypes.prng_key array
-        The key for random number generation.
 
     Returns
     -------
@@ -120,7 +120,7 @@ def run_mcmc(bart, n_burn, n_save, n_skip, callback, key):
         bart, i_total, key, trace_light, trace_heavy = carry
 
         key, subkey = random.split(key)
-        bart = mcmcstep.step(bart, subkey)
+        bart = mcmcstep.step(subkey, bart)
 
         burnin = i_total < n_burn
         i_skip = jnp.where(

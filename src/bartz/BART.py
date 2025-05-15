@@ -408,7 +408,7 @@ class gbart:
         else:
             key = jax.random.key(seed)
         callback = mcmcloop.make_simple_print_callback(printevery)
-        return mcmcloop.run_mcmc(mcmc_state, nskip, ndpost, keepevery, callback, key)
+        return mcmcloop.run_mcmc(key, mcmc_state, nskip, ndpost, keepevery, callback)
 
     @staticmethod
     def _predict(trace, x):
