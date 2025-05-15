@@ -25,8 +25,6 @@
 # Makefile for running tests, prepare and upload a release.
 
 COVERAGE_SUFFIX=
-PYTHON_VERSION='*'
-UV_RUN=uv run --no-sync
 
 .PHONY: all
 all:
@@ -50,32 +48,44 @@ all:
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
-.PHONY: setup-micromamba
-setup-micromamba:
-	micromamba env create --file condaenv.yml --prefix ./.venv --yes python=$(PYTHON_VERSION)
+SETUP_MICROMAMBA = micromamba env create --file condaenv.yml --prefix ./.venv --yes
+UV_RUN = uv run --no-sync
+
+.PHONY: lock
+lock:
+	uv lock
+	mv uv.lock uv-highest.lock
 
 .PHONY: setup
-setup: setup-micromamba
+setup:
+	$(SETUP_MICROMAMBA)
+	cp uv-highest.lock uv.lock
 	uv sync --locked --inexact --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci
-setup-ci: setup-micromamba
+setup-ci:
+	$(SETUP_MICROMAMBA)
+	cp uv-highest.lock uv.lock
 	uv sync --locked --inexact --group ci
-
-.PHONY: setup-ci-old
-setup-ci-old: setup-micromamba
-	cp uv.lock uv.lock.backup
-	cp uv-lowest.lock uv.lock
-	uv sync --locked --inexact --group ci --resolution lowest-direct
-	mv uv.lock.backup uv.lock
 
 .PHONY: lock-old
 lock-old:
-	cp uv.lock uv.lock.backup
 	uv lock --resolution lowest-direct
-	cp uv.lock uv-lowest.lock
-	mv uv.lock.backup uv.lock
+	mv uv.lock uv-lowest-direct.lock
+
+.PHONY: setup-old
+setup-old:
+	$(SETUP_MICROMAMBA) python=3.10
+	cp uv-lowest-direct.lock uv.lock
+	uv sync --locked --inexact --all-groups --resolution lowest-direct
+	$(UV_RUN) pre-commit install
+
+.PHONY: setup-ci-old
+setup-ci-old:
+	$(SETUP_MICROMAMBA) python=3.10
+	cp uv-lowest-direct.lock uv.lock
+	uv sync --locked --inexact --group ci --resolution lowest-direct
 
 .PHONY: release
 release: copy-version tests docs

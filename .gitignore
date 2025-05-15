@@ -8,7 +8,7 @@ poetry.toml
 dist/
 .coverage*
 .venv/
-uv.lock.backup
+uv.lock
 
 # Documentation
 docs/_build

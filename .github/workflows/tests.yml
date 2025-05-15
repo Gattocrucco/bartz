@@ -45,9 +45,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python-version: "3.12"
+            target-suffix: ""
           - os: ubuntu-22.04
-            python-version: "3.10"
+            target-suffix: "-old"
 
     steps:
       - name: Checkout repository
@@ -65,24 +65,17 @@ jobs:
           cache-downloads: true
 
       - name: Create venv and install package
-        if: matrix.python-version == '3.12'
-        run: |
-          make setup-ci PYTHON_VERSION=${{ matrix.python-version }}
-
-      - name: Create venv and install package (with old dependencies)
-        if: matrix.python-version == '3.10'
-        run: |
-          make setup-ci-old PYTHON_VERSION=${{ matrix.python-version }}
+        run: make setup-ci${{ matrix.target-suffix }}
 
       - name: Run unit tests
         run: |
-          make COVERAGE_SUFFIX=-${{ matrix.os }}-py${{ matrix.python-version }} tests
+          make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests
 
       - name: Save coverage information
         uses: actions/upload-artifact@v4
         with:
-          name: coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: .coverage.tests-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
+          path: .coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
           include-hidden-files: true
           if-no-files-found: error
 
