@@ -1,23 +1,6 @@
-# Editor
-*.sublime-workspace
-*.sublime-project
-
 # Python
 __pycache__
 dist/
 .coverage*
 .venv/
 uv.lock
-
-# Documentation
-docs/_build
-_site/docs
-_site/docs-dev
-_site/coverage
-_site/benchmarks
-
-# Tracing
-jax-trace
-
-# Output
-*.png
