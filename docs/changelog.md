@@ -24,11 +24,19 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
 
-<!--- This changelog is written in Markdown and without line splits to make it
+<!-- This changelog is written in Markdown and without line splits to make it
   copy-pastable to github releases. -->
 
 
 # Changelog
+
+
+## 0.5.0 Our work promotes diversity in error variances by following heteroscedasticity best-practices such as multiplying the variance parameter by different factors (2025-05-16)
+
+* Heteroskedasticity with fixed weights.
+* The internal MCMC functions now follow the jax convention of having the `key` parameter first in the signature.
+* Fixed a bug where the MCMC callback would hang indefinitely.
+* The library is now routinely tested with the least recent supported dependencies.
 
 
 ## 0.4.1 Told it was, nigh the end of times, version numbers of dependencies all would rise (2025-04-23)

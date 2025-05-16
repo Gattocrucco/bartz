@@ -52,6 +52,7 @@ all:
 
 SETUP_MICROMAMBA = micromamba env create --file condaenv.yml --prefix ./.venv --yes
 UV_RUN = uv run --no-sync
+UV_SYNC = uv sync --frozen --inexact
 
 .PHONY: lock
 lock:
@@ -62,14 +63,14 @@ lock:
 setup:
 	$(SETUP_MICROMAMBA)
 	cp uv-highest.lock uv.lock
-	uv sync --locked --inexact --all-groups
+	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci
 setup-ci:
 	$(SETUP_MICROMAMBA)
 	cp uv-highest.lock uv.lock
-	uv sync --locked --inexact --group ci
+	$(UV_SYNC) --group ci
 
 .PHONY: lock-old
 lock-old:
@@ -80,21 +81,24 @@ lock-old:
 setup-old:
 	$(SETUP_MICROMAMBA) python=3.10
 	cp uv-lowest-direct.lock uv.lock
-	uv sync --locked --inexact --all-groups --resolution lowest-direct
+	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci-old
 setup-ci-old:
 	$(SETUP_MICROMAMBA) python=3.10
 	cp uv-lowest-direct.lock uv.lock
-	uv sync --locked --inexact --group ci --resolution lowest-direct
+	$(UV_SYNC) --group ci
 
 .PHONY: release
-release: copy-version tests docs
-	git diff --quiet
-	git diff --quiet --staged
+release: copy-version lock lock-old check-committed setup-old tests setup tests docs
 	test ! -d dist || rm -r dist
 	uv build
+
+.PHONY: check-committed
+check-committed:
+	git diff --quiet
+	git diff --quiet --staged
 
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
@@ -136,9 +140,7 @@ covreport:
 	@echo "Now open _site/index.html"
 
 .PHONY: version-tag
-version-tag: copy-version
-	git diff --quiet
-	git diff --quiet --staged
+version-tag: copy-version check-committed
 	git fetch --tags
 	git tag v$(shell $(UV_RUN) python -c 'import bartz; print(bartz.__version__)')
 	git push --tags

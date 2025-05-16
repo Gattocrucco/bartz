@@ -28,7 +28,7 @@ build-backend = "uv_build"
 
 [project]
 name = "bartz"
-version = "0.4.1"
+version = "0.5.0"
 description = "Super-fast BART (Bayesian Additive Regression Trees) in Python"
 authors = [
     {name = "Giacomo Petrillo", email = "info@giacomopetrillo.com"},
