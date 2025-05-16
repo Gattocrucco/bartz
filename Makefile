@@ -107,7 +107,7 @@ src/bartz/_version.py: pyproject.toml
 
 .PHONY: tests
 tests:
-	COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX) $(UV_RUN) coverage run --context=tests$(COVERAGE_SUFFIX) -m pytest tests
+	$(UV_RUN) coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest tests $(ARGS)
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
@@ -169,8 +169,12 @@ upload-test:
 
 .PHONY: benchmark-tags
 benchmark-tags:
-	git tag | $(UV_RUN) asv run --skip-existing HASHFILE:-
+	git tag | $(UV_RUN) asv run --skip-existing HASHFILE:- $(ARGS)
 
 .PHONY: benchmark-site
 benchmark-site:
-	$(UV_RUN) asv publish
+	$(UV_RUN) asv publish $(ARGS)
+
+.PHONY: benchmark-server
+benchmark-server:
+	$(UV_RUN) asv preview $(ARGS)

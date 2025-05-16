@@ -14,7 +14,7 @@ class TimeCompilation:
         sigma = 0.1
         T = 2
         key = random.key(202504251557)
-        keys = list(random.split(key, 16))
+        keys = bartz.jaxext.split(key, 3)
         X = random.uniform(keys.pop(), (p, n), float, -2, 2)
         f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)
         y = f(X) + sigma * random.normal(keys.pop(), (n,))

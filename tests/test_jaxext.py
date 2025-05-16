@@ -22,6 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import jax
 import numpy
 import pytest
 from jax import numpy as jnp
@@ -30,36 +31,34 @@ from jax import random
 from bartz import jaxext
 
 
-def test_unique():
-    x = jnp.arange(10)[::-1]
-    out, length = jaxext.unique(x, x.size, 666)
-    numpy.testing.assert_array_equal(jnp.sort(x), out)
-    assert out.dtype == x.dtype
-    assert length == x.size
+class TestUnique:
+    def test_basic(self):
+        x = jnp.arange(10)[::-1]
+        out, length = jaxext.unique(x, x.size, 666)
+        numpy.testing.assert_array_equal(jnp.sort(x), out)
+        assert out.dtype == x.dtype
+        assert length == x.size
 
+    def test_short(self):
+        x = jnp.ones(10)
+        out, length = jaxext.unique(x, x.size, 666)
+        numpy.testing.assert_array_equal([1] + 9 * [666], out)
+        assert out.dtype == x.dtype
+        assert length == 1
 
-def test_unique_short():
-    x = jnp.ones(10)
-    out, length = jaxext.unique(x, x.size, 666)
-    numpy.testing.assert_array_equal([1] + 9 * [666], out)
-    assert out.dtype == x.dtype
-    assert length == 1
+    def test_empty_input(self):
+        x = jnp.array([])
+        out, length = jaxext.unique(x, 2, 666)
+        numpy.testing.assert_array_equal([666, 666], out)
+        assert out.dtype == x.dtype
+        assert length == 0
 
-
-def test_unique_empty_input():
-    x = jnp.array([])
-    out, length = jaxext.unique(x, 2, 666)
-    numpy.testing.assert_array_equal([666, 666], out)
-    assert out.dtype == x.dtype
-    assert length == 0
-
-
-def test_unique_empty_output():
-    x = jnp.array([1, 1, 1])
-    out, length = jaxext.unique(x, 0, 666)
-    numpy.testing.assert_array_equal([], out)
-    assert out.dtype == x.dtype
-    assert length == 0
+    def test_empty_output(self):
+        x = jnp.array([1, 1, 1])
+        out, length = jaxext.unique(x, 0, 666)
+        numpy.testing.assert_array_equal([], out)
+        assert out.dtype == x.dtype
+        assert length == 0
 
 
 class TestAutoBatch:
@@ -150,3 +149,39 @@ class TestAutoBatch:
 def test_leaf_dict_repr():
     x = jaxext.LeafDict(a=1)
     assert repr(x) == str(x) == "LeafDict({'a': 1})"
+
+
+def different_keys(keya, keyb):
+    return jnp.any(random.key_data(keya) != random.key_data(keyb)).item()
+
+
+def test_split(keys):
+    key = keys.pop()
+    ks = jaxext.split(key, 3)
+
+    assert len(ks) == 3
+    key1 = ks.pop()
+    assert len(ks) == 2
+    key2 = ks.pop()
+    assert len(ks) == 1
+    key3 = ks.pop()
+    assert len(ks) == 0
+
+    with pytest.raises(ValueError):
+        ks.pop()
+
+    assert different_keys(key, key1)
+    assert different_keys(key, key2)
+    assert different_keys(key, key3)
+    assert different_keys(key1, key2)
+    assert different_keys(key1, key3)
+    assert different_keys(key2, key3)
+
+    with jax.debug_key_reuse(False):
+        ks = jaxext.split(key, 3)
+    key1a = ks.pop()
+    key23 = ks.pop(2)
+
+    assert not different_keys(key1, key1a)
+    assert not different_keys(key2, key23[0])
+    assert not different_keys(key3, key23[1])

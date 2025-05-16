@@ -276,6 +276,7 @@ def _choose_suffstat_batch_size(resid_batch_size, count_batch_size, y, forest_si
     return resid_batch_size, count_batch_size
 
 
+@jax.jit
 def step(key, bart):
     """
     Perform one full MCMC step on a BART state.
@@ -292,9 +293,9 @@ def step(key, bart):
     bart : dict
         The new BART mcmc state.
     """
-    key, subkey = random.split(key)
-    bart = sample_trees(subkey, bart)
-    return sample_sigma(key, bart)
+    keys = jaxext.split(key)
+    bart = sample_trees(keys.pop(), bart)
+    return sample_sigma(keys.pop(), bart)
 
 
 def sample_trees(key, bart):
@@ -317,9 +318,9 @@ def sample_trees(key, bart):
     -----
     This function zeroes the proposal counters.
     """
-    key, subkey = random.split(key)
-    moves = sample_moves(subkey, bart)
-    return accept_moves_and_sample_leaves(key, bart, moves)
+    keys = jaxext.split(key)
+    moves = sample_moves(keys.pop(), bart)
+    return accept_moves_and_sample_leaves(keys.pop(), bart, moves)
 
 
 def sample_moves(key, bart):
@@ -363,12 +364,11 @@ def sample_moves(key, bart):
             accept the move. It's in (-oo, 0].
     """
     ntree = bart['leaf_trees'].shape[0]
-    key = random.split(key, 1 + ntree)
-    key, subkey = key[0], key[1:]
+    keys = jaxext.split(key, 1 + ntree)
 
     # compute moves
     grow_moves, prune_moves = _sample_moves_vmap_trees(
-        subkey,
+        keys.pop(ntree),
         bart['var_trees'],
         bart['split_trees'],
         bart['affluence_trees'],
@@ -377,7 +377,7 @@ def sample_moves(key, bart):
         bart['p_propose_grow'],
     )
 
-    u, logu = random.uniform(key, (2, ntree), bart['opt']['large_float'])
+    u, logu = random.uniform(keys.pop(), (2, ntree), bart['opt']['large_float'])
 
     # choose between grow or prune
     grow_allowed = grow_moves['num_growable'].astype(bool)
@@ -407,11 +407,10 @@ def sample_moves(key, bart):
 
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, 0, 0, 0, None, None, None))
-def _sample_moves_vmap_trees(*args):
-    key, args = args[0], args[1:]
-    key, key1 = random.split(key)
-    grow = grow_move(key, *args)
-    prune = prune_move(key1, *args)
+def _sample_moves_vmap_trees(key, *args):
+    keys = jaxext.split(key)
+    grow = grow_move(keys.pop(), *args)
+    prune = prune_move(keys.pop(), *args)
     return grow, prune
 
 
@@ -462,16 +461,16 @@ def grow_move(
             The updated decision axes of the tree.
     """
 
-    key, key1, key2 = random.split(key, 3)
+    keys = jaxext.split(key, 3)
 
     leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(
-        key, split_tree, affluence_tree, p_propose_grow
+        keys.pop(), split_tree, affluence_tree, p_propose_grow
     )
 
-    var = choose_variable(key1, var_tree, split_tree, max_split, leaf_to_grow)
+    var = choose_variable(keys.pop(), var_tree, split_tree, max_split, leaf_to_grow)
     var_tree = var_tree.at[leaf_to_grow].set(var.astype(var_tree.dtype))
 
-    split = choose_split(key2, var_tree, split_tree, max_split, leaf_to_grow)
+    split = choose_split(keys.pop(), var_tree, split_tree, max_split, leaf_to_grow)
 
     ratio = compute_partial_ratio(
         prob_choose, num_prunable, p_nonterminal, leaf_to_grow

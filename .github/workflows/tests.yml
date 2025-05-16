@@ -87,6 +87,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0  # this fetches the full history
 
       - name: Install uv

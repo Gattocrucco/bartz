@@ -50,7 +50,7 @@ Finally, run
 
     make setup
 
-This creates a micromamba virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
+This creates a micromamba virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run --no-sync <command>`. For example, to start an IPython shell, do :literal:`uv run --no-sync ipython`.
 
 Pre-defined commands
 --------------------

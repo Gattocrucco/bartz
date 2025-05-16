@@ -27,7 +27,7 @@ import math
 import warnings
 
 import jax
-from jax import lax, tree_util
+from jax import lax, random, tree_util
 from jax import numpy as jnp
 from scipy import special
 
@@ -360,8 +360,8 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
 
 @tree_util.register_pytree_node_class
 class LeafDict(dict):
-    """dictionary that acts as a leaf in jax pytrees, to store compile-time
-    values"""
+    """Dictionary that acts as a leaf in jax pytrees, to store compile-time
+    values."""
 
     def tree_flatten(self):
         return (), self
@@ -372,3 +372,56 @@ class LeafDict(dict):
 
     def __repr__(self):
         return f'{__class__.__name__}({super().__repr__()})'
+
+
+class split:
+    """
+    Split a key into `num` keys.
+
+    Parameters
+    ----------
+    key : jax.dtypes.prng_key array
+        The key to split.
+    num : int
+        The number of keys to split into.
+    """
+
+    def __init__(self, key, num=2):
+        self._keys = random.split(key, num)
+
+    def __len__(self):
+        return self._keys.size
+
+    def pop(self, shape=None):
+        """
+        Pop one or more keys from the list.
+
+        Parameters
+        ----------
+        shape : int or tuple of int, optional
+            The shape of the keys to pop. If `None`, a single key is popped.
+            If an integer, that many keys are popped. If a tuple, the keys are
+            reshaped to that shape.
+
+        Returns
+        -------
+        keys : jax.dtypes.prng_key array
+            The popped keys.
+
+        Notes
+        -----
+        The keys are popped from the beginning of the list, so for example
+        ``list(keys.pop(2))`` is equivalent to ``[keys.pop(), keys.pop()]``.
+        """
+        if shape is None:
+            shape = ()
+        elif not isinstance(shape, tuple):
+            shape = (shape,)
+        size_to_pop = math.prod(shape)
+        if size_to_pop > self._keys.size:
+            raise ValueError(
+                f'Cannot pop {size_to_pop} keys from {self._keys.size} keys'
+            )
+        popped_keys = self._keys[:size_to_pop]
+        self._keys = self._keys[size_to_pop:]
+        return popped_keys.reshape(shape)

@@ -26,6 +26,10 @@ import jax
 import numpy as np
 import pytest
 
+from bartz import jaxext
+
+jax.config.update('jax_debug_key_reuse', True)
+
 
 @pytest.fixture
 def rng(request):
@@ -33,22 +37,6 @@ def rng(request):
     nodeid = request.node.nodeid
     seed = np.array([nodeid], np.bytes_).view(np.uint8)
     return np.random.default_rng(seed)
-
-
-class ListOfRandomKeys:
-    # I could move this into a public jaxext.split function (with a shorter
-    # name)
-
-    def __init__(self, key):
-        self._keys = list(jax.random.split(key, 128))
-
-    def __len__(self):
-        return len(self._keys)
-
-    def pop(self):
-        if not self._keys:
-            raise IndexError('No more keys available')
-        return self._keys.pop()
 
 
 @pytest.fixture
@@ -61,4 +49,4 @@ def keys(rng):
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
     key = jax.random.fold_in(key, 0xCC755E92)
-    return ListOfRandomKeys(key)
+    return jaxext.split(key, 128)
