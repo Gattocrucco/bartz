@@ -1,6 +1,6 @@
 {
     "benchmarks.TimeCompilation.time_run_mcmc_compile": {
-        "code": "class TimeCompilation:\n    def time_run_mcmc_compile(self):\n        @functools.partial(jax.jit, static_argnums=(1, 2, 3, 4))\n        def f(*args):\n            return bartz.mcmcloop.run_mcmc(*args)\n        f.lower(*self.args).compile()\n\n    def setup(self):\n        p = 2\n        n = 30\n        sigma = 0.1\n        T = 2\n        key = random.key(202504251557)\n        keys = list(random.split(key, 16))\n        X = random.uniform(keys.pop(), (p, n), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (n,))\n        bart = bartz.BART.gbart(X, y, ndpost=0, nskip=0)\n        self.args = (\n            bart._mcmc_state,\n            1, 1, 1,\n            bartz.mcmcloop.make_simple_print_callback(100),\n            keys.pop(),\n        )",
+        "code": "class TimeCompilation:\n    def time_run_mcmc_compile(self):\n        @functools.partial(\n            jax.jit, static_argnames=('n_save', 'n_burn', 'n_skip', 'callback')\n        )\n        def f(**kw):\n            return bartz.mcmcloop.run_mcmc(**kw)\n    \n        f.lower(**self.kw).compile()\n\n    def setup(self):\n        key = random.key(202504251557)\n        keys = list(random.split(key, 3))\n    \n        # generate simulated data\n        p = 2\n        n = 30\n        sigma = 0.1\n        T = 2\n        X = random.uniform(keys.pop(), (p, n), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (n,))\n    \n        # dry run the interface to generate an initial bart state conveniently\n        if inspect.ismodule(bartz.BART):\n            gbart = bartz.BART.gbart\n        else:\n            gbart = bartz.BART  # pre v0.2.0\n        bart = gbart(X, y, ndpost=0, nskip=0)\n        self.kw = dict(\n            key=keys.pop(),\n            bart=bart._mcmc_state,\n            n_save=1,\n            n_burn=1,\n            n_skip=1,\n            callback=bartz.mcmcloop.make_simple_print_callback(100),\n        )",
         "min_run_count": 2,
         "name": "benchmarks.TimeCompilation.time_run_mcmc_compile",
         "number": 0,
@@ -11,7 +11,7 @@
         "sample_time": 0.01,
         "type": "time",
         "unit": "seconds",
-        "version": "f9e4a28c1582cfba0801e9e4a30e7bcfc3b9f9a044ac821ee36063e2e079ac85",
+        "version": "178126330ad47b49b4f47bbadf1c6279c736bd62f9b0afc9bafe70661aac85cc",
         "warmup_time": -1
     },
     "version": 2

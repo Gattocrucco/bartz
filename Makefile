@@ -169,7 +169,7 @@ upload-test:
 
 .PHONY: benchmark-tags
 benchmark-tags:
-	git tag | $(UV_RUN) asv run --skip-existing HASHFILE:- $(ARGS)
+	git tag | $(UV_RUN) asv run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
 .PHONY: benchmark-site
 benchmark-site:

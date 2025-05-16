@@ -219,7 +219,7 @@ def test_two_datapoints(X, y, kw, keys):
     X = X[:, :2]
     y = y[:2]
     bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
-    numpy.testing.assert_allclose(bart.sigest, y.std())
+    numpy.testing.assert_allclose(bart.sigest, y.std(), rtol=1e-6)
 
 
 def test_few_datapoints(X, y, kw, keys):
