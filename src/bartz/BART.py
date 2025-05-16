@@ -407,8 +407,15 @@ class gbart:
             key = seed
         else:
             key = jax.random.key(seed)
-        callback = mcmcloop.make_simple_print_callback(printevery)
-        return mcmcloop.run_mcmc(key, mcmc_state, nskip, ndpost, keepevery, callback)
+        return mcmcloop.run_mcmc(
+            key,
+            mcmc_state,
+            ndpost,
+            n_burn=nskip,
+            n_skip=keepevery,
+            callback=mcmcloop.simple_print_callback,
+            callback_state=100,
+        )
 
     @staticmethod
     def _predict(trace, x):

@@ -176,5 +176,9 @@ benchmark-site:
 	$(UV_RUN) asv publish $(ARGS)
 
 .PHONY: benchmark-server
-benchmark-server:
+benchmark-server: benchmark-site
 	$(UV_RUN) asv preview $(ARGS)
+
+.PHONY: benchmark-current
+benchmark-current: check-committed
+	$(UV_RUN) asv run --show-stderr main^! $(ARGS)

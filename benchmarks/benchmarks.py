@@ -34,7 +34,7 @@ class TimeCompilation:
             n_save=1,
             n_burn=1,
             n_skip=1,
-            callback=bartz.mcmcloop.make_simple_print_callback(100),
+            callback=lambda **_: None,
         )
 
     def time_run_mcmc_compile(self):
