@@ -73,7 +73,7 @@ setup-ci:
 
 .PHONY: lock-old
 lock-old:
-	uv lock --resolution lowest-direct
+	uv lock --resolution lowest-direct --exclude-newer 2025-05-15
 	mv uv.lock uv-lowest-direct.lock
 
 .PHONY: setup-old

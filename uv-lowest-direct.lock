@@ -10,6 +10,7 @@ resolution-markers = [
 
 [options]
 resolution-mode = "lowest-direct"
+exclude-newer = "2025-05-15T22:00:00Z"
 
 [[package]]
 name = "alabaster"
