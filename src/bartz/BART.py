@@ -109,7 +109,8 @@ class gbart:
     keepevery : int, default 1
         The thinning factor for the MCMC samples, after burn-in.
     printevery : int, default 100
-        The number of iterations (including skipped ones) between each log.
+        The number of iterations (including thinned-away ones) between each log.
+        If 0, disable logging.
     seed : int or jax random key, default 0
         The seed for the random number generator.
     initkw : dict
@@ -413,8 +414,8 @@ class gbart:
             ndpost,
             n_burn=nskip,
             n_skip=keepevery,
-            callback=mcmcloop.simple_print_callback,
-            callback_state=100,
+            callback=mcmcloop.simple_print_callback if printevery else None,
+            callback_state=printevery,
         )
 
     @staticmethod

@@ -29,6 +29,7 @@ Functions that implement the full BART posterior MCMC loop.
 import functools
 
 import jax
+import numpy
 from jax import debug, lax, random, tree
 from jax import numpy as jnp
 
@@ -228,46 +229,101 @@ def simple_print_callback(
     Where <printevery> is an integer specifying how frequently to print.
     """
     printevery = callback_state
-    prop_total = len(bart['leaf_trees'])
-    # all the following arithmetic could be moved in the python callback under
-    # the conditional
-    grow_prop = bart['grow_prop_count'] / prop_total
-    prune_prop = bart['prune_prop_count'] / prop_total
-    grow_acc = bart['grow_acc_count'] / bart['grow_prop_count']
-    prune_acc = bart['prune_acc_count'] / bart['prune_prop_count']
-    n_total = n_burn + n_save * n_skip
-    printcond = (i_total + 1) % printevery == 0
     debug.callback(
-        _simple_print_callback,
-        burnin,
-        i_total,
-        n_total,
-        grow_prop,
-        grow_acc,
-        prune_prop,
-        prune_acc,
-        printcond,
+        _simple_print_callback_outer,
+        printcond=(i_total + 1) % printevery == 0,
+        print_dots=printevery > 1,
+        burnin=burnin,
+        n_burn=n_burn,
+        n_save=n_save,
+        n_skip=n_skip,
+        i_total=i_total,
+        prop_total=len(bart['leaf_trees']),
+        grow_prop_count=bart['grow_prop_count'],
+        grow_acc_count=bart['grow_acc_count'],
+        prune_prop_count=bart['prune_prop_count'],
+        prune_acc_count=bart['prune_acc_count'],
+        fill=grove.forest_fill(bart['split_trees']),
+        # should I pass the split_trees to the callback instead?
     )
 
 
-def _simple_print_callback(
-    burnin, i_total, n_total, grow_prop, grow_acc, prune_prop, prune_acc, printcond
-):
+def _simple_print_callback_outer(*, printcond, print_dots, **kw):
     if printcond:
-        burnin_flag = ' (burnin)' if burnin else ''
-        total_str = str(n_total)
-        ndigits = len(total_str)
-        i_str = str(i_total.item() + 1).rjust(ndigits)
-        # I do i_total.item() + 1 instead of just i_total + 1 to solve a bug
-        # originating when jax is combined with some outdated dependencies. (I
-        # did not track down which dependencies exactly.) Doing .item() makes
-        # the + 1 operation be done by Python instead of by jax. The bug is that
-        # jax hangs completely, with a secondary thread blocked at this line.
-        print(
-            f'Iteration {i_str}/{total_str} '
-            f'P_grow={grow_prop:.2f} P_prune={prune_prop:.2f} '
-            f'A_grow={grow_acc:.2f} A_prune={prune_acc:.2f}{burnin_flag}'
-        )
+        if print_dots:
+            print('.')
+        _simple_print_callback_inner(**kw)
+    elif print_dots:
+        print('.', end='', flush=True)
+
+
+def _convert_jax_arrays_in_args(func):
+    """Decorator to remove jax arrays from a function arguments.
+
+    Converts all jax.Array instances in the arguments to either Python scalars
+    or numpy arrays.
+    """
+
+    def convert_jax_arrays(pytree):
+        def convert_jax_arrays(val):
+            if not isinstance(val, jax.Array):
+                return val
+            elif val.shape:
+                return numpy.array(val)
+            else:
+                return val.item()
+
+        return tree.map(convert_jax_arrays, pytree)
+
+    @functools.wraps(func)
+    def new_func(*args, **kw):
+        args = convert_jax_arrays(args)
+        kw = convert_jax_arrays(kw)
+        return func(*args, **kw)
+
+    return new_func
+
+
+@_convert_jax_arrays_in_args
+# convert all jax arrays in the arguments because operations on them can trigger
+# a deadlock with the main thread
+def _simple_print_callback_inner(
+    *,
+    burnin,
+    n_burn,
+    n_save,
+    n_skip,
+    i_total,
+    prop_total,
+    grow_prop_count,
+    grow_acc_count,
+    prune_prop_count,
+    prune_acc_count,
+    fill,
+):
+    def acc_string(acc_count, prop_count):
+        if prop_count:
+            return f'{acc_count / prop_count:4.0%}'
+        else:
+            return ' n/d'
+
+    grow_prop = grow_prop_count / prop_total
+    prune_prop = prune_prop_count / prop_total
+    grow_acc = acc_string(grow_acc_count, grow_prop_count)
+    prune_acc = acc_string(prune_acc_count, prune_prop_count)
+    n_total = n_burn + n_save * n_skip
+
+    burnin_flag = ' (not saved)' if burnin else ''
+    total_str = f'{n_total}'
+    ndigits = len(total_str)
+    i_str = f'{i_total + 1}'.rjust(ndigits)
+
+    print(
+        f'It {i_str}/{total_str} '
+        f'grow P={grow_prop:4.0%} A={grow_acc} '
+        f'prune P={prune_prop:4.0%} A={prune_acc} '
+        f'fill={fill:4.0%}{burnin_flag}'
+    )
 
 
 @jax.jit

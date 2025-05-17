@@ -182,3 +182,11 @@ benchmark-server: benchmark-site
 .PHONY: benchmark-current
 benchmark-current: check-committed
 	$(UV_RUN) asv run --show-stderr main^! $(ARGS)
+
+.PHONY: python
+python:
+	$(UV_RUN) python $(ARGS)
+
+.PHONY: ipython
+ipython:
+	$(UV_RUN) ipython -i .ipython/ipython-startup.ipy $(ARGS)

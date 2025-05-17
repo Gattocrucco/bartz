@@ -34,7 +34,7 @@ The 'leaf' array contains the values in the leaves.
 
 The 'var' array contains the axes along which the decision nodes operate.
 
-The 'split' array contains the decision boundaries. The boundaries are open on the right, i.e., a point belongs to the left child iff x < split. Whether a node is a leaf is indicated by the corresponding 'split' element being 0.
+The 'split' array contains the decision boundaries. The boundaries are open on the right, i.e., a point belongs to the left child iff x < split. Whether a node is a leaf is indicated by the corresponding 'split' element being 0. Unused nodes also have split set to 0.
 
 Since the nodes at the bottom can only be leaves and not decision nodes, the 'var' and 'split' arrays have half the length of the 'leaf' array.
 
@@ -43,6 +43,7 @@ Since the nodes at the bottom can only be leaves and not decision nodes, the 'va
 import functools
 import math
 
+import jax
 from jax import lax
 from jax import numpy as jnp
 
@@ -267,3 +268,44 @@ def tree_depths(tree_length):
         depths.append(depth - 1)
     depths[0] = 0
     return jnp.array(depths, jaxext.minimal_unsigned_dtype(max(depths)))
+
+
+def is_used(split_tree):
+    """
+    Return a mask indicating the used nodes in a tree.
+
+    Parameters
+    ----------
+    split_tree : int array (2 ** (d - 1),)
+        The decision boundaries of the tree.
+
+    Returns
+    -------
+    is_used : bool array (2 ** d,)
+        A mask indicating which nodes are actually used.
+    """
+    internal_node = split_tree.astype(bool)
+    internal_node = jnp.concatenate([internal_node, jnp.zeros_like(internal_node)])
+    actual_leaf = is_actual_leaf(split_tree, add_bottom_level=True)
+    return internal_node | actual_leaf
+
+
+def forest_fill(split_trees):
+    """
+    Return the fraction of used nodes in a set of trees.
+
+    Parameters
+    ----------
+    split_trees : array (m, 2 ** (d - 1),)
+        The decision boundaries of the trees.
+
+    Returns
+    -------
+    fill : float
+        The number of tree nodes in the forest over the maximum number that
+        could be stored in the arrays.
+    """
+    m, _ = split_trees.shape
+    used = jax.vmap(is_used)(split_trees)
+    count = jnp.count_nonzero(used)
+    return count / (used.size - m)

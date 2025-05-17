@@ -33,6 +33,9 @@ import bartz
 from . import util
 from .rbartpackages import BART
 
+# XXX: are all these fixtures used separately at all? If not or barely, there
+# could be a single kw fixture with everything in it
+
 
 @pytest.fixture
 def n():
@@ -53,19 +56,9 @@ def gen_X(key, p, n, kind):
         raise KeyError(kind)
 
 
-@pytest.fixture
-def X_continuous(n, p, keys):
-    return gen_X(keys.pop(), p, n, 'continuous')
-
-
-@pytest.fixture
-def X_binary(n, p, keys):
-    return gen_X(keys.pop(), p, n, 'binary')
-
-
-@pytest.fixture(params=['X_continuous', 'X_binary'])
-def X(request, X_continuous, X_binary):
-    return eval(request.param)
+@pytest.fixture(params=['continuous', 'binary'])
+def X(request, n, p, keys):
+    return gen_X(keys.pop(), p, n, request.param)
 
 
 def f(x):  # conditional mean
