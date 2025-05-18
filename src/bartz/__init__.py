@@ -23,7 +23,7 @@
 # SOFTWARE.
 
 """
-Super-fast BART (Bayesian Additive Regression Trees) in Python
+Super-fast BART (Bayesian Additive Regression Trees) in Python.
 
 See the manual at https://gattocrucco.github.io/bartz/docs
 """

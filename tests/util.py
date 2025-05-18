@@ -22,6 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Functions intended to be shared across the test suite."""
+
 import numpy as np
 from scipy import linalg
 
@@ -30,57 +32,53 @@ def assert_close_matrices(actual, desired, *, rtol=0, atol=0, tozero=False):
     """
     Check if two matrices are similar.
 
-    Scalars and vectors are intepreted as 1x1 and Nx1 matrices, but the two
-    arrays must have the same shape beforehand.
-
-    The closeness condition is:
-
-        ||actual - desired|| <= atol + rtol * ||desired||,
-
-    where the norm is the matrix 2-norm, i.e., the maximum (in absolute value)
-    singular value.
-
     Parameters
     ----------
-    actual, desired : array_like
+    actual : array_like
+    desired : array_like
         The two matrices to be compared. Must be scalars, vectors, or 2d arrays.
-    rtol, atol : scalar, default 0
-        Relative and absolute tolerances for the comparison.
+        Scalars and vectors are intepreted as 1x1 and Nx1 matrices, but the two
+        arrays must have the same shape beforehand.
+    rtol : scalar, default 0
+    atol : scalar, default 0
+        Relative and absolute tolerances for the comparison. The closeness
+        condition is:
+
+            ||actual - desired|| <= atol + rtol * ||desired||,
+
+        where the norm is the matrix 2-norm, i.e., the maximum (in absolute
+        value) singular value.
     tozero : bool, default False
         If True, use the following codition instead:
 
             ||actual|| <= atol + rtol * ||desired||
 
-    Raises
-    ------
-    AssertionError :
-        If the condition is not satisfied.
+        So `actual` is compared to zero, and `desired` is only used as a
+        reference to set the threshold.
     """
-
     actual = np.asarray(actual)
     desired = np.asarray(desired)
     assert actual.shape == desired.shape
-    if actual.size == 0:
-        return
-    actual = np.atleast_1d(actual)
-    desired = np.atleast_1d(desired)
+    if actual.size > 0:
+        actual = np.atleast_1d(actual)
+        desired = np.atleast_1d(desired)
 
-    if tozero:
-        expr = 'actual'
-        ref = 'zero'
-    else:
-        expr = 'actual - desired'
-        ref = 'desired'
+        if tozero:
+            expr = 'actual'
+            ref = 'zero'
+        else:
+            expr = 'actual - desired'
+            ref = 'desired'
 
-    dnorm = linalg.norm(desired, 2)
-    adnorm = linalg.norm(eval(expr), 2)
-    ratio = adnorm / dnorm if dnorm else np.nan
+        dnorm = linalg.norm(desired, 2)
+        adnorm = linalg.norm(eval(expr), 2)
+        ratio = adnorm / dnorm if dnorm else np.nan
 
-    msg = f"""\
+        msg = f"""\
 matrices actual and {ref} are not close in 2-norm
 matrix shape: {desired.shape}
 norm(desired) = {dnorm:.2g}
 norm({expr}) = {adnorm:.2g}  (atol = {atol:.2g})
 ratio = {ratio:.2g}  (rtol = {rtol:.2g})"""
 
-    assert adnorm <= atol + rtol * dnorm, msg
+        assert adnorm <= atol + rtol * dnorm, msg

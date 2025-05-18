@@ -22,9 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""
-Functions that implement the full BART posterior MCMC loop.
-"""
+"""Functions that implement the full BART posterior MCMC loop."""
 
 import functools
 
@@ -90,7 +88,8 @@ def run_mcmc(
         iterations ``n_burn + n_skip * n_save``. If `True` and
         `inner_loop_length` is not a divisor, some of the MCMC iterations in the
         last outer loop iteration will not be saved to the trace.
-    inner_callback, outer_callback : callable, optional
+    inner_callback : callable, optional
+    outer_callback : callable, optional
         Arbitrary functions run during the loop after updating the state.
         `inner_callback` is called after each update, while `outer_callback` is
         called after completing an inner loop. The callbacks are invoked with
@@ -159,6 +158,12 @@ def run_mcmc(
         MCMC iterations: 'leaf_trees', 'var_trees', 'split_trees' (or if
         specified the fields in `tracevars_onlymain`), plus the fields in
         `burnin_trace`.
+
+    Raises
+    ------
+    ValueError
+        If `inner_loop_length` is not a divisor of the total number of
+        iterations and `allow_overflow` is `False`.
 
     Notes
     -----
@@ -371,7 +376,7 @@ def _print_callback_outer(
 
 
 def _convert_jax_arrays_in_args(func):
-    """Decorator to remove jax arrays from a function arguments.
+    """Remove jax arrays from a function arguments.
 
     Converts all jax.Array instances in the arguments to either Python scalars
     or numpy arrays.

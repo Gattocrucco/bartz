@@ -22,6 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Test bartz.jaxext."""
+
 import jax
 import numpy
 import pytest
@@ -32,14 +34,18 @@ from bartz import jaxext
 
 
 class TestUnique:
-    def test_basic(self):
+    """Test jaxext.unique."""
+
+    def test_sort(self):
+        """Check that it's equivalent to sort if no values are repeated."""
         x = jnp.arange(10)[::-1]
         out, length = jaxext.unique(x, x.size, 666)
         numpy.testing.assert_array_equal(jnp.sort(x), out)
         assert out.dtype == x.dtype
         assert length == x.size
 
-    def test_short(self):
+    def test_fill(self):
+        """Check that the trailing fill value is used correctly."""
         x = jnp.ones(10)
         out, length = jaxext.unique(x, x.size, 666)
         numpy.testing.assert_array_equal([1] + 9 * [666], out)
@@ -47,6 +53,7 @@ class TestUnique:
         assert length == 1
 
     def test_empty_input(self):
+        """Check that the function works on empty input."""
         x = jnp.array([])
         out, length = jaxext.unique(x, 2, 666)
         numpy.testing.assert_array_equal([666, 666], out)
@@ -54,6 +61,7 @@ class TestUnique:
         assert length == 0
 
     def test_empty_output(self):
+        """Check that the function works if the output is forced to be empty."""
         x = jnp.array([1, 1, 1])
         out, length = jaxext.unique(x, 0, 666)
         numpy.testing.assert_array_equal([], out)
@@ -62,10 +70,14 @@ class TestUnique:
 
 
 class TestAutoBatch:
+    """Test jaxext.autobatch."""
+
     @pytest.mark.parametrize('target_nbatches', [1, 7])
     @pytest.mark.parametrize('with_margin', [False, True])
     @pytest.mark.parametrize('additional_size', [3, 0])
     def test_batch_size(self, keys, target_nbatches, with_margin, additional_size):
+        """Check batch sizes are correct in various conditions."""
+
         def func(a, b, c):
             return (a * b[:, None]).sum(1), c * b[None, :]
 
@@ -100,6 +112,8 @@ class TestAutoBatch:
             numpy.testing.assert_array_max_ulp(o1, o2)
 
     def test_unbatched_arg(self):
+        """Check the function with batching disabled on a scalar argument."""
+
         def func(a, b):
             return a + b
 
@@ -114,6 +128,7 @@ class TestAutoBatch:
         numpy.testing.assert_array_max_ulp(out1, out2)
 
     def test_large_batch_warning(self):
+        """Check the function emits a warning if the size limit can't be honored."""
         x = jnp.arange(10_000).reshape(10, 1000)
 
         def f(x):
@@ -124,6 +139,7 @@ class TestAutoBatch:
             g(x)
 
     def test_empty_values(self):
+        """Check that the function works with batchable empty arrays."""
         x = jnp.empty((10, 0))
 
         def f(x):
@@ -135,6 +151,7 @@ class TestAutoBatch:
         assert jnp.all(y == x)
 
     def test_zero_size(self):
+        """Check the function works with a batch axis with length 0."""
         x = jnp.empty((0, 10))
 
         def f(x):
@@ -147,15 +164,18 @@ class TestAutoBatch:
 
 
 def test_leaf_dict_repr():
+    """Check LeafDict has a nice repr."""
     x = jaxext.LeafDict(a=1)
     assert repr(x) == str(x) == "LeafDict({'a': 1})"
 
 
 def different_keys(keya, keyb):
+    """Return True iff two jax random keys are different."""
     return jnp.any(random.key_data(keya) != random.key_data(keyb)).item()
 
 
 def test_split(keys):
+    """Test jaxext.split."""
     key = keys.pop()
     ks = jaxext.split(key, 3)
 
@@ -167,7 +187,7 @@ def test_split(keys):
     key3 = ks.pop()
     assert len(ks) == 0
 
-    with pytest.raises(ValueError):
+    with pytest.raises(IndexError):
         ks.pop()
 
     assert different_keys(key, key1)

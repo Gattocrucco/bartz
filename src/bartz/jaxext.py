@@ -22,6 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Additions to jax."""
+
 import functools
 import math
 import warnings
@@ -33,14 +35,12 @@ from scipy import special
 
 
 def float_type(*args):
-    """
-    Determine the jax floating point result type given operands/types.
-    """
+    """Determine the jax floating point result type given operands/types."""
     t = jnp.result_type(*args)
     return jnp.sin(jnp.empty(0, t)).dtype
 
 
-def castto(func, type):
+def _castto(func, type):
     @functools.wraps(func)
     def newfunc(*args, **kw):
         return func(*args, **kw).astype(type)
@@ -49,26 +49,36 @@ def castto(func, type):
 
 
 class scipy:
+    """Mockup of the scipy module."""
+
     class special:
+        """Mockup of the scipy.special module."""
+
         @functools.wraps(special.gammainccinv)
         def gammainccinv(a, y):
+            """Survival function inverse of the Gamma(a, 1) distribution."""
             a = jnp.asarray(a)
             y = jnp.asarray(y)
             shape = jnp.broadcast_shapes(a.shape, y.shape)
             dtype = float_type(a.dtype, y.dtype)
             dummy = jax.ShapeDtypeStruct(shape, dtype)
-            ufunc = castto(special.gammainccinv, dtype)
+            ufunc = _castto(special.gammainccinv, dtype)
             return jax.pure_callback(ufunc, dummy, a, y, vmap_method='expand_dims')
 
     class stats:
+        """Mockup of the scipy.stats module."""
+
         class invgamma:
+            """Class that represents the distribution InvGamma(a, 1)."""
+
             def ppf(q, a):
+                """Percentile point function."""
                 return 1 / scipy.special.gammainccinv(a, q)
 
 
 def vmap_nodoc(fun, *args, **kw):
     """
-    Wrapper of `jax.vmap` that preserves the docstring of the input function.
+    Acts like `jax.vmap` but preserves the docstring of the function unchanged.
 
     This is useful if the docstring already takes into account that the
     arguments have additional axes due to vmap.
@@ -99,24 +109,22 @@ def huge_value(x):
         return jnp.inf
 
 
-def minimal_unsigned_dtype(max_value):
-    """
-    Return the smallest unsigned integer dtype that can represent a given
-    maximum value (inclusive).
-    """
-    if max_value < 2**8:
+def minimal_unsigned_dtype(value):
+    """Return the smallest unsigned integer dtype that can represent `value`."""
+    if value < 2**8:
         return jnp.uint8
-    if max_value < 2**16:
+    if value < 2**16:
         return jnp.uint16
-    if max_value < 2**32:
+    if value < 2**32:
         return jnp.uint32
     return jnp.uint64
 
 
 def signed_to_unsigned(int_dtype):
     """
-    Map a signed integer type to its unsigned counterpart. Unsigned types are
-    passed through.
+    Map a signed integer type to its unsigned counterpart.
+
+    Unsigned types are passed through.
     """
     assert jnp.issubdtype(int_dtype, jnp.integer)
     if jnp.issubdtype(int_dtype, jnp.unsignedinteger):
@@ -132,9 +140,7 @@ def signed_to_unsigned(int_dtype):
 
 
 def ensure_unsigned(x):
-    """
-    If x has signed integer type, cast it to the unsigned dtype of the same size.
-    """
+    """If x has signed integer type, cast it to the unsigned dtype of the same size."""
     return x.astype(signed_to_unsigned(x.dtype))
 
 
@@ -358,16 +364,19 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     return batched_func
 
 
+# XXX: is LeafDict problematic because it is mutable? Maybe I should use a
+# custom dataclass in mcmcstep and register it with tree_util.register_static.
 @tree_util.register_pytree_node_class
 class LeafDict(dict):
-    """Dictionary that acts as a leaf in jax pytrees, to store compile-time
-    values."""
+    """Dictionary that acts as a leaf in jax pytrees."""
 
     def tree_flatten(self):
+        """Implement `jax.tree.flatten`."""
         return (), self
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
+        """Implement `jax.tree.unflatten`."""
         return aux_data
 
     def __repr__(self):
@@ -408,6 +417,11 @@ class split:
         keys : jax.dtypes.prng_key array
             The popped keys.
 
+        Raises
+        ------
+        IndexError
+            If `shape` is larger than the number of keys left in the list.
+
         Notes
         -----
         The keys are popped from the beginning of the list, so for example
@@ -419,7 +433,7 @@ class split:
             shape = (shape,)
         size_to_pop = math.prod(shape)
         if size_to_pop > self._keys.size:
-            raise ValueError(
+            raise IndexError(
                 f'Cannot pop {size_to_pop} keys from {self._keys.size} keys'
             )
         popped_keys = self._keys[:size_to_pop]

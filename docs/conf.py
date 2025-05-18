@@ -184,9 +184,9 @@ viewcode_line_numbers = True  # for 'viewcode' extension
 
 def linkcode_resolve(domain, info):
     """
-    Determine the URL corresponding to Python object, for extension linkcode
+    Determine the URL corresponding to Python object, for extension linkcode.
 
-    Adapted from scipy/doc/release/conf.py
+    Adapted from scipy/doc/release/conf.py.
     """
     if domain != 'py':
         return None

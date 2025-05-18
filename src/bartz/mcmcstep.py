@@ -89,7 +89,8 @@ def init(
         The dtype for scalars, small arrays, and arrays which require accuracy.
     min_points_per_leaf : int, optional
         The minimum number of data points in a leaf node. 0 if not specified.
-    resid_batch_size, count_batch_sizes : int, None, str, default 'auto'
+    resid_batch_size : int, None, str, default 'auto'
+    count_batch_size : int, None, str, default 'auto'
         The batch sizes, along datapoints, for summing the residuals and
         counting the number of datapoints in each leaf. `None` for no batching.
         If 'auto', pick a value based on the device of `y`, or the default
@@ -163,7 +164,6 @@ def init(
             'log_likelihood' : large_float array (num_trees,)
                 The log likelihood ratio.
     """
-
     p_nonterminal = jnp.asarray(p_nonterminal, large_float)
     p_nonterminal = jnp.pad(p_nonterminal, (0, 1))
     max_depth = p_nonterminal.size
@@ -426,6 +426,8 @@ def grow_move(
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     var_tree : array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : array (2 ** (d - 1),)
@@ -438,8 +440,6 @@ def grow_move(
         The probability of a nonterminal node at each depth.
     p_propose_grow : array (2 ** (d - 1),)
         The unnormalized probability of choosing a leaf to grow.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -460,7 +460,6 @@ def grow_move(
         'var_tree' : array (2 ** (d - 1),)
             The updated decision axes of the tree.
     """
-
     keys = jaxext.split(key, 3)
 
     leaf_to_grow, num_growable, prob_choose, num_prunable = choose_leaf(
@@ -492,14 +491,14 @@ def choose_leaf(key, split_tree, affluence_tree, p_propose_grow):
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
     affluence_tree : bool array (2 ** (d - 1),) or None
         Whether a leaf has enough points to be grown.
     p_propose_grow : array (2 ** (d - 1),)
         The unnormalized probability of choosing a leaf to grow.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -579,6 +578,8 @@ def choose_variable(key, var_tree, split_tree, max_split, leaf_index):
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : int array (2 ** (d - 1),)
@@ -587,8 +588,6 @@ def choose_variable(key, var_tree, split_tree, max_split, leaf_index):
         The maximum split index for each variable.
     leaf_index : int
         The index of the leaf to grow.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -627,7 +626,6 @@ def fully_used_variables(var_tree, split_tree, max_split, leaf_index):
         filled with `p`. The fill values are not guaranteed to be placed in any
         particular order. Variables may appear more than once.
     """
-
     var_to_ignore = ancestor_variables(var_tree, max_split, leaf_index)
     split_range_vec = jax.vmap(split_range, in_axes=(None, None, None, None, 0))
     l, r = split_range_vec(var_tree, split_tree, max_split, leaf_index, var_to_ignore)
@@ -752,6 +750,8 @@ def choose_split(key, var_tree, split_tree, max_split, leaf_index):
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : int array (2 ** (d - 1),)
@@ -761,8 +761,6 @@ def choose_split(key, var_tree, split_tree, max_split, leaf_index):
     leaf_index : int
         The index of the leaf to grow. It is assumed that `var_tree` already
         contains the target variable at this index.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -780,8 +778,9 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
 
     Parameters
     ----------
-    num_growable : int
-        The number of leaf nodes that can be grown.
+    prob_choose : float
+        The probability that the leaf had to be chosen amongst the growable
+        leaves.
     num_prunable : int
         The number of leaf parents that could be pruned, after converting the
         leaf to be grown to a non-terminal node.
@@ -797,7 +796,6 @@ def compute_partial_ratio(prob_choose, num_prunable, p_nonterminal, leaf_to_grow
         times the prior ratio P(new tree) / P(old tree), but the transition
         ratio is missing the factor P(propose prune) in the numerator.
     """
-
     # the two ratios also contain factors num_available_split *
     # num_available_var, but they cancel out
 
@@ -829,6 +827,8 @@ def prune_move(
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     var_tree : int array (2 ** (d - 1),)
         The variable indices of the tree.
     split_tree : int array (2 ** (d - 1),)
@@ -841,8 +841,6 @@ def prune_move(
         The probability of a nonterminal node at each depth.
     p_propose_grow : float array (2 ** (d - 1),)
         The unnormalized probability of choosing a leaf to grow.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -880,14 +878,14 @@ def choose_leaf_parent(key, split_tree, affluence_tree, p_propose_grow):
 
     Parameters
     ----------
+    key : jax.dtypes.prng_key array
+        A jax random key.
     split_tree : array (2 ** (d - 1),)
         The splitting points of the tree.
     affluence_tree : bool array (2 ** (d - 1),) or None
         Whether a leaf has enough points to be grown.
     p_propose_grow : array (2 ** (d - 1),)
         The unnormalized probability of choosing a leaf to grow.
-    key : jax.dtypes.prng_key array
-        A jax random key.
 
     Returns
     -------
@@ -1086,7 +1084,6 @@ def compute_count_trees(leaf_indices, moves, batch_size):
         The counts of the number of points in the leaves grown or pruned by the
         moves, under keys 'left', 'right', and 'total' (left + right).
     """
-
     ntree, tree_size = moves['var_trees'].shape
     tree_size *= 2
     tree_indices = jnp.arange(ntree)
@@ -1185,7 +1182,6 @@ def compute_prec_trees(prec_scale, leaf_indices, moves, batch_size):
         The likelihood precision scale in the leaves grown or pruned by the
         moves, under keys 'left', 'right', and 'total' (left + right).
     """
-
     ntree, tree_size = moves['var_trees'].shape
     tree_size *= 2
     tree_indices = jnp.arange(ntree)
@@ -1284,7 +1280,8 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
     ----------
     moves : dict
         The proposed moves, see `sample_moves`.
-    left_count, right_count : int
+    left_count : int
+    right_count : int
         The number of datapoints in the proposed children of the leaf to grow.
     min_points_per_leaf : int or None
         The minimum number of data points in a leaf node.
@@ -1295,7 +1292,6 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
         The probability of proposing a prune move. If grow: after accepting the
         grow move, if prune: right away.
     """
-
     # calculation in case the move is grow
     other_growable_leaves = moves['num_growable'] >= 2
     new_leaves_growable = moves['node'] < moves['var_trees'].shape[1] // 2
@@ -1315,8 +1311,7 @@ def compute_p_prune(moves, left_count, right_count, min_points_per_leaf):
 @jaxext.vmap_nodoc
 def adapt_leaf_trees_to_grow_indices(leaf_trees, moves):
     """
-    Modify leaf values such that the indices of the grow moves work on the
-    original tree.
+    Modify leaves such that post-grow indices work on the original tree.
 
     Parameters
     ----------
@@ -1419,7 +1414,10 @@ def accept_moves_sequential_stage(
     bart, prec_trees, moves, move_counts, move_precs, prelkv, prelk, prelf
 ):
     """
-    The part of accepting the moves that has to be done one tree at a time.
+    Accept/reject the moves one tree at a time.
+
+    This is the most performance-sensitive function because it contains all and
+    only the parts of the algorithm that can not be parallelized across trees.
 
     Parameters
     ----------
@@ -1434,7 +1432,9 @@ def accept_moves_sequential_stage(
         moves.
     move_precs : dict
         The likelihood precision scale in each node modified by the moves.
-    prelkv, prelk, prelf : dict
+    prelkv : dict
+    prelk : dict
+    prelf : dict
         Dictionaries with pre-computed terms of the likelihood ratios and leaf
         samples.
 
@@ -1544,7 +1544,8 @@ def accept_move_and_sample_leaves(
     leaf_indices : int array (n,)
         The leaf indices for the largest version of the tree compatible with
         the move.
-    prelkv, prelf : dict
+    prelkv : dict
+    prelf : dict
         The pre-computed terms of the likelihood ratio and leaf sampling which
         are specific to the tree.
 
@@ -1562,7 +1563,6 @@ def accept_move_and_sample_leaves(
     ratios : dict
         The acceptance ratios for the moves. Empty if not to be saved.
     """
-
     # sum residuals in each leaf, in tree proposed by grow move
     if prec_scale is None:
         scaled_resid = resid
@@ -1673,10 +1673,13 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
 
     Parameters
     ----------
-    total_resid, left_resid, right_resid : float
+    total_resid : float
+    left_resid : float
+    right_resid : float
         The sum of the residuals (scaled by error precision scale) of the
         datapoints falling in the nodes involved in the moves.
-    prelkv, prelk : dict
+    prelkv : dict
+    prelk : dict
         The pre-computed terms of the likelihood ratio, see
         `precompute_likelihood_terms`.
 
@@ -1695,14 +1698,15 @@ def compute_likelihood_ratio(total_resid, left_resid, right_resid, prelkv, prelk
 
 def accept_moves_final_stage(bart, moves):
     """
-    The final part of accepting the moves, in parallel across trees.
+    Post-process the mcmc state after accepting/rejecting the moves.
+
+    This function is separate from `accept_moves_sequential_stage` to signal it
+    can work in parallel across trees.
 
     Parameters
     ----------
     bart : dict
         A partially updated BART mcmc state.
-    counts : dict
-        The indicators of proposals and acceptances for grow and prune moves.
     moves : dict
         The proposed moves (see `sample_moves`) as updated by
         `accept_moves_sequential_stage`.

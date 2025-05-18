@@ -2,15 +2,16 @@ from . import _base
 
 
 class mc_gbart(_base.RObjectABC):
+    """
+    Additional notes:
+    - using the `x_test` argument may create problems, try not passing it
+    - the object has an additional undocumented attribute `varprob`
+    """  # noqa: D205, D400
+
     _rfuncname = 'BART::mc.gbart'
     _methods = ['predict']
 
     def __init__(self, *args, **kw):
-        """
-        Notes:
-        - using the `x_test` argument may create problems, try not passing it
-        - the object has an additional undocumented attribute `varprob`
-        """
         super().__init__(*args, **kw)
 
         # fix type of ndpost attribute

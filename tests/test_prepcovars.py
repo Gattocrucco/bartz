@@ -22,6 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Test the `bartz.prepcovars` module."""
+
 import numpy
 import pytest
 from jax import numpy as jnp
@@ -30,8 +32,11 @@ import bartz
 
 
 class TestQuantilizer:
+    """Test `prepcovars.quantilized_splits_from_matrix`."""
+
     @pytest.mark.parametrize('fill_value', [jnp.inf, 2**31 - 1])
     def test_splits_fill(self, fill_value):
+        """Check that predictors with less unique values are right-padded."""
         fill_value = jnp.array(fill_value)
         x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], fill_value.dtype)
         splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
@@ -39,6 +44,7 @@ class TestQuantilizer:
         numpy.testing.assert_array_equal(splits, expected_splits)
 
     def test_max_splits(self):
+        """Check that the number of splits per predictor is counted correctly."""
         x = jnp.array(
             [
                 [1, 1, 1, 1],
@@ -51,6 +57,7 @@ class TestQuantilizer:
         numpy.testing.assert_array_equal(max_split, jnp.arange(4))
 
     def test_integer_splits_overflow(self):
+        """Check that the splits are computed correctly at the limit of overflow."""
         x = jnp.array([[-(2**31), 2**31 - 2]])
         splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         expected_splits = [[-1]]
@@ -58,11 +65,13 @@ class TestQuantilizer:
 
     @pytest.mark.parametrize('dtype', [int, float])
     def test_splits_type(self, dtype):
+        """Check that the input type is preserved."""
         x = jnp.arange(10, dtype=dtype)[None, :]
         splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         assert splits.dtype == x.dtype
 
     def test_splits_length(self):
+        """Check that the correct number of splits is returned in corner cases."""
         x = jnp.linspace(0, 1, 10)[None, :]
 
         short_splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 2)
@@ -78,6 +87,7 @@ class TestQuantilizer:
         assert no_splits.shape == (1, 0)
 
     def test_round_trip(self):
+        """Check that `bin_predictors` is the ~inverse of `quantilized_splits_from_matrix`."""
         x = jnp.arange(10)[None, :]
         splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         b = bartz.prepcovars.bin_predictors(x, splits)
@@ -85,6 +95,7 @@ class TestQuantilizer:
 
 
 def test_binner_left_boundary():
+    """Check that the first bin is right-closed."""
     splits = jnp.array([[1, 2, 3]])
 
     x = jnp.array([[0, 1]])
@@ -93,6 +104,7 @@ def test_binner_left_boundary():
 
 
 def test_binner_right_boundary():
+    """Check that the next-to-last bin is right-closed."""
     splits = jnp.array([[1, 2, 3, 2**31 - 1]])
 
     x = jnp.array([[2**31 - 1]])

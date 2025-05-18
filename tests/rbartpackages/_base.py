@@ -1,5 +1,4 @@
 import abc
-import functools
 
 import numpy as np
 from rpy2 import robjects
@@ -119,51 +118,25 @@ class RObjectABC(abc.ABC):
     @property
     @abc.abstractmethod
     def _rfuncname(self):
-        """function/class to be wrapped written as library::name, override
-        this property with a class string attribute"""
+        """Function/class to be wrapped, written as 'library::name'.
+
+        Override this property with a class string attribute.
+        """
         raise NotImplementedError
 
-    def __init__(self, *args, timeout=None, retries=0, **kw):
+    def __init__(self, *args, **kw):
         library, _ = self._rfuncname.split('::')
         robjects.r(f'library({library})')
         # TODO I would like to do loadNamespace('<library>') and then always use <library>::<thing>. However this does not work with methods (see __init_subclass__). I have to look up how to reference methods directly in a namespace. Alternatively, I could do library(<library>, quietly=TRUE), but I prefer not to suppress eventual errors.
         func = robjects.r(self._rfuncname)
-        dofunc = lambda: func(*self._args2r(args), **self._kw2r(kw))
-        if timeout is not None:
-            dofunc = self._tryagain_withtimeout(dofunc, timeout, retries)
-        obj = dofunc()
+        obj = func(*self._args2r(args), **self._kw2r(kw))
         self._robject = obj
         if hasattr(obj, 'items'):
             for s, v in obj.items():
                 setattr(self, s.replace('.', '_'), self._r2py(v))
 
-    @classmethod
-    def _tryagain_withtimeout(cls, func, timeoutpercall, maxretries):
-        """decorate `func` to time its execution, time out over a threshold,
-        and optionally retries up to a maximum number of calls"""
-        import wrapt_timeout_decorator as wtd
-
-        timedfunc = wtd.timeout(timeoutpercall, use_signals=False)(func)
-
-        # do not use signals because they are intercepted by R
-        @functools.wraps(func)
-        def newfunc(*args, **kw):
-            for _ in range(maxretries):
-                try:
-                    return timedfunc(*args, **kw)
-                except TimeoutError as exc:
-                    print(
-                        f'###### {cls._rfuncname}:',
-                        exc.__class__.__name__,
-                        *exc.args,
-                        '#######',
-                    )
-            return timedfunc(*args, **kw)
-
-        return newfunc
-
     def __init_subclass__(cls, **kw):
-        """automatically modify subclasses"""
+        """Automatically modify subclasses."""
 
         # if the subclass had an attribute `_methods` (a list of method
         # names), create automatically Python wrappers for those methods if

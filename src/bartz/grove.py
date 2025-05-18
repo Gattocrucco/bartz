@@ -106,7 +106,6 @@ def traverse_tree(x, var_tree, split_tree):
     index : int
         The index of the leaf.
     """
-
     carry = (
         jnp.zeros((), bool),
         jnp.ones((), jaxext.minimal_unsigned_dtype(2 * var_tree.size - 1)),
