@@ -22,6 +22,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
+import signal
+import threading
+import time
+
 import jax
 import numpy
 import pytest
@@ -223,7 +228,7 @@ def test_few_datapoints(X, y, kw, keys):
 
 
 @pytest.mark.parametrize(
-    'use_w,kw_shared,initkw',
+    'use_w,kw_shared,init_kw',
     [
         [
             False,
@@ -237,7 +242,7 @@ def test_few_datapoints(X, y, kw, keys):
         ],
     ],
 )
-def test_comparison_rbart(X, y, w, keys, use_w, kw_shared, initkw):
+def test_comparison_rbart(X, y, w, keys, use_w, kw_shared, init_kw):
     kw = dict(
         ntree=2 * X.shape[1],
         nskip=1000,
@@ -248,7 +253,7 @@ def test_comparison_rbart(X, y, w, keys, use_w, kw_shared, initkw):
         kw.update(w=w)
     kw.update(kw_shared)
 
-    kw_bartz = dict(**kw, initkw=initkw)
+    kw_bartz = dict(**kw, init_kw=init_kw)
 
     kw_BART = dict(
         **kw,
@@ -292,6 +297,10 @@ def mahalanobis_distance2(x, y):
 def test_jit(X, y, keys, kw):
     """test that jitting around the whole interface works"""
 
+    kw.update(printevery=None)
+    # set printevery to None to move all iterations to the inner loop and avoid
+    # multiple compilation
+
     def task(X, y, key):
         bart = bartz.BART.gbart(X, y, **kw, seed=key)
         return bart._mcmc_state, bart.yhat_train
@@ -304,3 +313,23 @@ def test_jit(X, y, keys, kw):
         state2, pred2 = task_compiled(X, y, key)
 
     numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=0, atol=1e-6)
+
+
+def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
+    pid = os.getpid()
+
+    def send_sigint():
+        time.sleep(time_to_sigint)
+        os.kill(pid, signal.SIGINT)
+
+    timer = threading.Thread(target=send_sigint, daemon=True)
+    timer.start()
+    return func(*args, **kw)
+
+
+@pytest.mark.timeout(6)
+def test_interrupt(X, y, kw, keys):
+    with pytest.raises(KeyboardInterrupt):
+        call_with_timed_interrupt(
+            3, bartz.BART.gbart, X, y, ndpost=0, nskip=10000, seed=keys.pop()
+        )

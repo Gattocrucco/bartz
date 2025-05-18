@@ -3,6 +3,7 @@
 %autoreload 2
 import appnope
 appnope.nope()
+import functools
 import jax
 from jax import numpy as jnp
 import numpy as np

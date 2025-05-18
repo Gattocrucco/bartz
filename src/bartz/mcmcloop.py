@@ -30,7 +30,7 @@ import functools
 
 import jax
 import numpy
-from jax import debug, lax, random, tree
+from jax import debug, lax, tree
 from jax import numpy as jnp
 
 from . import grove, jaxext, mcmcstep
@@ -46,11 +46,6 @@ TRACEVARS_BOTH_DEFAULT = (
 TRACEVARS_ONLYMAIN_DEFAULT = ('leaf_trees', 'var_trees', 'split_trees')
 
 
-@functools.partial(
-    jax.jit,
-    static_argnums=(2,),
-    static_argnames=('n_save', 'n_burn', 'n_skip', 'callback'),
-)
 def run_mcmc(
     key,
     bart,
@@ -58,7 +53,10 @@ def run_mcmc(
     *,
     n_burn=0,
     n_skip=1,
-    callback=None,
+    inner_loop_length=None,
+    allow_overflow=False,
+    inner_callback=None,
+    outer_callback=None,
     callback_state=None,
     tracevars_onlymain=TRACEVARS_ONLYMAIN_DEFAULT,
     tracevars_both=TRACEVARS_BOTH_DEFAULT,
@@ -80,42 +78,64 @@ def run_mcmc(
     n_skip : int, default 1
         The number of iterations to skip between each saved iteration, plus 1.
         The effective burn-in is ``n_burn + n_skip - 1``.
-    callback : callable, optional
-        An arbitrary function run at each iteration, called with the following
-        arguments, passed by keyword:
+    inner_loop_length : int, optional
+        The MCMC loop is split into an outer and an inner loop. The outer loop
+        is in Python, while the inner loop is in JAX. `inner_loop_length` is the
+        number of iterations of the inner loop to run for each iteration of the
+        outer loop. If not specified, the outer loop will iterate just once,
+        with all iterations done in a single inner loop run. The inner stride is
+        unrelated to the stride used for saving the trace.
+    allow_overflow : bool, default False
+        If `False`, `inner_loop_length` must be a divisor of the total number of
+        iterations ``n_burn + n_skip * n_save``. If `True` and
+        `inner_loop_length` is not a divisor, some of the MCMC iterations in the
+        last outer loop iteration will not be saved to the trace.
+    inner_callback, outer_callback : callable, optional
+        Arbitrary functions run during the loop after updating the state.
+        `inner_callback` is called after each update, while `outer_callback` is
+        called after completing an inner loop. The callbacks are invoked with
+        the following arguments, passed by keyword:
 
         bart : dict
             The MCMC state just after updating it.
         burnin : bool
             Whether the last iteration was in the burn-in phase.
+        overflow : bool
+            Whether the last iteration was in the overflow phase (iterations
+            not saved due to `inner_loop_length` not being a divisor of the
+            total number of iterations).
         i_total : int
-            The index of the last iteration (0-based).
+            The index of the last MCMC iteration (0-based).
         i_skip : int
             The number of MCMC updates from the last saved state. The initial
             state counts as saved, even if it's not copied into the trace.
-        n_burn, n_save, n_skip : int
-            The corresponding arguments as-is.
         callback_state : jax pytree
             The callback state, initially set to the argument passed to
-            `run_mcmc`, afterwards to value returned by the last invocation of
-            `callback`.
+            `run_mcmc`, afterwards to the value returned by the last invocation
+            of `inner_callback` or `outer_callback`.
+        n_burn, n_save, n_skip : int
+            The corresponding arguments as-is.
+        i_outer : int
+            The index of the last outer loop iteration (0-based).
+        inner_loop_length : int
+            The number of MCMC iterations in the inner loop.
 
-        Since this function is called under the jax jit, the values are not
-        available at the time the Python code is executed. Use the utilities in
-        `jax.debug` to access the values at actual runtime.
+        `inner_callback` is called under the jax jit, so the argument values are
+        not available at the time the Python code is executed. Use the utilities
+        in `jax.debug` to access the values at actual runtime.
 
-        The function must return two values:
+        The callbacks must return two values:
 
         bart : dict
             A possibly modified MCMC state. To avoid modifying the state,
-            return the `bart` argument passed to `callback` as-is.
+            return the `bart` argument passed to the callback as-is.
         callback_state : jax pytree
-            The new state for the callback.
+            The new state to be passed on the next callback invocation.
 
-        For convenience, if `callback` returns `None`, the states are not
+        For convenience, if a callback returns `None`, the states are not
         updated.
     callback_state : jax pytree, optional
-        The initial state for the callback.
+        The initial state for the callbacks.
     tracevars_onlymain : tuple of str
         The names of the fields in `bart` to include in the main trace but not
         in the burnin trace. For the burn-in/main distinction to make sense,
@@ -153,30 +173,87 @@ def run_mcmc(
     trace_both = empty_trace(n_burn + n_save, bart, tracevars_both)
     trace_onlymain = empty_trace(n_save, bart, tracevars_onlymain)
 
-    callback_kw = dict(n_burn=n_burn, n_save=n_save, n_skip=n_skip)
+    # determine number of iterations for inner and outer loops
+    n_iters = n_burn + n_skip * n_save
+    if inner_loop_length is None:
+        inner_loop_length = n_iters
+    n_outer = n_iters // inner_loop_length
+    if n_iters % inner_loop_length:
+        if allow_overflow:
+            n_outer += 1
+        else:
+            raise ValueError(f'{n_iters=} is not divisible by {inner_loop_length=}')
 
     carry = (bart, 0, key, trace_both, trace_onlymain, callback_state)
+    for i_outer in range(n_outer):
+        carry = _run_mcmc_inner_loop(
+            carry, inner_loop_length, inner_callback, n_burn, n_save, n_skip, i_outer
+        )
+        if outer_callback is not None:
+            bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
+            i_skip = _compute_i_skip(i_total, n_burn, n_skip)
+            rt = outer_callback(
+                bart=bart,
+                burnin=i_total < n_burn,
+                overflow=i_total >= n_iters,
+                i_total=i_total - 1,
+                # - 1 because i_total is updated at the end of the inner loop
+                i_skip=i_skip,
+                callback_state=callback_state,
+                n_burn=n_burn,
+                n_save=n_save,
+                n_skip=n_skip,
+                i_outer=i_outer,
+                inner_loop_length=inner_loop_length,
+            )
+            if rt is not None:
+                bart, callback_state = rt
+                carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
 
+    bart, _, _, trace_both, trace_onlymain, _ = carry
+
+    burnin_trace = tree.map(lambda x: x[:n_burn, ...], trace_both)
+    main_trace = tree.map(lambda x: x[n_burn:, ...], trace_both)
+    main_trace.update(trace_onlymain)
+
+    return bart, burnin_trace, main_trace
+
+
+def _compute_i_skip(i_total, n_burn, n_skip):
+    burnin = i_total < n_burn
+    return jnp.where(
+        burnin,
+        i_total + 1,
+        (i_total + 1) % n_skip + jnp.where(i_total + 1 < n_skip, n_burn, 0),
+    )
+
+
+@functools.partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2))
+def _run_mcmc_inner_loop(
+    carry, inner_loop_length, inner_callback, n_burn, n_save, n_skip, i_outer
+):
     def loop(carry, _):
         bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
 
-        key, subkey = random.split(key)
-        bart = mcmcstep.step(subkey, bart)
+        keys = jaxext.split(key)
+        key = keys.pop()
+        bart = mcmcstep.step(keys.pop(), bart)
 
         burnin = i_total < n_burn
-        if callback is not None:
-            i_skip = jnp.where(
-                burnin,
-                i_total + 1,
-                (i_total + 1) % n_skip + jnp.where(i_total + 1 < n_skip, n_burn, 0),
-            )
-            rt = callback(
+        if inner_callback is not None:
+            i_skip = _compute_i_skip(i_total, n_burn, n_skip)
+            rt = inner_callback(
                 bart=bart,
                 burnin=burnin,
+                overflow=i_total >= n_burn + n_save * n_skip,
                 i_total=i_total,
                 i_skip=i_skip,
                 callback_state=callback_state,
-                **callback_kw,
+                n_burn=n_burn,
+                n_save=n_save,
+                n_skip=n_skip,
+                i_outer=i_outer,
+                inner_loop_length=inner_loop_length,
             )
             if rt is not None:
                 bart, callback_state = rt
@@ -205,56 +282,92 @@ def run_mcmc(
         carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
         return carry, None
 
-    carry, _ = lax.scan(loop, carry, None, n_burn + n_skip * n_save)
-
-    bart, _, _, trace_both, trace_onlymain, _ = carry
-
-    burnin_trace = tree.map(lambda x: x[:n_burn, ...], trace_both)
-    main_trace = tree.map(lambda x: x[n_burn:, ...], trace_both)
-    main_trace.update(trace_onlymain)
-
-    return bart, burnin_trace, main_trace
+    carry, _ = lax.scan(loop, carry, None, inner_loop_length)
+    return carry
 
 
-def simple_print_callback(
-    *, bart, burnin, i_total, i_skip, n_burn, n_save, n_skip, callback_state
-):
+def make_print_callbacks(dot_every_inner=1, report_every_outer=1):
     """
-    A logging callback function for MCMC iterations.
+    Prepare logging callbacks for `run_mcmc`.
 
-    Use this function with `run_mcmc` as:
+    Prepare callbacks which print a dot on every iteration, and a longer
+    report outer loop iteration.
 
-    >>> run_mcmc(..., callback=simple_print_callback, callback_state=<printevery>)
+    Parameters
+    ----------
+    dot_every_inner : int, default 1
+        A dot is printed every `dot_every_inner` MCMC iterations.
+    report_every_outer : int, default 1
+        A report is printed every `report_every_outer` outer loop
+        iterations.
 
-    Where <printevery> is an integer specifying how frequently to print.
+    Returns
+    -------
+    kwargs : dict
+        A dictionary with the arguments to pass to `run_mcmc` as keyword
+        arguments to set up the callbacks.
+
+    Examples
+    --------
+    >>> run_mcmc(..., **make_print_callbacks())
     """
-    printevery = callback_state
-    debug.callback(
-        _simple_print_callback_outer,
-        printcond=(i_total + 1) % printevery == 0,
-        print_dots=printevery > 1,
-        burnin=burnin,
-        n_burn=n_burn,
-        n_save=n_save,
-        n_skip=n_skip,
-        i_total=i_total,
-        prop_total=len(bart['leaf_trees']),
-        grow_prop_count=bart['grow_prop_count'],
-        grow_acc_count=bart['grow_acc_count'],
-        prune_prop_count=bart['prune_prop_count'],
-        prune_acc_count=bart['prune_acc_count'],
-        fill=grove.forest_fill(bart['split_trees']),
-        # should I pass the split_trees to the callback instead?
+    return dict(
+        inner_callback=_print_callback_inner,
+        outer_callback=_print_callback_outer,
+        callback_state=dict(
+            dot_every_inner=dot_every_inner, report_every_outer=report_every_outer
+        ),
     )
 
 
-def _simple_print_callback_outer(*, printcond, print_dots, **kw):
-    if printcond:
-        if print_dots:
-            print('.')
-        _simple_print_callback_inner(**kw)
-    elif print_dots:
+def _print_callback_inner(*, i_total, callback_state, **_):
+    dot_every_inner = callback_state['dot_every_inner']
+    if dot_every_inner is not None:
+        cond = (i_total + 1) % dot_every_inner == 0
+        debug.callback(_print_dot, cond)
+
+
+def _print_dot(cond):
+    if cond:
         print('.', end='', flush=True)
+
+
+def _print_callback_outer(
+    *,
+    bart,
+    burnin,
+    overflow,
+    i_total,
+    n_burn,
+    n_save,
+    n_skip,
+    callback_state,
+    i_outer,
+    inner_loop_length,
+    **_,
+):
+    report_every_outer = callback_state['report_every_outer']
+    if report_every_outer is not None:
+        dot_every_inner = callback_state['dot_every_inner']
+        if dot_every_inner is None:
+            newline = False
+        else:
+            newline = dot_every_inner < inner_loop_length
+        debug.callback(
+            _print_report,
+            cond=(i_outer + 1) % report_every_outer == 0,
+            newline=newline,
+            burnin=burnin,
+            overflow=overflow,
+            i_total=i_total,
+            n_iters=n_burn + n_save * n_skip,
+            grow_prop_count=bart['grow_prop_count'],
+            grow_acc_count=bart['grow_acc_count'],
+            prune_prop_count=bart['prune_prop_count'],
+            prune_acc_count=bart['prune_acc_count'],
+            prop_total=len(bart['leaf_trees']),
+            fill=grove.forest_fill(bart['split_trees']),
+        )
 
 
 def _convert_jax_arrays_in_args(func):
@@ -285,45 +398,54 @@ def _convert_jax_arrays_in_args(func):
 
 
 @_convert_jax_arrays_in_args
-# convert all jax arrays in the arguments because operations on them can trigger
-# a deadlock with the main thread
-def _simple_print_callback_inner(
+# convert all jax arrays in arguments because operations on the could lead to
+# deadlock with the main thread
+def _print_report(
     *,
+    cond,
+    newline,
     burnin,
-    n_burn,
-    n_save,
-    n_skip,
+    overflow,
     i_total,
-    prop_total,
+    n_iters,
     grow_prop_count,
     grow_acc_count,
     prune_prop_count,
     prune_acc_count,
+    prop_total,
     fill,
 ):
-    def acc_string(acc_count, prop_count):
-        if prop_count:
-            return f'{acc_count / prop_count:4.0%}'
+    if cond:
+        newline = '\n' if newline else ''
+
+        total_str = f'{n_iters}'
+        ndigits = len(total_str)
+        i_str = f'{i_total + 1}'.rjust(ndigits)
+
+        def acc_string(acc_count, prop_count):
+            if prop_count:
+                return f'{acc_count / prop_count:4.0%}'
+            else:
+                return ' n/d'
+
+        grow_prop = grow_prop_count / prop_total
+        prune_prop = prune_prop_count / prop_total
+        grow_acc = acc_string(grow_acc_count, grow_prop_count)
+        prune_acc = acc_string(prune_acc_count, prune_prop_count)
+
+        if burnin:
+            flag = ' (burnin)'
+        elif overflow:
+            flag = ' (overflow)'
         else:
-            return ' n/d'
+            flag = ''
 
-    grow_prop = grow_prop_count / prop_total
-    prune_prop = prune_prop_count / prop_total
-    grow_acc = acc_string(grow_acc_count, grow_prop_count)
-    prune_acc = acc_string(prune_acc_count, prune_prop_count)
-    n_total = n_burn + n_save * n_skip
-
-    burnin_flag = ' (not saved)' if burnin else ''
-    total_str = f'{n_total}'
-    ndigits = len(total_str)
-    i_str = f'{i_total + 1}'.rjust(ndigits)
-
-    print(
-        f'It {i_str}/{total_str} '
-        f'grow P={grow_prop:4.0%} A={grow_acc} '
-        f'prune P={prune_prop:4.0%} A={prune_acc} '
-        f'fill={fill:4.0%}{burnin_flag}'
-    )
+        print(
+            f'{newline}It {i_str}/{total_str} '
+            f'grow P={grow_prop:4.0%} A={grow_acc} '
+            f'prune P={prune_prop:4.0%} A={prune_acc} '
+            f'fill={fill:4.0%}{flag}'
+        )
 
 
 @jax.jit

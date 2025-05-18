@@ -189,7 +189,7 @@ def init(
             max_depth - 1, jaxext.minimal_unsigned_dtype(X.shape[0] - 1)
         ),
         split_trees=make_forest(max_depth - 1, max_split.dtype),
-        resid=jnp.asarray(y, large_float),
+        resid=jnp.array(y, large_float),
         sigma2=sigma2,
         prec_scale=(
             None

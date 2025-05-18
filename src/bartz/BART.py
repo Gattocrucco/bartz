@@ -70,9 +70,6 @@ class gbart:
         Parameters of the prior on tree node generation. The probability that a
         node at depth `d` (0-based) is non-terminal is ``base / (1 + d) **
         power``.
-    maxdepth : int, default 6
-        The maximum depth of the trees. This is 1-based, so with the default
-        ``maxdepth=6``, the depths of the levels range from 0 to 5.
     lamda : float, optional
         The scale of the prior on the noise variance. If ``lamda==1``, the
         prior is an inverse chi-squared scaled to have harmonic mean 1. If
@@ -108,13 +105,24 @@ class gbart:
         The number of initial MCMC samples to discard as burn-in.
     keepevery : int, default 1
         The thinning factor for the MCMC samples, after burn-in.
-    printevery : int, default 100
-        The number of iterations (including thinned-away ones) between each log.
-        If 0, disable logging.
+    printevery : int or None, default 100
+        The number of iterations (including thinned-away ones) between each log
+        line. Set to `None` to disable logging.
+
+        `printevery` has a few unexpected side effects. On cpu, interrupting
+        with ^C halts the MCMC only on the next log. And the total number of
+        iterations is a multiple of `printevery`, so if ``nskip + keepevery *
+        ndpost`` is not a multiple of `printevery`, some of the last iterations
+        will not be saved.
     seed : int or jax random key, default 0
         The seed for the random number generator.
-    initkw : dict
+    maxdepth : int, default 6
+        The maximum depth of the trees. This is 1-based, so with the default
+        ``maxdepth=6``, the depths of the levels range from 0 to 5.
+    init_kw : dict
         Additional arguments passed to `mcmcstep.init`.
+    run_mcmc_kw : dict
+        Additional arguments passed to `mcmcloop.run_mcmc`.
 
     Attributes
     ----------
@@ -178,7 +186,6 @@ class gbart:
         k=2,
         power=2,
         base=0.95,
-        maxdepth=6,
         lamda=None,
         offset=None,
         w=None,
@@ -189,7 +196,9 @@ class gbart:
         keepevery=1,
         printevery=100,
         seed=0,
-        initkw=None,
+        maxdepth=6,
+        init_kw=None,
+        run_mcmc_kw=None,
     ):
         x_train, x_train_fmt = self._process_predictor_input(x_train)
         y_train, _ = self._process_response_input(y_train)
@@ -219,10 +228,10 @@ class gbart:
             base,
             maxdepth,
             ntree,
-            initkw,
+            init_kw,
         )
         final_state, burnin_trace, main_trace = self._run_mcmc(
-            mcmc_state, ndpost, nskip, keepevery, printevery, seed
+            mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
         )
 
         sigma = self._extract_sigma(main_trace, scale)
@@ -379,7 +388,7 @@ class gbart:
         base,
         maxdepth,
         ntree,
-        initkw,
+        init_kw,
     ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
@@ -396,27 +405,32 @@ class gbart:
             sigma2_beta=sigma2_beta,
             min_points_per_leaf=5,
         )
-        if initkw is not None:
-            kw.update(initkw)
+        if init_kw is not None:
+            kw.update(init_kw)
         return mcmcstep.init(**kw)
 
     @staticmethod
-    def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed):
+    def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw):
         if isinstance(seed, jax.Array) and jnp.issubdtype(
             seed.dtype, jax.dtypes.prng_key
         ):
-            key = seed
+            key = seed.copy()
+            # copy because the inner loop in run_mcmc will donate the buffer
         else:
             key = jax.random.key(seed)
-        return mcmcloop.run_mcmc(
-            key,
-            mcmc_state,
-            ndpost,
+
+        kw = dict(
             n_burn=nskip,
             n_skip=keepevery,
-            callback=mcmcloop.simple_print_callback if printevery else None,
-            callback_state=printevery,
+            inner_loop_length=printevery,
+            allow_overflow=True,
         )
+        if printevery is not None:
+            kw.update(mcmcloop.make_print_callbacks())
+        if run_mcmc_kw is not None:
+            kw.update(run_mcmc_kw)
+
+        return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
 
     @staticmethod
     def _predict(trace, x):
