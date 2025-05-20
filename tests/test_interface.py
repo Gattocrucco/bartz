@@ -115,20 +115,17 @@ def test_sequential_guarantee(X, y, keys, kw):
     """Check that the way iterations are saved does not influence the result."""
     key = keys.pop()
 
-    with jax.debug_key_reuse(False):
-        bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
+    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
 
-        kw['nskip'] -= 1
-        kw['ndpost'] += 1
-        bart2 = bartz.BART.gbart(X, y, **kw, seed=key)
-        numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
+    kw['nskip'] -= 1
+    kw['ndpost'] += 1
+    bart2 = bartz.BART.gbart(X, y, **kw, seed=random.clone(key))
+    numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
-        kw['keepevery'] = 2
-        bart3 = bartz.BART.gbart(X, y, **kw, seed=key)
-        yhat_train = bart2.yhat_train[1::2]
-        numpy.testing.assert_array_equal(
-            yhat_train, bart3.yhat_train[: len(yhat_train)]
-        )
+    kw['keepevery'] = 2
+    bart3 = bartz.BART.gbart(X, y, **kw, seed=random.clone(key))
+    yhat_train = bart2.yhat_train[1::2]
+    numpy.testing.assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
 
 
 def test_finite(X, y, keys, kw):
@@ -169,12 +166,11 @@ def test_scale_shift(X, y, keys, kw):
     """Check self-consistency of rescaling the inputs."""
     key = keys.pop()
 
-    with jax.debug_key_reuse(False):
-        bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
+    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
 
-        offset = 0.4703189
-        scale = 0.5294714
-        bart2 = bartz.BART.gbart(X, offset + y * scale, **kw, seed=key)
+    offset = 0.4703189
+    scale = 0.5294714
+    bart2 = bartz.BART.gbart(X, offset + y * scale, **kw, seed=random.clone(key))
 
     numpy.testing.assert_allclose(
         bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6
@@ -354,9 +350,8 @@ def test_jit(X, y, keys, kw):
     task_compiled = jax.jit(task)
 
     key = keys.pop()
-    with jax.debug_key_reuse(False):
-        state1, pred1 = task(X, y, key)
-        state2, pred2 = task_compiled(X, y, key)
+    state1, pred1 = task(X, y, key)
+    state2, pred2 = task_compiled(X, y, random.clone(key))
 
     numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=0, atol=1e-6)
 

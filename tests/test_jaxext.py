@@ -24,7 +24,6 @@
 
 """Test bartz.jaxext."""
 
-import jax
 import numpy
 import pytest
 from jax import numpy as jnp
@@ -197,8 +196,7 @@ def test_split(keys):
     assert different_keys(key1, key3)
     assert different_keys(key2, key3)
 
-    with jax.debug_key_reuse(False):
-        ks = jaxext.split(key, 3)
+    ks = jaxext.split(random.clone(key), 3)
     key1a = ks.pop()
     key23 = ks.pop(2)
 

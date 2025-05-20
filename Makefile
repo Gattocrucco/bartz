@@ -190,3 +190,7 @@ python:
 .PHONY: ipython
 ipython:
 	$(UV_RUN) ipython -i .ipython/ipython-startup.ipy $(ARGS)
+
+.PHONY: mypy
+mypy:
+	$(UV_RUN) mypy $(ARGS)

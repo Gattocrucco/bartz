@@ -49,12 +49,12 @@ def _castto(func, type):
 
 
 class scipy:
-    """Mockup of the scipy module."""
+    """Mockup of the :external:py:mod:`scipy` module."""
 
     class special:
-        """Mockup of the scipy.special module."""
+        """Mockup of the :external:py:mod:`scipy.special` module."""
 
-        @functools.wraps(special.gammainccinv)
+        @staticmethod
         def gammainccinv(a, y):
             """Survival function inverse of the Gamma(a, 1) distribution."""
             a = jnp.asarray(a)
@@ -66,11 +66,12 @@ class scipy:
             return jax.pure_callback(ufunc, dummy, a, y, vmap_method='expand_dims')
 
     class stats:
-        """Mockup of the scipy.stats module."""
+        """Mockup of the :external:py:mod:`scipy.stats` module."""
 
         class invgamma:
             """Class that represents the distribution InvGamma(a, 1)."""
 
+            @staticmethod
             def ppf(q, a):
                 """Percentile point function."""
                 return 1 / scipy.special.gammainccinv(a, q)

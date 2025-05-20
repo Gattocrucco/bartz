@@ -34,7 +34,8 @@ from bartz import jaxext
 # because it's always run compiled as a whole. If so, maybe that could be
 # circumvented by a single short run with jit disabled. But would the option
 # implementation do something in that case? (The docs say it checks on jit
-# boundaries.)
+# boundaries.) If that worked, I would disable this globally and enable it only
+# on the test case that disables the jit.
 jax.config.update('jax_debug_key_reuse', True)
 
 
