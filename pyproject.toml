@@ -36,9 +36,6 @@ authors = [
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
-packages = [
-    { include = "bartz", from = "src" },
-]
 dependencies = [
     "jax >=0.4.35,<1",
     "jaxlib >=0.4.35,<1",
@@ -80,6 +77,7 @@ ci = [
 ]
 
 [tool.pytest.ini_options]
+cache_dir = "config/pytest_cache"
 testpaths = ["tests"]
 filterwarnings = [
     'error:scatter inputs have incompatible types.*',
@@ -104,6 +102,7 @@ show_missing = true
 
 [tool.coverage.html]
 show_contexts = true
+directory = "_site/coverage"
 
 [tool.coverage.paths]
 # the first path in each list must be the source directory in the machine that's
@@ -132,6 +131,7 @@ local = [
 
 [tool.ruff]
 exclude = [".asv", "*.ipynb"]
+cache-dir = "config/ruff_cache"
 
 [tool.ruff.format]
 quote-style = "single"
@@ -150,7 +150,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"{benchmarks/**/*.py,docs/**/*.py,src/bartz/debug.py,tests/rbartpackages/*.py,tests/__init__.py}" = [
+"{config/*,benchmarks/*,docs/*,src/bartz/debug.py,tests/rbartpackages/*,tests/__init__.py}" = [
     "D100",  # Missing docstring in public module
     "D101",  # Missing docstring in public class
     "D102",  # Missing docstring in public method
@@ -173,6 +173,7 @@ check-class-attributes = false  # because I don't declare attributes
 
 [tool.mypy]
 files = "src/bartz/"
+cache_dir = "config/mypy_cache"
 
 [tool.uv]
 python-downloads = "never"

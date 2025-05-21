@@ -50,44 +50,44 @@ all:
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
-SETUP_MICROMAMBA = micromamba env create --file condaenv.yml --prefix ./.venv --yes
+SETUP_MICROMAMBA = micromamba env create --file config/condaenv.yml --prefix ./.venv --yes
 UV_RUN = uv run --no-sync
 UV_SYNC = uv sync --frozen --inexact
 
 .PHONY: lock
 lock:
 	uv lock
-	mv uv.lock uv-highest.lock
+	mv uv.lock config/uv-highest.lock
 
 .PHONY: setup
 setup:
 	$(SETUP_MICROMAMBA)
-	cp uv-highest.lock uv.lock
+	cp config/uv-highest.lock uv.lock
 	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci
 setup-ci:
 	$(SETUP_MICROMAMBA)
-	cp uv-highest.lock uv.lock
+	cp config/uv-highest.lock uv.lock
 	$(UV_SYNC) --group ci
 
 .PHONY: lock-old
 lock-old:
 	uv lock --resolution lowest-direct --exclude-newer 2025-05-15
-	mv uv.lock uv-lowest-direct.lock
+	mv uv.lock config/uv-lowest-direct.lock
 
 .PHONY: setup-old
 setup-old:
 	$(SETUP_MICROMAMBA) python=3.10
-	cp uv-lowest-direct.lock uv.lock
+	cp config/uv-lowest-direct.lock uv.lock
 	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci-old
 setup-ci-old:
 	$(SETUP_MICROMAMBA) python=3.10
-	cp uv-lowest-direct.lock uv.lock
+	cp config/uv-lowest-direct.lock uv.lock
 	$(UV_SYNC) --group ci
 
 .PHONY: release
@@ -134,8 +134,6 @@ docs-all: copy-version docs-latest docs
 covreport:
 	$(UV_RUN) coverage combine
 	$(UV_RUN) coverage html
-	test ! -d _site/coverage || rm -r _site/coverage
-	mv htmlcov _site/coverage
 	@echo
 	@echo "Now open _site/index.html"
 
@@ -189,7 +187,7 @@ python:
 
 .PHONY: ipython
 ipython:
-	$(UV_RUN) ipython -i .ipython/ipython-startup.ipy $(ARGS)
+	IPYTHONDIR=config/ipython $(UV_RUN) ipython $(ARGS)
 
 .PHONY: mypy
 mypy:
