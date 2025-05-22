@@ -196,13 +196,13 @@ def run_mcmc(
         )
         if outer_callback is not None:
             bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
+            i_total -= 1  # because i_total is updated at the end of the inner loop
             i_skip = _compute_i_skip(i_total, n_burn, n_skip)
             rt = outer_callback(
                 bart=bart,
                 burnin=i_total < n_burn,
                 overflow=i_total >= n_iters,
-                i_total=i_total - 1,
-                # - 1 because i_total is updated at the end of the inner loop
+                i_total=i_total,
                 i_skip=i_skip,
                 callback_state=callback_state,
                 n_burn=n_burn,
@@ -213,6 +213,7 @@ def run_mcmc(
             )
             if rt is not None:
                 bart, callback_state = rt
+                i_total += 1
                 carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
 
     bart, _, _, trace_both, trace_onlymain, _ = carry
@@ -423,13 +424,9 @@ def _print_report(
     if cond:
         newline = '\n' if newline else ''
 
-        total_str = f'{n_iters}'
-        ndigits = len(total_str)
-        i_str = f'{i_total + 1}'.rjust(ndigits)
-
         def acc_string(acc_count, prop_count):
             if prop_count:
-                return f'{acc_count / prop_count:4.0%}'
+                return f'{acc_count / prop_count:.0%}'
             else:
                 return ' n/d'
 
@@ -446,10 +443,10 @@ def _print_report(
             flag = ''
 
         print(
-            f'{newline}It {i_str}/{total_str} '
-            f'grow P={grow_prop:4.0%} A={grow_acc} '
-            f'prune P={prune_prop:4.0%} A={prune_acc} '
-            f'fill={fill:4.0%}{flag}'
+            f'{newline}It {i_total + 1}/{n_iters} '
+            f'grow P={grow_prop:.0%} A={grow_acc}, '
+            f'prune P={prune_prop:.0%} A={prune_acc}, '
+            f'fill={fill:.0%}{flag}'
         )
 
 
