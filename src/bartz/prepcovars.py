@@ -57,9 +57,9 @@ def quantilized_splits_from_matrix(X, max_bins):
     """
     out_length = min(max_bins, X.shape[1]) - 1
 
-    # return _quantilized_splits_from_matrix(X, out_length)
     @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
     def quantilize(X):
+        # wrap this function because autobatch needs traceable args
         return _quantilized_splits_from_matrix(X, out_length)
 
     return quantilize(X)

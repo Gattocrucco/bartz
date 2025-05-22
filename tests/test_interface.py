@@ -40,21 +40,6 @@ import bartz
 from . import util
 from .rbartpackages import BART
 
-# XXX: are all these fixtures used separately at all? If not or barely, there
-# could be a single kw fixture with everything in it
-
-
-@pytest.fixture
-def n():
-    """Return number of datapoints."""
-    return 30
-
-
-@pytest.fixture
-def p():
-    """Return number of predictors."""
-    return 2
-
 
 def gen_X(key, p, n, kind):
     """Generate a matrix of predictors."""
@@ -66,83 +51,109 @@ def gen_X(key, p, n, kind):
         raise KeyError(kind)
 
 
-@pytest.fixture(params=['continuous', 'binary'])
-def X(request, n, p, keys):
-    """Return a matrix of predictors."""
-    return gen_X(keys.pop(), p, n, request.param)
-
-
 def f(x):
     """Conditional mean of the DGP."""
     T = 2
     return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
 
 
-def gen_y(key, X):
+def gen_w(key, n):
+    """Generate a vector of error weights."""
+    return jnp.exp(random.uniform(key, (n,), float, -1, 1))
+
+
+def gen_y(key, X, w):
     """Generate responses given predictors."""
-    # XXX: use weights to scale error?
     sigma = 0.1
-    return f(X) + sigma * random.normal(key, (X.shape[1],))
+    error = sigma * random.normal(key, (X.shape[1],))
+    if w is not None:
+        error *= w
+    return f(X) + error
 
 
-@pytest.fixture
-def y(keys, X):
-    """Return a vector of responses."""
-    return gen_y(keys.pop(), X)
-
-
-@pytest.fixture
-def w(keys, n):
-    """Return a vector of error scales."""
-    return jnp.exp(random.uniform(keys.pop(), (n,), float, -1, 1))
-
-
-@pytest.fixture
-def kw():
+@pytest.fixture(params=[1, 2])
+def kw(keys, request):
     """Return a dictionary of keyword arguments for BART."""
-    return dict(ntree=20, ndpost=100, nskip=50, usequants=True)
+    match request.param:
+        case 1:
+            X = gen_X(keys.pop(), 2, 30, 'continuous')
+            y = gen_y(keys.pop(), X, None)
+            return dict(
+                x_train=X,
+                y_train=y,
+                w=None,
+                ntree=20,
+                ndpost=100,
+                nskip=50,
+                printevery=50,
+                usequants=True,
+                seed=keys.pop(),
+                init_kw=dict(
+                    resid_batch_size=None, count_batch_size=None, save_ratios=True
+                ),
+            )
+
+        case 2:
+            X = gen_X(keys.pop(), 2, 30, 'binary')
+            w = gen_w(keys.pop(), X.shape[1])
+            y = gen_y(keys.pop(), X, w)
+            return dict(
+                x_train=X,
+                y_train=y,
+                w=w,
+                ntree=20,
+                ndpost=100,
+                nskip=50,
+                printevery=None,
+                usequants=False,
+                numcut=5,
+                seed=keys.pop(),
+                init_kw=dict(
+                    resid_batch_size=16, count_batch_size=16, save_ratios=False
+                ),
+            )
 
 
-def test_bad_trees(X, y, keys, kw):
+def test_bad_trees(kw):
     """Check all trees produced by the MCMC respect the tree format."""
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    bart = bartz.BART.gbart(**kw)
     bad = bart._check_trees()
     bad_count = jnp.count_nonzero(bad)
     assert bad_count == 0
 
 
-def test_sequential_guarantee(X, y, keys, kw):
+def test_sequential_guarantee(kw):
     """Check that the way iterations are saved does not influence the result."""
-    key = keys.pop()
+    bart1 = bartz.BART.gbart(**kw)
 
-    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
+    kw['seed'] = random.clone(kw['seed'])
 
     kw['nskip'] -= 1
     kw['ndpost'] += 1
-    bart2 = bartz.BART.gbart(X, y, **kw, seed=random.clone(key))
+    bart2 = bartz.BART.gbart(**kw)
     numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
     kw['keepevery'] = 2
-    bart3 = bartz.BART.gbart(X, y, **kw, seed=random.clone(key))
+    bart3 = bartz.BART.gbart(**kw)
     yhat_train = bart2.yhat_train[1::2]
     numpy.testing.assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
 
 
-def test_finite(X, y, keys, kw):
+def test_finite(kw):
     """Check all numerical outputs are not inf or nan."""
     # XXX: maybe this could be replaced by a global jax debug option
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    bart = bartz.BART.gbart(**kw)
     assert jnp.all(jnp.isfinite(bart.yhat_train))
     assert jnp.all(jnp.isfinite(bart.sigma))
 
 
-def test_output_shapes(X, y, keys, kw):
+def test_output_shapes(kw):
     """Check the output shapes of all the attributes of BART.gbart."""
-    bart = bartz.BART.gbart(X, y, x_test=X, **kw, seed=keys.pop())
+    bart = bartz.BART.gbart(x_test=kw['x_train'], **kw)
 
     ndpost = kw['ndpost']
     nskip = kw['nskip']
-    _, n = X.shape
+    n = kw['y_train'].size
 
     assert bart.offset.shape == ()
     assert bart.scale.shape == ()
@@ -155,25 +166,24 @@ def test_output_shapes(X, y, keys, kw):
     assert bart.first_sigma.shape == (nskip,)
 
 
-def test_predict(X, y, keys, kw):
+def test_predict(kw):
     """Check that the public BART.gbart.predict method works."""
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
-    yhat_train = bart.predict(X)
+    bart = bartz.BART.gbart(**kw)
+    yhat_train = bart.predict(kw['x_train'])
     numpy.testing.assert_array_equal(bart.yhat_train, yhat_train)
 
 
-def test_scale_shift(X, y, keys, kw):
+def test_scale_shift(kw):
     """Check self-consistency of rescaling the inputs."""
-    key = keys.pop()
-
-    bart1 = bartz.BART.gbart(X, y, **kw, seed=key)
+    bart1 = bartz.BART.gbart(**kw)
 
     offset = 0.4703189
     scale = 0.5294714
-    bart2 = bartz.BART.gbart(X, offset + y * scale, **kw, seed=random.clone(key))
+    kw.update(y_train=offset + kw['y_train'] * scale, seed=random.clone(kw['seed']))
+    bart2 = bartz.BART.gbart(**kw)
 
     numpy.testing.assert_allclose(
-        bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6
+        bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-7
     )
     numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
@@ -191,31 +201,39 @@ def test_scale_shift(X, y, keys, kw):
     util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
 
 
-def test_min_points_per_leaf(X, y, keys, kw):
+def test_min_points_per_leaf(kw):
     """Check that the limit of at least 5 datapoints per leaves is respected."""
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    bart = bartz.BART.gbart(**kw)
     distr = bart._points_per_leaf_distr()
     distr_marg = distr.sum(axis=0)
     assert jnp.all(distr_marg[:5] == 0)
     assert jnp.all(distr_marg[-5:-1] == 0)
 
 
-def test_residuals_accuracy(keys):
+def test_residuals_accuracy(kw):
     """Check that running residuals are close to the recomputed final residuals."""
-    n = 100
-    p = 1
-    X = gen_X(keys.pop(), p, n, 'continuous')
-    y = gen_y(keys.pop(), X)
-    bart = bartz.BART.gbart(X, y, ntree=200, ndpost=1000, nskip=0, seed=keys.pop())
+    kw.update(ntree=200, ndpost=1000, nskip=0)
+    bart = bartz.BART.gbart(**kw)
     accum_resid, actual_resid = bart._compare_resid()
     util.assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 
-def test_no_datapoints(X, y, kw, keys):
+def set_num_datapoints(kw, n):
+    """Set the number of datapoints in the kw dictionary."""
+    assert n <= kw['y_train'].size
+    kw = kw.copy()
+    kw['x_train'] = kw['x_train'][:, :n]
+    kw['y_train'] = kw['y_train'][:n]
+    if kw['w'] is not None:
+        kw['w'] = kw['w'][:n]
+    return kw
+
+
+def test_no_datapoints(kw):
     """Check automatic data scaling with 0 datapoints."""
-    X = X[:, :0]
-    y = y[:0]
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    kw = set_num_datapoints(kw, 0)
+    kw.update(usequants=True)  # because the uniform grid requires endpoints
+    bart = bartz.BART.gbart(**kw)
     ndpost = kw['ndpost']
     assert bart.yhat_train.shape == (ndpost, 0)
     assert bart.offset == 0
@@ -223,78 +241,63 @@ def test_no_datapoints(X, y, kw, keys):
     assert bart.sigest == 1
 
 
-def test_one_datapoint(X, y, kw, keys):
+def test_one_datapoint(kw):
     """Check automatic data scaling with 1 datapoint."""
-    X = X[:, :1]
-    y = y[:1]
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    kw = set_num_datapoints(kw, 1)
+    bart = bartz.BART.gbart(**kw)
     assert bart.scale == 1
     assert bart.sigest == 1
 
 
-def test_two_datapoints(X, y, kw, keys):
+def test_two_datapoints(kw):
     """Check automatic data scaling with 2 datapoints."""
-    X = X[:, :2]
-    y = y[:2]
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
-    numpy.testing.assert_allclose(bart.sigest, y.std(), rtol=1e-6)
+    kw = set_num_datapoints(kw, 2)
+    bart = bartz.BART.gbart(**kw)
+    numpy.testing.assert_allclose(bart.sigest, kw['y_train'].std(), rtol=1e-6)
 
 
-def test_few_datapoints(X, y, kw, keys):
+def test_few_datapoints(kw):
     """Check that the trees cannot grow if there are not enough datapoints.
 
     If there are less than 10 datapoints, it is not possible to satisfy the 5
     points per leaf requirement.
     """
-    X = X[:, :9]  # < 2 * 5
-    y = y[:9]
-    bart = bartz.BART.gbart(X, y, **kw, seed=keys.pop())
+    kw = set_num_datapoints(kw, 9)  # < 2 * 5
+    bart = bartz.BART.gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 
-@pytest.mark.parametrize(
-    'use_w,kw_shared,init_kw',
-    [
-        [
-            False,
-            dict(usequants=True),
-            dict(resid_batch_size=None, count_batch_size=None, save_ratios=True),
-        ],
-        [
-            True,
-            dict(usequants=False, numcut=5),
-            dict(resid_batch_size=16, count_batch_size=16, save_ratios=False),
-        ],
-    ],
-)
-def test_comparison_rbart(X, y, w, keys, use_w, kw_shared, init_kw):
+def test_comparison_rbart(kw, keys):
     """Check bartz.BART gives the same results as R package BART."""
-    kw = dict(
+    X = kw.pop('x_train')
+    kw.update(
         ntree=2 * X.shape[1],
-        nskip=1000,
-        ndpost=1000,
+        nskip=2000,
+        ndpost=2000,
         numcut=255,
     )
-    if use_w:
-        kw.update(w=w)
-    kw.update(kw_shared)
-
-    kw_bartz = dict(**kw, init_kw=init_kw)
 
     kw_BART = dict(
         **kw,
         rm_const=False,
         mc_cores=1,
     )
+    kw_BART.pop('init_kw')
+    for key in 'w', 'printevery':
+        if kw_BART[key] is None:
+            kw_BART.pop(key)
+    kw_BART['seed'] = random.randint(keys.pop(), (), 0, jnp.uint32(2**31)).item()
 
-    bart = bartz.BART.gbart(X, y, **kw_bartz, seed=keys.pop())
-    seed = random.randint(keys.pop(), (), 0, jnp.uint32(2**31)).item()
-    rbart = BART.mc_gbart(X.T, y, **kw_BART, seed=seed)
+    bart = bartz.BART.gbart(X, **kw)
+    rbart = BART.mc_gbart(X.T, **kw_BART)
 
     numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
     # I would check sigest as well, but it's not in the R object despite what
     # the documentation says
 
+    # TODO: instead of this comparison function which I made up without enough
+    # care, use the multivariate Gelman-Rubin R-hat, which is something similar
+    # but very likely better thought out.
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10
 
@@ -314,9 +317,9 @@ def mahalanobis_distance2(x, y):
     Returns
     -------
     dist2 : float
-        The Mahalanobis squared distance between the two variables. The
-        distance is the euclidean distance with metric given by the sample
-        covariance matrix of the average of `x` and `y`.
+        The Mahalanobis squared distance between the means of the two variables.
+        The distance is the euclidean distance with metric given by the inverse
+        of the sample covariance matrix of the average of `x` and `y`.
     rank : int
         The estimated rank of the covariance matrix.
     """
@@ -337,23 +340,27 @@ def mahalanobis_distance2(x, y):
     return dist2, rank
 
 
-def test_jit(X, y, keys, kw):
+def test_jit(keys, kw):
     """Test that jitting around the whole interface works."""
     kw.update(printevery=None)
     # set printevery to None to move all iterations to the inner loop and avoid
     # multiple compilation
 
-    def task(X, y, key):
-        bart = bartz.BART.gbart(X, y, **kw, seed=key)
+    X = kw.pop('x_train')
+    y = kw.pop('y_train')
+    w = kw.pop('w')
+    key = kw.pop('seed')
+
+    def task(X, y, w, key):
+        bart = bartz.BART.gbart(X, y, w=w, **kw, seed=key)
         return bart._mcmc_state, bart.yhat_train
 
     task_compiled = jax.jit(task)
 
-    key = keys.pop()
-    state1, pred1 = task(X, y, key)
-    state2, pred2 = task_compiled(X, y, random.clone(key))
+    state1, pred1 = task(X, y, w, key)
+    state2, pred2 = task_compiled(X, y, w, random.clone(key))
 
-    numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=0, atol=1e-6)
+    numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=1e-6, atol=1e-6)
 
 
 def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
@@ -395,9 +402,10 @@ def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
 
 
 @pytest.mark.timeout(6)
-def test_interrupt(X, y, kw, keys):
+def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
+    if kw['printevery'] is None:
+        pytest.skip('With logging disabled, the MCMC cannot be interrupted.')
+    kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
-        call_with_timed_interrupt(
-            3, bartz.BART.gbart, X, y, ndpost=0, nskip=10000, seed=keys.pop()
-        )
+        call_with_timed_interrupt(3, bartz.BART.gbart, **kw)

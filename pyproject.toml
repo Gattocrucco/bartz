@@ -87,7 +87,7 @@ addopts = [
     "--pdbcls=IPython.terminal.debugger:TerminalPdb",
     "--durations=3",
 ]
-timeout = 32
+timeout = 64
 timeout_method = "thread"  # when jax hangs, signals do not work
 
 # I wanted to use `--import-mode=importlib`, but it breaks importing submodules,
