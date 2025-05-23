@@ -30,34 +30,20 @@ import pytest
 
 from bartz import jaxext
 
-# XXX: does this option test key reuse within the MCMC loop? Maybe it doesn't
-# because it's always run compiled as a whole. If so, maybe that could be
-# circumvented by a single short run with jit disabled. But would the option
-# implementation do something in that case? (The docs say it checks on jit
-# boundaries.) If that worked, I would disable this globally and enable it only
-# on the test case that disables the jit.
 jax.config.update('jax_debug_key_reuse', True)
 
 
-# XXX: I'm not using this any more. Is there a jax api to convert an array of
-# bytes into a seed?
 @pytest.fixture
-def rng(request):
-    """Return a deterministic per-test numpy random number generator."""
-    nodeid = request.node.nodeid
-    seed = np.array([nodeid], np.bytes_).view(np.uint8)
-    return np.random.default_rng(seed)
-
-
-@pytest.fixture
-def keys(rng):
+def keys(request):
     """
     Return a deterministic per-test-case list of jax random keys.
 
     To use a key, do `keys.pop()`. If consumed this way, this list of keys can
     be safely used by multiple fixtures involved in the test case.
     """
+    nodeid = request.node.nodeid
+    seed = np.array([nodeid], np.bytes_).view(np.uint8)
+    rng = np.random.default_rng(seed)
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
-    key = jax.random.fold_in(key, 0xCC755E92)
     return jaxext.split(key, 128)
