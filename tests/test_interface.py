@@ -88,6 +88,8 @@ def kw(keys, request):
                 nskip=50,
                 printevery=50,
                 usequants=True,
+                numcut=255,
+                maxdepth=6,
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
@@ -95,7 +97,8 @@ def kw(keys, request):
             )
 
         case 2:
-            X = gen_X(keys.pop(), 2, 30, 'binary')
+            p = 257  # > 256 to use uint16 for var_trees.
+            X = gen_X(keys.pop(), p, 30, 'binary')
             w = gen_w(keys.pop(), X.shape[1])
             y = gen_y(keys.pop(), X, w)
             return dict(
@@ -107,7 +110,9 @@ def kw(keys, request):
                 nskip=50,
                 printevery=None,
                 usequants=False,
-                numcut=5,
+                # XXX problem: R BART will switch to quantiles anyway because numcut > n - 1
+                numcut=256,  # > 255 to use uint16 for X and split_trees
+                maxdepth=9,  # > 8 to use uint16 for leaf_indices
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=16, count_batch_size=16, save_ratios=False
@@ -181,6 +186,9 @@ def test_scale_shift(kw):
     offset = 0.4703189
     scale = 0.5294714
     kw.update(y_train=offset + kw['y_train'] * scale, seed=random.clone(kw['seed']))
+    # note: using the same seed does not guarantee stable error because the mcmc
+    # makes discrete choices based on thresholds on floats, so numerical error
+    # can be amplified.
     bart2 = bartz.BART.gbart(**kw)
 
     numpy.testing.assert_allclose(
@@ -189,14 +197,11 @@ def test_scale_shift(kw):
     numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
     numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale**2, rtol=1e-6)
-    numpy.testing.assert_allclose(
-        bart1.yhat_train, (bart2.yhat_train - offset) / scale, atol=1e-5, rtol=1e-5
+    util.assert_close_matrices(
+        bart1.yhat_train, (bart2.yhat_train - offset) / scale, rtol=1e-5
     )
-    numpy.testing.assert_allclose(
-        bart1.yhat_train_mean,
-        (bart2.yhat_train_mean - offset) / scale,
-        atol=1e-5,
-        rtol=1e-5,
+    util.assert_close_matrices(
+        bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, rtol=1e-5
     )
     util.assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-5)
     util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
@@ -271,11 +276,11 @@ def test_few_datapoints(kw):
 def test_comparison_rbart(kw, keys):
     """Check bartz.BART gives the same results as R package BART."""
     X = kw.pop('x_train')
+    p, n = X.shape
     kw.update(
-        ntree=2 * X.shape[1],
-        nskip=2000,
-        ndpost=2000,
-        numcut=255,
+        ntree=max(2 * n, p),
+        nskip=3000,
+        ndpost=1000,
     )
 
     kw_BART = dict(
@@ -284,6 +289,7 @@ def test_comparison_rbart(kw, keys):
         mc_cores=1,
     )
     kw_BART.pop('init_kw')
+    kw_BART.pop('maxdepth', None)
     for key in 'w', 'printevery':
         if kw_BART[key] is None:
             kw_BART.pop(key)
@@ -361,7 +367,7 @@ def test_jit(keys, kw):
     state1, pred1 = task(X, y, w, key)
     state2, pred2 = task_compiled(X, y, w, random.clone(key))
 
-    numpy.testing.assert_allclose(pred1[5], pred2[5], rtol=1e-6, atol=1e-6)
+    util.assert_close_matrices(pred1, pred2, rtol=1e-5)
 
 
 def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
@@ -440,3 +446,23 @@ def test_data_format_mismatch(kw):
     bart = bartz.BART.gbart(**kw)
     with pytest.raises(ValueError):
         bart.predict(kw['x_train'].to_numpy().T)
+
+
+def test_automatic_integer_types(kw):
+    """Test that integer variables in the MCMC state have the correct type.
+
+    Some integer variables change type automatically to be as small as possible.
+    """
+    bart = bartz.BART.gbart(**kw)
+
+    def select_type(cond):
+        return jnp.uint8 if cond else jnp.uint16
+
+    leaf_indices_type = select_type(kw['maxdepth'] <= 8)
+    split_trees_type = X_type = select_type(kw['numcut'] <= 255)
+    var_trees_type = select_type(kw['x_train'].shape[0] <= 256)
+
+    assert bart._mcmc_state['var_trees'].dtype == var_trees_type
+    assert bart._mcmc_state['split_trees'].dtype == split_trees_type
+    assert bart._mcmc_state['leaf_indices'].dtype == leaf_indices_type
+    assert bart._mcmc_state['X'].dtype == X_type

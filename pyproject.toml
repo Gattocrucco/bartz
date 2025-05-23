@@ -86,6 +86,7 @@ addopts = [
     "-r xXfE",
     "--pdbcls=IPython.terminal.debugger:TerminalPdb",
     "--durations=3",
+    "--verbose",
 ]
 timeout = 64
 timeout_method = "thread"  # when jax hangs, signals do not work
