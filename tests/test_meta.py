@@ -24,7 +24,9 @@
 
 """Test properties of pytest itself or other utilities."""
 
+import jax
 import pytest
+from jax import random
 
 
 @pytest.fixture
@@ -66,3 +68,22 @@ def consume_another_key(keys):  # noqa: D103
 def test_random_keys_are_consumed(consume_one_key, consume_another_key, keys):
     """Check that the random keys in `keys` can't be used more than once."""
     assert len(keys) == 126
+
+
+def test_debug_key_reuse(keys):
+    """Check that the jax debug_key_reuse option works."""
+    with pytest.raises(jax.errors.KeyReuseError):
+        key = keys.pop()
+        random.uniform(key)
+        random.uniform(key)
+
+
+def test_debug_key_reuse_within_jit(keys):
+    """Check that the jax debug_key_reuse option works within a jitted function."""
+
+    @jax.jit
+    def func(key):
+        return random.uniform(key) + random.uniform(key)
+
+    with pytest.raises(jax.errors.KeyReuseError):
+        func(keys.pop())
