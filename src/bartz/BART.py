@@ -281,9 +281,17 @@ class gbart:
         -------
         yhat_test : array (ndpost, m)
             The conditional posterior mean at `x_test` for each MCMC iteration.
+
+        Raises
+        ------
+        ValueError
+            If `x_test` has a different format than `x_train`.
         """
         x_test, x_test_fmt = self._process_predictor_input(x_test)
-        self._check_compatible_formats(x_test_fmt, self._x_train_fmt)
+        if x_test_fmt != self._x_train_fmt:
+            raise ValueError(
+                f'Input format mismatch: {x_test_fmt=} != x_train_fmt={self._x_train_fmt!r}'
+            )
         x_test = self._bin_predictors(x_test, self._splits)
         yhat_test = self._predict(self._main_trace, x_test)
         return self._transform_output(yhat_test, self.offset, self.scale)
@@ -298,10 +306,6 @@ class gbart:
         x = jnp.asarray(x)
         assert x.ndim == 2
         return x, fmt
-
-    @staticmethod
-    def _check_compatible_formats(fmt1, fmt2):
-        assert fmt1 == fmt2
 
     @staticmethod
     def _process_response_input(y):

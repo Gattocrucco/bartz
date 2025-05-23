@@ -31,6 +31,7 @@ import time
 
 import jax
 import numpy
+import polars as pl
 import pytest
 from jax import numpy as jnp
 from jax import random
@@ -409,3 +410,33 @@ def test_interrupt(kw):
     kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
         call_with_timed_interrupt(3, bartz.BART.gbart, **kw)
+
+
+def test_polars(kw):
+    """Test passing data as DataFrame and Series."""
+    bart = bartz.BART.gbart(**kw)
+    pred = bart.predict(kw['x_train'])
+
+    kw.update(
+        seed=random.clone(kw['seed']),
+        x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
+        y_train=pl.Series(numpy.array(kw['y_train'])),
+        w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
+    )
+    bart2 = bartz.BART.gbart(**kw)
+    pred2 = bart2.predict(kw['x_train'])
+
+    numpy.testing.assert_array_equal(bart.yhat_train, bart2.yhat_train)
+    numpy.testing.assert_array_equal(bart.sigma, bart2.sigma)
+    numpy.testing.assert_array_equal(pred, pred2)
+
+
+def test_data_format_mismatch(kw):
+    """Test that passing predictors with mismatched formats raises an error."""
+    kw.update(
+        x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
+        w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
+    )
+    bart = bartz.BART.gbart(**kw)
+    with pytest.raises(ValueError):
+        bart.predict(kw['x_train'].to_numpy().T)
