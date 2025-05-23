@@ -2,42 +2,42 @@
 # See https://pre-commit.com/hooks.html for more hooks
 exclude: '^\.asv/results/.+\.json$'
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v3.2.0
-    hooks:
-    -   id: trailing-whitespace
-    -   id: end-of-file-fixer
-    -   id: check-yaml
-    -   id: check-added-large-files
-    -   id: check-ast
-    -   id: check-case-conflict
-    -   id: check-docstring-first
--   repo: https://github.com/sbrunner/hooks
-    rev: 1.4.1
-    hooks:
-    -   id: copyright
--   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.9
-    hooks:
-    -   id: ruff
-        args: [ --fix ]
-    -   id: ruff-format
--   repo: https://github.com/jsh9/pydoclint
-    rev: 0.6.6
-    hooks:
-    -   id: pydoclint
--   repo: local
-    hooks:
-    -   id: mypy
-        name: mypy
-        entry: "make mypy"
-        language: system  # no isolated env, just run the command
-        pass_filenames: false
-        types: [python]
-        require_serial: true  # script is only called once per commit
--   repo: https://github.com/abravalheri/validate-pyproject
-    rev: v0.24.1
-    hooks:
-    -   id: validate-pyproject
-        # Optional extra validations from SchemaStore:
-        additional_dependencies: ["validate-pyproject-schema-store[all]"]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v3.2.0
+  hooks:
+    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: check-yaml
+    - id: check-added-large-files
+    - id: check-ast
+    - id: check-case-conflict
+    - id: check-docstring-first
+- repo: https://github.com/sbrunner/hooks
+  rev: 1.4.1
+  hooks:
+    - id: copyright
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.11.9
+  hooks:
+    - id: ruff
+      args: [ --fix ]
+    - id: ruff-format
+- repo: https://github.com/jsh9/pydoclint
+  rev: 0.6.6
+  hooks:
+    - id: pydoclint
+- repo: local
+  hooks:
+    - id: mypy
+      name: mypy
+      entry: "make mypy"
+      language: system  # no isolated env, just run the command
+      pass_filenames: false
+      types: [python]
+      require_serial: true  # script is only called once per commit
+- repo: https://github.com/abravalheri/validate-pyproject
+  rev: v0.24.1
+  hooks:
+    - id: validate-pyproject
+      # Optional extra validations from SchemaStore:
+      additional_dependencies: ["validate-pyproject-schema-store[all]"]
