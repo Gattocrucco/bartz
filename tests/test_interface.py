@@ -115,7 +115,10 @@ def kw(keys, request):
                 maxdepth=9,  # > 8 to use uint16 for leaf_indices
                 seed=keys.pop(),
                 init_kw=dict(
-                    resid_batch_size=16, count_batch_size=16, save_ratios=False
+                    resid_batch_size=16,
+                    count_batch_size=16,
+                    save_ratios=False,
+                    min_points_per_leaf=None,
                 ),
             )
 
@@ -208,12 +211,13 @@ def test_scale_shift(kw):
 
 
 def test_min_points_per_leaf(kw):
-    """Check that the limit of at least 5 datapoints per leaves is respected."""
+    """Check that the limit of at least 5 datapoints per leaf is respected."""
     bart = bartz.BART.gbart(**kw)
     distr = bart._points_per_leaf_distr()
     distr_marg = distr.sum(axis=0)
-    assert jnp.all(distr_marg[:5] == 0)
-    assert jnp.all(distr_marg[-5:-1] == 0)
+    limit_inactive = kw['init_kw'].get('min_points_per_leaf', 5) is None
+    assert jnp.all(distr_marg[:5] == 0) == (not limit_inactive)
+    assert limit_inactive or jnp.all(distr_marg[-5:-1] == 0)
 
 
 def test_residuals_accuracy(kw):
@@ -268,6 +272,8 @@ def test_few_datapoints(kw):
     If there are less than 10 datapoints, it is not possible to satisfy the 5
     points per leaf requirement.
     """
+    if kw['init_kw'].get('min_points_per_leaf', 5) is None:
+        pytest.skip('Datapoints per leaf limit disabled.')
     kw = set_num_datapoints(kw, 9)  # < 2 * 5
     bart = bartz.BART.gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
@@ -282,6 +288,9 @@ def test_comparison_rbart(kw, keys):
         nskip=3000,
         ndpost=1000,
     )
+    kw['init_kw'].update(
+        min_points_per_leaf=5
+    )  # because R BART can't change this setting
 
     kw_BART = dict(
         **kw,
