@@ -24,7 +24,9 @@
 
 # Makefile for running tests, prepare and upload a release.
 
-COVERAGE_SUFFIX=
+COVERAGE_SUFFIX =
+OLD_PYTHON = 3.10
+OLD_DATE = 2025-05-15
 
 .PHONY: all
 all:
@@ -74,19 +76,19 @@ setup-ci:
 
 .PHONY: lock-old
 lock-old:
-	uv lock --resolution lowest-direct --exclude-newer 2025-05-15
+	uv lock --resolution lowest-direct --exclude-newer $(OLD_DATE)
 	mv uv.lock config/uv-lowest-direct.lock
 
 .PHONY: setup-old
 setup-old:
-	$(SETUP_MICROMAMBA) python=3.10
+	$(SETUP_MICROMAMBA) python=$(OLD_PYTHON)
 	cp config/uv-lowest-direct.lock uv.lock
 	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci-old
 setup-ci-old:
-	$(SETUP_MICROMAMBA) python=3.10
+	$(SETUP_MICROMAMBA) python=$(OLD_PYTHON)
 	cp config/uv-lowest-direct.lock uv.lock
 	$(UV_SYNC) --group ci
 
@@ -107,7 +109,7 @@ src/bartz/_version.py: pyproject.toml
 
 .PHONY: tests
 tests:
-	$(UV_RUN) coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest tests $(ARGS)
+	$(UV_RUN) coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
@@ -154,9 +156,7 @@ upload: version-tag
 	uv tool run --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 .PHONY: upload-test
-upload-test:
-	git diff --quiet
-	git diff --quiet --staged
+upload-test: check-committed
 	@echo "Enter TestPyPI token:"
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
