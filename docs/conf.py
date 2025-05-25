@@ -100,9 +100,10 @@ release = version
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    'sphinx.ext.napoleon',
     'sphinx.ext.autodoc',
+    'sphinx_autodoc_typehints',  # (!) keep after napoleon
     'sphinx.ext.mathjax',
-    'numpydoc',  # process numpy format docstrings
     'sphinx.ext.intersphinx',  # link to other documentations automatically
     'myst_parser',  # markdown support
 ]
@@ -160,16 +161,22 @@ master_doc = 'index'
 
 # -- Other options -------------------------------------------------
 
+# autodoc
 autoclass_content = 'both'  # concatenate the class and __init__ docstrings
-autodoc_preserve_defaults = (
-    True  # default arguments are printed as in source instead of being evaluated
-)
+# default arguments are printed as in source instead of being evaluated
+autodoc_preserve_defaults = True
 autodoc_default_options = {
     'member-order': 'bysource',
 }
 
-numpydoc_class_members_toctree = False
-numpydoc_show_class_members = False
+# autodoc-typehints
+typehints_use_rtype = False
+typehints_document_rtype = True
+
+# napoleon
+napoleon_google_docstring = False
+napoleon_use_ivar = True
+napoleon_use_rtype = False
 
 default_role = 'py:obj'
 

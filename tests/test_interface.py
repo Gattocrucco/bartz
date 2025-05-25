@@ -471,7 +471,7 @@ def test_automatic_integer_types(kw):
     split_trees_type = X_type = select_type(kw['numcut'] <= 255)
     var_trees_type = select_type(kw['x_train'].shape[0] <= 256)
 
-    assert bart._mcmc_state['var_trees'].dtype == var_trees_type
-    assert bart._mcmc_state['split_trees'].dtype == split_trees_type
-    assert bart._mcmc_state['leaf_indices'].dtype == leaf_indices_type
-    assert bart._mcmc_state['X'].dtype == X_type
+    assert bart._mcmc_state.forest.var_trees.dtype == var_trees_type
+    assert bart._mcmc_state.forest.split_trees.dtype == split_trees_type
+    assert bart._mcmc_state.forest.leaf_indices.dtype == leaf_indices_type
+    assert bart._mcmc_state.X.dtype == X_type

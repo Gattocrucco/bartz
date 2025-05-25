@@ -30,18 +30,32 @@ import jax
 import numpy
 from jax import debug, lax, tree
 from jax import numpy as jnp
+from jaxtyping import Array, Real
 
 from . import grove, jaxext, mcmcstep
+from .mcmcstep import State
 
-TRACEVARS_BOTH_DEFAULT = (
-    'sigma2',
-    'grow_prop_count',
-    'grow_acc_count',
-    'prune_prop_count',
-    'prune_acc_count',
-    'ratios',
-)
-TRACEVARS_ONLYMAIN_DEFAULT = ('leaf_trees', 'var_trees', 'split_trees')
+
+def default_onlymain_extractor(state: State) -> dict[str, Real[Array, '...']]:
+    """Extract variables for the main trace, to be used in `run_mcmc`."""
+    return dict(
+        leaf_trees=state.forest.leaf_trees,
+        var_trees=state.forest.var_trees,
+        split_trees=state.forest.split_trees,
+    )
+
+
+def default_both_extractor(state: State) -> dict[str, Real[Array, '...'] | None]:
+    """Extract variables for main & burn-in traces, to be used in `run_mcmc`."""
+    return dict(
+        sigma2=state.sigma2,
+        grow_prop_count=state.forest.grow_prop_count,
+        grow_acc_count=state.forest.grow_acc_count,
+        prune_prop_count=state.forest.prune_prop_count,
+        prune_acc_count=state.forest.prune_acc_count,
+        log_likelihood=state.forest.log_likelihood,
+        log_trans_prior=state.forest.log_trans_prior,
+    )
 
 
 def run_mcmc(
@@ -56,8 +70,8 @@ def run_mcmc(
     inner_callback=None,
     outer_callback=None,
     callback_state=None,
-    tracevars_onlymain=TRACEVARS_ONLYMAIN_DEFAULT,
-    tracevars_both=TRACEVARS_BOTH_DEFAULT,
+    onlymain_extractor=default_onlymain_extractor,
+    both_extractor=default_both_extractor,
 ):
     """
     Run the MCMC for the BART posterior.
@@ -135,12 +149,11 @@ def run_mcmc(
         updated.
     callback_state : jax pytree, optional
         The initial state for the callbacks.
-    tracevars_onlymain : tuple of str
-        The names of the fields in `bart` to include in the main trace but not
-        in the burnin trace. For the burn-in/main distinction to make sense,
-        these fields should contain scalars or small arrays.
-    tracevars_both : tuple of str
-        The names of the fields in `bart` to include in both traces.
+    onlymain_extractor : callable, optional
+    both_extractor : callable, optional
+        Functions that extract the variables to be saved respectively only in
+        the main trace and in both traces, given the MCMC state as argument.
+        Must return a pytree, and must be vmappable.
 
     Returns
     -------
@@ -171,12 +184,11 @@ def run_mcmc(
     not include the initial state, and include the final state.
     """
 
-    def empty_trace(length, bart, tracelist):
-        bart = {k: v for k, v in bart.items() if k in tracelist}
-        return jax.vmap(lambda x: x, in_axes=None, out_axes=0, axis_size=length)(bart)
+    def empty_trace(length, bart, extractor):
+        return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
 
-    trace_both = empty_trace(n_burn + n_save, bart, tracevars_both)
-    trace_onlymain = empty_trace(n_save, bart, tracevars_onlymain)
+    trace_both = empty_trace(n_burn + n_save, bart, both_extractor)
+    trace_onlymain = empty_trace(n_save, bart, onlymain_extractor)
 
     # determine number of iterations for inner and outer loops
     n_iters = n_burn + n_skip * n_save
@@ -192,7 +204,15 @@ def run_mcmc(
     carry = (bart, 0, key, trace_both, trace_onlymain, callback_state)
     for i_outer in range(n_outer):
         carry = _run_mcmc_inner_loop(
-            carry, inner_loop_length, inner_callback, n_burn, n_save, n_skip, i_outer
+            carry,
+            inner_loop_length,
+            inner_callback,
+            onlymain_extractor,
+            both_extractor,
+            n_burn,
+            n_save,
+            n_skip,
+            i_outer,
         )
         if outer_callback is not None:
             bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
@@ -234,9 +254,17 @@ def _compute_i_skip(i_total, n_burn, n_skip):
     )
 
 
-@functools.partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2))
+@functools.partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
 def _run_mcmc_inner_loop(
-    carry, inner_loop_length, inner_callback, n_burn, n_save, n_skip, i_outer
+    carry,
+    inner_loop_length,
+    inner_callback,
+    onlymain_extractor,
+    both_extractor,
+    n_burn,
+    n_save,
+    n_skip,
+    i_outer,
 ):
     def loop(carry, _):
         bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
@@ -267,9 +295,7 @@ def _run_mcmc_inner_loop(
         i_onlymain = jnp.where(burnin, 0, (i_total - n_burn) // n_skip)
         i_both = jnp.where(burnin, i_total, n_burn + i_onlymain)
 
-        def update_trace(index, trace, bart):
-            bart = {k: v for k, v in bart.items() if k in trace}
-
+        def update_trace(index, trace, state):
             def assign_at_index(trace_array, state_array):
                 if trace_array.size:
                     return trace_array.at[index, ...].set(state_array)
@@ -279,10 +305,12 @@ def _run_mcmc_inner_loop(
                     # of length 0
                     return trace_array
 
-            return tree.map(assign_at_index, trace, bart)
+            return tree.map(assign_at_index, trace, state)
 
-        trace_onlymain = update_trace(i_onlymain, trace_onlymain, bart)
-        trace_both = update_trace(i_both, trace_both, bart)
+        trace_onlymain = update_trace(
+            i_onlymain, trace_onlymain, onlymain_extractor(bart)
+        )
+        trace_both = update_trace(i_both, trace_both, both_extractor(bart))
 
         i_total += 1
         carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
@@ -367,12 +395,12 @@ def _print_callback_outer(
             overflow=overflow,
             i_total=i_total,
             n_iters=n_burn + n_save * n_skip,
-            grow_prop_count=bart['grow_prop_count'],
-            grow_acc_count=bart['grow_acc_count'],
-            prune_prop_count=bart['prune_prop_count'],
-            prune_acc_count=bart['prune_acc_count'],
-            prop_total=len(bart['leaf_trees']),
-            fill=grove.forest_fill(bart['split_trees']),
+            grow_prop_count=bart.forest.grow_prop_count,
+            grow_acc_count=bart.forest.grow_acc_count,
+            prune_prop_count=bart.forest.prune_prop_count,
+            prune_acc_count=bart.forest.prune_acc_count,
+            prop_total=len(bart.forest.leaf_trees),
+            fill=grove.forest_fill(bart.forest.split_trees),
         )
 
 
@@ -404,7 +432,7 @@ def _convert_jax_arrays_in_args(func):
 
 
 @_convert_jax_arrays_in_args
-# convert all jax arrays in arguments because operations on the could lead to
+# convert all jax arrays in arguments because operations on them could lead to
 # deadlock with the main thread
 def _print_report(
     *,

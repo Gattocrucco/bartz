@@ -153,10 +153,6 @@ class gbart:
     maxdepth : int
         The maximum depth of the trees.
 
-    Methods
-    -------
-    predict
-
     Notes
     -----
     This interface imitates the function ``gbart`` from the R package `BART
@@ -260,7 +256,7 @@ class gbart:
 
     @functools.cached_property
     def yhat_train(self):
-        x_train = self._mcmc_state['X']
+        x_train = self._mcmc_state.X
         yhat_train = self._predict(self._main_trace, x_train)
         return self._transform_output(yhat_train, self.offset, self.scale)
 
@@ -476,15 +472,15 @@ class gbart:
 
     def _compare_resid(self):
         bart = self._mcmc_state
-        resid1 = bart['resid']
+        resid1 = bart.resid
         yhat = grove.evaluate_forest(
-            bart['X'],
-            bart['leaf_trees'],
-            bart['var_trees'],
-            bart['split_trees'],
+            bart.X,
+            bart.forest.leaf_trees,
+            bart.forest.var_trees,
+            bart.forest.split_trees,
             jnp.float32,
         )
-        resid2 = bart['y'] - yhat
+        resid2 = bart.y - yhat
         return resid1, resid2
 
     def _avg_acc(self):
@@ -523,9 +519,7 @@ class gbart:
     def _points_per_leaf_distr(self):
         from . import debug
 
-        return debug.trace_points_per_leaf_distr(
-            self._main_trace, self._mcmc_state['X']
-        )
+        return debug.trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
 
     def _check_trees(self):
         from . import debug

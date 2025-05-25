@@ -1,6 +1,6 @@
 /* bartz/docs/_static/custom.css
  *
- * Copyright (c) 2024, Giacomo Petrillo
+ * Copyright (c) 2024-2025, Giacomo Petrillo
  *
  * This file is part of bartz.
  *
@@ -37,29 +37,34 @@ h2 + dl.py.class, h2 + dl.py.function {
     margin-top: 1em;
 }
 
-dl.py.class > dd > p:first-child, dl.py.function > dd > p:first-child {
-    margin-top: 0.8em;
-}
-
-dl.field-list {
-    margin-top: 1em;
-}
-
-dl.field-list .field-even {
-    margin-top: 1em;
+/* space between parameter/attributes lists */
+dl.field-list > dd {
     margin-bottom: 1em;
 }
 
-dl.field-list .field-even:last-child {
+/* no additional space after last list in the block */
+dl.field-list > dd:last-child {
     margin-bottom: 0em;
 }
 
-p + dl.simple {
-    margin-top: 0.7em;
+/* space between paragraphs in multi-paragraph param descriptions */
+ul.simple > li > p:not(:first-child) {
+    margin-top: 0.5em;
 }
 
-.field-list p {
+/* no space between param name and first paragraph in multi-paragraph param descriptions */
+ul.simple > li > p:nth-child(2) {
+    margin-top: 0em;
+}
+
+/* space between parameters */
+ul.simple > li:not(:last-child) {
     margin-bottom: 0.5em;
+}
+
+/* highlight types that originate from type hints rather than the docstring */
+span.sphinx_autodoc_typehints-type > code {
+    background-color: #ee9;
 }
 
 /* viewcode extension */

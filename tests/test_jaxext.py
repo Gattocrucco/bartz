@@ -162,12 +162,6 @@ class TestAutoBatch:
         assert jnp.all(y == x)
 
 
-def test_leaf_dict_repr():
-    """Check LeafDict has a nice repr."""
-    x = jaxext.LeafDict(a=1)
-    assert repr(x) == str(x) == "LeafDict({'a': 1})"
-
-
 def different_keys(keya, keyb):
     """Return True iff two jax random keys are different."""
     return jnp.any(random.key_data(keya) != random.key_data(keyb)).item()

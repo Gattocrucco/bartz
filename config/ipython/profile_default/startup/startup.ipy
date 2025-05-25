@@ -1,10 +1,15 @@
 %matplotlib
 %load_ext autoreload
 %autoreload 2
+
 import appnope
 appnope.nope()
-import functools
+
+from functools import partial
 import jax
 from jax import numpy as jnp
 import numpy as np
+import equinox as eqx
+import jaxtyping as jt
+
 import bartz

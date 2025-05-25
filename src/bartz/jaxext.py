@@ -365,25 +365,6 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     return batched_func
 
 
-# XXX: is LeafDict problematic because it is mutable? Maybe I should use a
-# custom dataclass in mcmcstep and register it with tree_util.register_static.
-@tree_util.register_pytree_node_class
-class LeafDict(dict):
-    """Dictionary that acts as a leaf in jax pytrees."""
-
-    def tree_flatten(self):
-        """Implement `jax.tree.flatten`."""
-        return (), self
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        """Implement `jax.tree.unflatten`."""
-        return aux_data
-
-    def __repr__(self):
-        return f'{__class__.__name__}({super().__repr__()})'
-
-
 class split:
     """
     Split a key into `num` keys.

@@ -180,5 +180,5 @@ def check_trace(trace, state):
         trace['leaf_trees'],
         trace['var_trees'],
         trace['split_trees'],
-        state['max_split'],
+        state.max_split,
     )
