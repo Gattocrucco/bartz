@@ -188,7 +188,3 @@ python:
 .PHONY: ipython
 ipython:
 	IPYTHONDIR=config/ipython $(UV_RUN) ipython $(ARGS)
-
-.PHONY: mypy
-mypy:
-	$(UV_RUN) mypy $(ARGS)

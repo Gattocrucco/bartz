@@ -56,12 +56,10 @@ only-local = [
     "ipython>=8.36.0",
     "matplotlib>=3.10.3",
     "matplotlib-label-lines>=0.8.1",
-    "mypy>=1.15.0",
     "pre-commit>=4.2.0",
     "pydoclint>=0.6.6",
     "ruff>=0.11.9",
     "scikit-learn>=1.6.1",
-    "scipy-stubs>=1.14.1",
     "tomli>=2.2.1",
     "virtualenv>=20.31.2",
     "xgboost>=3.0.0",
@@ -178,10 +176,6 @@ treat-property-methods-as-class-attributes = true
 check-style-mismatch = true
 show-filenames-in-every-violation-message = true
 check-class-attributes = true
-
-[tool.mypy]
-files = "src/bartz/"
-cache_dir = "config/mypy_cache"
 
 [tool.uv]
 python-downloads = "never"

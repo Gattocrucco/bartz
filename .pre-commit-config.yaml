@@ -26,15 +26,6 @@ repos:
 #   rev: 0.6.6
 #   hooks:
 #     - id: pydoclint
-- repo: local
-  hooks:
-    - id: mypy
-      name: mypy
-      entry: "make mypy"
-      language: system  # no isolated env, just run the command
-      pass_filenames: false
-      types: [python]
-      require_serial: true  # script is only called once per commit
 - repo: https://github.com/abravalheri/validate-pyproject
   rev: v0.24.1
   hooks:
