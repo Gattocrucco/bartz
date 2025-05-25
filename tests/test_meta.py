@@ -24,9 +24,12 @@
 
 """Test properties of pytest itself or other utilities."""
 
-import jax
+from functools import partial
+
 import pytest
-from jax import random
+from jax import jit, random
+from jax import numpy as jnp
+from jax.errors import KeyReuseError
 
 
 @pytest.fixture
@@ -72,7 +75,7 @@ def test_random_keys_are_consumed(consume_one_key, consume_another_key, keys):
 
 def test_debug_key_reuse(keys):
     """Check that the jax debug_key_reuse option works."""
-    with pytest.raises(jax.errors.KeyReuseError):
+    with pytest.raises(KeyReuseError):
         key = keys.pop()
         random.uniform(key)
         random.uniform(key)
@@ -81,9 +84,43 @@ def test_debug_key_reuse(keys):
 def test_debug_key_reuse_within_jit(keys):
     """Check that the jax debug_key_reuse option works within a jitted function."""
 
-    @jax.jit
+    @jit
     def func(key):
         return random.uniform(key) + random.uniform(key)
 
-    with pytest.raises(jax.errors.KeyReuseError):
+    with pytest.raises(KeyReuseError):
         func(keys.pop())
+
+
+def test_jax_no_copy_behavior():
+    """Check whether jax makes actual copies of arrays in various conditions."""
+    # check buffer donation works unconditionally
+    x = jnp.arange(100)
+    xp = x.unsafe_buffer_pointer()
+
+    @partial(jit, donate_argnums=(0,))
+    def noop(x):
+        return x
+
+    y = noop(x)
+    yp = y.unsafe_buffer_pointer()
+
+    assert xp == yp
+    with pytest.raises(RuntimeError, match=r'delete'):
+        print(x)
+
+    # check jnp.array makes actual copies out of the jit
+    z = jnp.array(y)
+    zp = z.unsafe_buffer_pointer()
+
+    assert zp != yp
+
+    # check jnp.array does not make copies within jit
+    @partial(jit, donate_argnums=(0,))
+    def array(x):
+        return jnp.array(x)
+
+    q = array(y)
+    qp = q.unsafe_buffer_pointer()
+
+    assert qp == yp

@@ -35,11 +35,14 @@ import polars as pl
 import pytest
 from jax import numpy as jnp
 from jax import random
+from jax.scipy.special import ndtr
+from numpy.testing import assert_allclose, assert_array_equal
 
 import bartz
+from bartz.jaxext import split
 
-from . import util
 from .rbartpackages import BART
+from .util import assert_close_matrices
 
 
 def gen_X(key, p, n, kind):
@@ -55,7 +58,8 @@ def gen_X(key, p, n, kind):
 def f(x):
     """Conditional mean of the DGP."""
     T = 2
-    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0)
+    p, _ = x.shape
+    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0) / jnp.sqrt(p)
 
 
 def gen_w(key, n):
@@ -63,22 +67,33 @@ def gen_w(key, n):
     return jnp.exp(random.uniform(key, (n,), float, -1, 1))
 
 
-def gen_y(key, X, w):
+def gen_y(key, X, w, kind):
     """Generate responses given predictors."""
-    sigma = 0.1
-    error = sigma * random.normal(key, (X.shape[1],))
-    if w is not None:
-        error *= w
-    return f(X) + error
+    keys = split(key)
+    match kind:
+        case 'continuous':
+            sigma = 0.1
+            error = sigma * random.normal(keys.pop(), (X.shape[1],))
+            if w is not None:
+                error *= w
+            return f(X) + error
+
+        case 'probit':
+            assert w is None
+            _, n = X.shape
+            error = random.normal(keys.pop(), (n,))
+            prob = ndtr(f(X) + error)
+            return random.bernoulli(keys.pop(), prob, (n,))
 
 
-@pytest.fixture(params=[1, 2])
+@pytest.fixture(params=[1, 2, 3])
 def kw(keys, request):
     """Return a dictionary of keyword arguments for BART."""
     match request.param:
+        # continuous regression with close to default settings
         case 1:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
-            y = gen_y(keys.pop(), X, None)
+            y = gen_y(keys.pop(), X, None, 'continuous')
             return dict(
                 x_train=X,
                 y_train=y,
@@ -96,11 +111,12 @@ def kw(keys, request):
                 ),
             )
 
+        # continuous regression with weird settings
         case 2:
             p = 257  # > 256 to use uint16 for var_trees.
             X = gen_X(keys.pop(), p, 30, 'binary')
             w = gen_w(keys.pop(), X.shape[1])
-            y = gen_y(keys.pop(), X, w)
+            y = gen_y(keys.pop(), X, w, 'continuous')
             return dict(
                 x_train=X,
                 y_train=y,
@@ -109,6 +125,7 @@ def kw(keys, request):
                 ndpost=100,
                 nskip=50,
                 printevery=None,
+                # with usequants=True, numcut would have no effect
                 usequants=False,
                 # XXX problem: R BART will switch to quantiles anyway because numcut > n - 1
                 numcut=256,  # > 255 to use uint16 for X and split_trees
@@ -119,6 +136,28 @@ def kw(keys, request):
                     count_batch_size=16,
                     save_ratios=False,
                     min_points_per_leaf=None,
+                ),
+            )
+
+        # binary regression
+        case 3:
+            X = gen_X(keys.pop(), 2, 30, 'continuous')
+            y = gen_y(keys.pop(), X, None, 'probit')
+            return dict(
+                x_train=X,
+                y_train=y,
+                type='pbart',
+                w=None,
+                ntree=20,
+                ndpost=100,
+                nskip=50,
+                printevery=50,
+                usequants=True,
+                numcut=255,
+                maxdepth=6,
+                seed=keys.pop(),
+                init_kw=dict(
+                    resid_batch_size=None, count_batch_size=None, save_ratios=True
                 ),
             )
 
@@ -140,20 +179,26 @@ def test_sequential_guarantee(kw):
     kw['nskip'] -= 1
     kw['ndpost'] += 1
     bart2 = bartz.BART.gbart(**kw)
-    numpy.testing.assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
+    assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
     kw['keepevery'] = 2
     bart3 = bartz.BART.gbart(**kw)
     yhat_train = bart2.yhat_train[1::2]
-    numpy.testing.assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
+    assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
 
 
 def test_finite(kw):
-    """Check all numerical outputs are not inf or nan."""
+    """Check basic numerical outputs are not inf or nan."""
     # XXX: maybe this could be replaced by a global jax debug option
     bart = bartz.BART.gbart(**kw)
+
     assert jnp.all(jnp.isfinite(bart.yhat_train))
-    assert jnp.all(jnp.isfinite(bart.sigma))
+
+    if kw['y_train'].dtype == bool:
+        assert bart.sigma is None
+    else:
+        assert bart.sigma is not None
+        assert jnp.all(jnp.isfinite(bart.sigma))
 
 
 def test_output_shapes(kw):
@@ -164,26 +209,30 @@ def test_output_shapes(kw):
     nskip = kw['nskip']
     n = kw['y_train'].size
 
-    assert bart.offset.shape == ()
-    assert bart.scale.shape == ()
-    assert bart.lamda.shape == ()
     assert bart.yhat_train.shape == (ndpost, n)
     assert bart.yhat_test.shape == (ndpost, n)
     assert bart.yhat_train_mean.shape == (n,)
     assert bart.yhat_test_mean.shape == (n,)
-    assert bart.sigma.shape == (ndpost,)
-    assert bart.first_sigma.shape == (nskip,)
+    if kw['y_train'].dtype == bool:
+        assert bart.sigma is None
+        assert bart.first_sigma is None
+    else:
+        assert bart.sigma.shape == (ndpost,)
+        assert bart.first_sigma.shape == (nskip,)
 
 
 def test_predict(kw):
     """Check that the public BART.gbart.predict method works."""
     bart = bartz.BART.gbart(**kw)
     yhat_train = bart.predict(kw['x_train'])
-    numpy.testing.assert_array_equal(bart.yhat_train, yhat_train)
+    assert_array_equal(bart.yhat_train, yhat_train)
 
 
 def test_scale_shift(kw):
     """Check self-consistency of rescaling the inputs."""
+    if kw['y_train'].dtype == bool:
+        pytest.skip('Cannot rescale binary responses.')
+
     bart1 = bartz.BART.gbart(**kw)
 
     offset = 0.4703189
@@ -194,20 +243,27 @@ def test_scale_shift(kw):
     # can be amplified.
     bart2 = bartz.BART.gbart(**kw)
 
-    numpy.testing.assert_allclose(
-        bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-7
+    assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-7)
+    assert_allclose(
+        bart1._mcmc_state.forest.sigma_mu2,
+        bart2._mcmc_state.forest.sigma_mu2 / scale**2,
+        rtol=1e-6,
+        atol=0,
     )
-    numpy.testing.assert_allclose(bart1.scale, bart2.scale / scale, rtol=1e-6)
-    numpy.testing.assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
-    numpy.testing.assert_allclose(bart1.lamda, bart2.lamda / scale**2, rtol=1e-6)
-    util.assert_close_matrices(
+    assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
+    assert_allclose(
+        bart1._mcmc_state.sigma2_beta,
+        bart2._mcmc_state.sigma2_beta / scale**2,
+        rtol=1e-6,
+    )
+    assert_close_matrices(
         bart1.yhat_train, (bart2.yhat_train - offset) / scale, rtol=1e-5
     )
-    util.assert_close_matrices(
+    assert_close_matrices(
         bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, rtol=1e-5
     )
-    util.assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-5)
-    util.assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
+    assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-5)
+    assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
 
 
 def test_min_points_per_leaf(kw):
@@ -225,7 +281,7 @@ def test_residuals_accuracy(kw):
     kw.update(ntree=200, ndpost=1000, nskip=0)
     bart = bartz.BART.gbart(**kw)
     accum_resid, actual_resid = bart._compare_resid()
-    util.assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
+    assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 
 def set_num_datapoints(kw, n):
@@ -247,23 +303,38 @@ def test_no_datapoints(kw):
     ndpost = kw['ndpost']
     assert bart.yhat_train.shape == (ndpost, 0)
     assert bart.offset == 0
-    assert bart.scale == 1
-    assert bart.sigest == 1
+    if kw['y_train'].dtype == bool:
+        tau_num = 3
+        assert bart.sigest is None
+    else:
+        tau_num = 1
+        assert bart.sigest == 1
+    assert_allclose(
+        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+    )
 
 
 def test_one_datapoint(kw):
     """Check automatic data scaling with 1 datapoint."""
     kw = set_num_datapoints(kw, 1)
     bart = bartz.BART.gbart(**kw)
-    assert bart.scale == 1
-    assert bart.sigest == 1
+    if kw['y_train'].dtype == bool:
+        tau_num = 3
+        assert bart.sigest is None
+    else:
+        tau_num = 1
+        assert bart.sigest == 1
+    assert_allclose(
+        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+    )
 
 
 def test_two_datapoints(kw):
     """Check automatic data scaling with 2 datapoints."""
     kw = set_num_datapoints(kw, 2)
     bart = bartz.BART.gbart(**kw)
-    numpy.testing.assert_allclose(bart.sigest, kw['y_train'].std(), rtol=1e-6)
+    if kw['y_train'].dtype != bool:
+        assert_allclose(bart.sigest, kw['y_train'].std(), rtol=1e-6)
 
 
 def test_few_datapoints(kw):
@@ -288,9 +359,8 @@ def test_comparison_rbart(kw, keys):
         nskip=3000,
         ndpost=1000,
     )
-    kw['init_kw'].update(
-        min_points_per_leaf=5
-    )  # because R BART can't change this setting
+    # R BART can't change the min_points_per_leaf per leaf setting
+    kw['init_kw'].update(min_points_per_leaf=5)
 
     kw_BART = dict(
         **kw,
@@ -307,7 +377,7 @@ def test_comparison_rbart(kw, keys):
     bart = bartz.BART.gbart(X, **kw)
     rbart = BART.mc_gbart(X.T, **kw_BART)
 
-    numpy.testing.assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
+    assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
     # I would check sigest as well, but it's not in the R object despite what
     # the documentation says
 
@@ -317,8 +387,9 @@ def test_comparison_rbart(kw, keys):
     dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
     assert dist2 < rank / 10
 
-    dist2, rank = mahalanobis_distance2(bart.sigma[:, None], rbart.sigma[:, None])
-    assert dist2 < rank / 10
+    if kw['y_train'].dtype != bool:
+        dist2, rank = mahalanobis_distance2(bart.sigma[:, None], rbart.sigma[:, None])
+        assert dist2 < rank / 10
 
 
 def mahalanobis_distance2(x, y):
@@ -376,7 +447,7 @@ def test_jit(keys, kw):
     state1, pred1 = task(X, y, w, key)
     state2, pred2 = task_compiled(X, y, w, random.clone(key))
 
-    util.assert_close_matrices(pred1, pred2, rtol=1e-5)
+    assert_close_matrices(pred1, pred2, rtol=1e-5)
 
 
 def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
@@ -441,9 +512,9 @@ def test_polars(kw):
     bart2 = bartz.BART.gbart(**kw)
     pred2 = bart2.predict(kw['x_train'])
 
-    numpy.testing.assert_array_equal(bart.yhat_train, bart2.yhat_train)
-    numpy.testing.assert_array_equal(bart.sigma, bart2.sigma)
-    numpy.testing.assert_array_equal(pred, pred2)
+    assert_array_equal(bart.yhat_train, bart2.yhat_train)
+    assert_array_equal(bart.sigma, bart2.sigma)
+    assert_array_equal(pred, pred2)
 
 
 def test_data_format_mismatch(kw):

@@ -42,7 +42,7 @@ import jax
 from equinox import Module, field
 from jax import lax, random
 from jax import numpy as jnp
-from jaxtyping import Array, Bool, Float, Float32, UInt, UInt32
+from jaxtyping import Array, Bool, Float32, Int32, Key, UInt
 
 from . import grove, jaxext
 
@@ -53,39 +53,41 @@ class Forest(Module):
 
     Parameters
     ----------
-    leaf_trees :
+    leaf_trees
         The leaf values.
-    var_trees :
+    var_trees
         The decision axes.
-    split_trees :
+    split_trees
         The decision boundaries.
-    p_nonterminal :
+    p_nonterminal
         The probability of a nonterminal node at each depth, padded with a
         zero.
-    p_propose_grow :
+    p_propose_grow
         The unnormalized probability of picking a leaf for a grow proposal.
-    leaf_indices :
+    leaf_indices
         The index of the leaf each datapoints falls into, for each tree.
-    min_points_per_leaf :
+    min_points_per_leaf
         The minimum number of data points in a leaf node.
-    affluence_trees :
+    affluence_trees
         Whether a non-bottom leaf nodes contains twice `min_points_per_leaf`
         datapoints. If `min_points_per_leaf` is not specified, this is None.
-    resid_batch_size :
-    count_batch_size :
+    resid_batch_size
+    count_batch_size
         The data batch sizes for computing the sufficient statistics. If `None`,
         they are computed with no batching.
-    log_trans_prior :
+    log_trans_prior
         The log transition and prior Metropolis-Hastings ratio for the
         proposed move on each tree.
-    log_likelihood :
+    log_likelihood
         The log likelihood ratio.
-    grow_prop_count :
-    prune_prop_count :
+    grow_prop_count
+    prune_prop_count
         The number of grow/prune proposals made during one full MCMC cycle.
-    grow_acc_count :
-    prune_acc_count :
+    grow_acc_count
+    prune_acc_count
         The number of grow/prune moves accepted during one full MCMC cycle.
+    sigma_mu2
+        The prior variance of a leaf, conditional on the tree structure.
     """
 
     leaf_trees: Float32[Array, 'num_trees 2**d']
@@ -94,16 +96,17 @@ class Forest(Module):
     p_nonterminal: Float32[Array, 'd']
     p_propose_grow: Float32[Array, '2**(d-1)']
     leaf_indices: UInt[Array, 'num_trees n']
-    min_points_per_leaf: UInt32[Array, ''] | None
+    min_points_per_leaf: Int32[Array, ''] | None
     affluence_trees: Bool[Array, 'num_trees 2**(d-1)'] | None
     resid_batch_size: int | None = field(static=True)
     count_batch_size: int | None = field(static=True)
     log_trans_prior: Float32[Array, 'num_trees'] | None
     log_likelihood: Float32[Array, 'num_trees'] | None
-    grow_prop_count: UInt32[Array, '']
-    prune_prop_count: UInt32[Array, '']
-    grow_acc_count: UInt32[Array, '']
-    prune_acc_count: UInt32[Array, '']
+    grow_prop_count: Int32[Array, '']
+    prune_prop_count: Int32[Array, '']
+    grow_acc_count: Int32[Array, '']
+    prune_acc_count: Int32[Array, '']
+    sigma_mu2: Float32[Array, '']
 
 
 class State(Module):
@@ -112,47 +115,56 @@ class State(Module):
 
     Parameters
     ----------
-    resid
-        The residuals (data minus forest value). Large float to avoid
-        roundoff.
-    sigma2
-        The noise variance.
-    prec_scale
-        The scale on the error precision, i.e., ``1 / error_scale ** 2``.
-    sigma2_alpha
-        The shape parameter of the inverse gamma prior on the noise variance.
-    sigma2_beta
-        The scale parameter of the inverse gamma prior on the noise variance.
-    max_split
-        The maximum split index for each variable.
-    y
-        The response.
     X
         The predictors.
+    max_split
+        The maximum split index for each predictor.
+    y
+        The response. If the data type is `bool`, the model is binary regression.
+    resid
+        The residuals (`y` or `z` minus sum of trees).
+    z
+        The latent variable for binary regression. `None` in continuous
+        regression.
+    offset
+        Constant shift added to the sum of trees.
+    sigma2
+        The error variance. `None` in binary regression.
+    prec_scale
+        The scale on the error precision, i.e., ``1 / error_scale ** 2``.
+        `None` in binary regression.
+    sigma2_alpha
+    sigma2_beta
+        The shape and scale parameters of the inverse gamma prior on the noise
+        variance. `None` in binary regression.
     forest
-        The sum of trees model, as a `Forest` object.
+        The sum of trees model.
     """
 
     X: UInt[Array, 'p n']
     max_split: UInt[Array, 'p']
-    y: Float32[Array, 'n']
+    y: Float32[Array, 'n'] | Bool[Array, 'n']
+    z: None | Float32[Array, 'n']
+    offset: Float32[Array, '']
     resid: Float32[Array, 'n']
-    sigma2: Float32[Array, '']
+    sigma2: Float32[Array, ''] | None
     prec_scale: Float32[Array, 'n'] | None
-    sigma2_alpha: Float32[Array, '']
-    sigma2_beta: Float32[Array, '']
+    sigma2_alpha: Float32[Array, ''] | None
+    sigma2_beta: Float32[Array, ''] | None
     forest: Forest
 
 
 def init(
     *,
     X: UInt[Any, 'p n'],
-    y: Float32[Any, 'n'],
+    y: Float32[Any, 'n'] | Bool[Any, 'n'],
+    offset: float | Float32[Any, ''] = 0.0,
     max_split: UInt[Any, 'p'],
     num_trees: int,
-    p_nonterminal: Float[Any, 'd-1'],
-    sigma2_alpha: float,
-    sigma2_beta: float,
+    p_nonterminal: Float32[Any, 'd-1'],
+    sigma_mu2: float | Float32[Any, ''],
+    sigma2_alpha: float | Float32[Any, ''] | None = None,
+    sigma2_beta: float | Float32[Any, ''] | None = None,
     error_scale: Float32[Any, 'n'] | None = None,
     min_points_per_leaf: int | None = None,
     resid_batch_size: int | None | str = 'auto',
@@ -164,40 +176,49 @@ def init(
 
     Parameters
     ----------
-    X :
+    X
         The predictors. Note this is trasposed compared to the usual convention.
-    y :
-        The response.
-    max_split :
+    y
+        The response. If the data type is `bool`, the regression model is binary
+        regression with probit.
+    offset
+        Constant shift added to the sum of trees. 0 if not specified.
+    max_split
         The maximum split index for each variable. All split ranges start at 1.
-    num_trees :
+    num_trees
         The number of trees in the forest.
-    p_nonterminal :
+    p_nonterminal
         The probability of a nonterminal node at each depth. The maximum depth
         of trees is fixed by the length of this array.
-    sigma2_alpha :
-        The shape parameter of the inverse gamma prior on the error variance.
-    sigma2_beta :
-        The scale parameter of the inverse gamma prior on the error variance.
-    error_scale :
+    sigma_mu2
+        The prior variance of a leaf, conditional on the tree structure. The
+        prior variance of the sum of trees is ``num_trees * sigma_mu2``. The
+        prior mean of leaves is always zero.
+    sigma2_alpha
+    sigma2_beta
+        The shape and scale parameters of the inverse gamma prior on the error
+        variance. Leave unspecified for binary regression.
+    error_scale
         Each error is scaled by the corresponding factor in `error_scale`, so
         the error variance for ``y[i]`` is ``sigma2 * error_scale[i] ** 2``.
-    min_points_per_leaf :
+        Not supported for binary regression. If not specified, defaults to 1 for
+        all points, but potentially skipping calculations.
+    min_points_per_leaf
         The minimum number of data points in a leaf node. 0 if not specified.
-    resid_batch_size :
-    count_batch_size :
+    resid_batch_size
+    count_batch_size
         The batch sizes, along datapoints, for summing the residuals and
         counting the number of datapoints in each leaf. `None` for no batching.
         If 'auto', pick a value based on the device of `y`, or the default
         device.
-    save_ratios :
+    save_ratios
         Whether to save the Metropolis-Hastings ratios.
 
     Returns
     -------
     An initialized BART MCMC state.
     """
-    p_nonterminal = jnp.asarray(p_nonterminal, jnp.float32)
+    p_nonterminal = jnp.asarray(p_nonterminal)
     p_nonterminal = jnp.pad(p_nonterminal, (0, 1))
     max_depth = p_nonterminal.size
 
@@ -205,28 +226,42 @@ def init(
     def make_forest(max_depth, dtype):
         return grove.make_tree(max_depth, dtype)
 
-    y = jnp.asarray(y, jnp.float32)
+    y = jnp.asarray(y)
+    offset = jnp.asarray(offset)
+
     resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
-    sigma2 = jnp.array(sigma2_beta / sigma2_alpha, jnp.float32)
-    sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
-    # TODO: I don't like this error check, these functions should be low-level
-    # and just do the thing. Why is it here?
+
+    is_binary = y.dtype == bool
+    if is_binary:
+        if (error_scale, sigma2_alpha, sigma2_beta) != 3 * (None,):
+            raise ValueError(
+                'error_scale, sigma2_alpha, and sigma2_beta must be set '
+                ' to `None` for binary regression.'
+            )
+        sigma2 = None
+    else:
+        sigma2_alpha = jnp.asarray(sigma2_alpha)
+        sigma2_beta = jnp.asarray(sigma2_beta)
+        sigma2 = sigma2_beta / sigma2_alpha
+        # sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
+        # TODO: I don't like this isfinite check, these functions should be
+        # low-level and just do the thing. Why was it here?
 
     bart = State(
         X=jnp.asarray(X),
         max_split=jnp.asarray(max_split),
         y=y,
-        resid=jnp.array(y, jnp.float32),
+        z=jnp.full(y.shape, offset) if is_binary else None,
+        offset=offset,
+        resid=jnp.zeros(y.shape) if is_binary else y - offset,
         sigma2=sigma2,
         prec_scale=(
-            None
-            if error_scale is None
-            else lax.reciprocal(jnp.square(jnp.asarray(error_scale, jnp.float32)))
+            None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
         ),
-        sigma2_alpha=jnp.asarray(sigma2_alpha, jnp.float32),
-        sigma2_beta=jnp.asarray(sigma2_beta, jnp.float32),
+        sigma2_alpha=sigma2_alpha,
+        sigma2_beta=sigma2_beta,
         forest=Forest(
             leaf_trees=make_forest(max_depth, jnp.float32),
             var_trees=make_forest(
@@ -258,6 +293,7 @@ def init(
             count_batch_size=count_batch_size,
             log_trans_prior=jnp.full(num_trees, jnp.nan) if save_ratios else None,
             log_likelihood=jnp.full(num_trees, jnp.nan) if save_ratios else None,
+            sigma_mu2=jnp.asarray(sigma_mu2),
         ),
     )
 
@@ -305,25 +341,32 @@ def _choose_suffstat_batch_size(
 
 
 @jax.jit
-def step(key, bart):
+def step(key: Key[Array, ''], bart: State) -> State:
     """
     Perform one full MCMC step on a BART state.
 
     Parameters
     ----------
-    key : jax.dtypes.prng_key array
+    key
         A jax random key.
-    bart : dict
+    bart
         A BART mcmc state, as created by `init`.
 
     Returns
     -------
-    bart : dict
-        The new BART mcmc state.
+    The new BART mcmc state.
     """
     keys = jaxext.split(key)
-    bart = sample_trees(keys.pop(), bart)
-    return sample_sigma(keys.pop(), bart)
+
+    if bart.y.dtype == bool:  # binary regression
+        bart = replace(bart, sigma2=jnp.float32(1))
+        bart = sample_trees(keys.pop(), bart)
+        bart = replace(bart, sigma2=None)
+        return sample_z(keys.pop(), bart)
+
+    else:  # continuous regression
+        bart = sample_trees(keys.pop(), bart)
+        return sample_sigma(keys.pop(), bart)
 
 
 def sample_trees(key, bart):
@@ -347,7 +390,7 @@ def sample_trees(key, bart):
     This function zeroes the proposal counters.
     """
     keys = jaxext.split(key)
-    moves = sample_moves(keys.pop(), bart)
+    moves = sample_moves(keys.pop(), bart.forest, bart.max_split)
     return accept_moves_and_sample_leaves(keys.pop(), bart, moves)
 
 
@@ -399,7 +442,7 @@ class Moves(Module):
     to_prune: Bool[Array, 'num_trees'] | None
 
 
-def sample_moves(key, bart):
+def sample_moves(key, forest, max_split):
     """
     Propose moves for all the trees.
 
@@ -416,25 +459,25 @@ def sample_moves(key, bart):
         A dictionary with fields:
 
     """
-    num_trees, _ = bart.forest.leaf_trees.shape
+    num_trees, _ = forest.leaf_trees.shape
     keys = jaxext.split(key, 1 + 2 * num_trees)
 
     # compute moves
     grow_moves = grow_move(
         keys.pop(num_trees),
-        bart.forest.var_trees,
-        bart.forest.split_trees,
-        bart.forest.affluence_trees,
-        bart.max_split,
-        bart.forest.p_nonterminal,
-        bart.forest.p_propose_grow,
+        forest.var_trees,
+        forest.split_trees,
+        forest.affluence_trees,
+        max_split,
+        forest.p_nonterminal,
+        forest.p_propose_grow,
     )
     prune_moves = prune_move(
         keys.pop(num_trees),
-        bart.forest.split_trees,
-        bart.forest.affluence_trees,
-        bart.forest.p_nonterminal,
-        bart.forest.p_propose_grow,
+        forest.split_trees,
+        forest.affluence_trees,
+        forest.p_nonterminal,
+        forest.p_propose_grow,
     )
 
     u, logu = random.uniform(keys.pop(), (2, num_trees), jnp.float32)
@@ -1087,9 +1130,18 @@ def accept_moves_parallel_stage(key, bart, moves):
     )
 
     # count number of datapoints per leaf
-    count_trees, move_counts = compute_count_trees(
-        bart.forest.leaf_indices, moves, bart.forest.count_batch_size
-    )
+    if bart.forest.min_points_per_leaf is not None or bart.prec_scale is None:
+        count_trees, move_counts = compute_count_trees(
+            bart.forest.leaf_indices, moves, bart.forest.count_batch_size
+        )
+    else:
+        # move_counts is passed later to a function, but then is unused under
+        # this condition
+        move_counts = None
+
+    # Check if some nodes can't surely be grown because they don't have enough
+    # datapoints. This check is not actually used now, it will be used at the
+    # beginning of the next step to propose moves.
     if bart.forest.min_points_per_leaf is not None:
         count_half_trees = count_trees[:, : bart.forest.var_trees.shape[1]]
         bart = replace(
@@ -1123,8 +1175,10 @@ def accept_moves_parallel_stage(key, bart, moves):
         ),
     )
 
-    prelkv, prelk = precompute_likelihood_terms(bart.sigma2, move_precs)
-    prelf = precompute_leaf_terms(key, prec_trees, bart.sigma2)
+    prelkv, prelk = precompute_likelihood_terms(
+        bart.sigma2, bart.forest.sigma_mu2, move_precs
+    )
+    prelf = precompute_leaf_terms(key, prec_trees, bart.sigma2, bart.forest.sigma_mu2)
 
     return bart, moves, prec_trees, move_counts, move_precs, prelkv, prelk, prelf
 
@@ -1170,7 +1224,7 @@ class Counts(Module):
     right :
         Number of datapoints in the right child.
     total :
-        Total number of datapoints in the parent (``= left + right``).
+        Number of datapoints in the parent (``= left + right``).
     """
 
     left: UInt[Array, 'num_trees']
@@ -1400,9 +1454,7 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
         The updated moves, with the field 'partial_ratio' replaced by
         'log_trans_prior_ratio'.
     """
-    p_prune = compute_p_prune(
-        moves, move_counts.left, move_counts.right, min_points_per_leaf
-    )
+    p_prune = compute_p_prune(moves, move_counts, min_points_per_leaf)
     return replace(
         moves,
         log_trans_prior_ratio=jnp.log(moves.partial_ratio * p_prune),
@@ -1410,7 +1462,7 @@ def complete_ratio(moves, move_counts, min_points_per_leaf):
     )
 
 
-def compute_p_prune(moves: Moves, left_count, right_count, min_points_per_leaf):
+def compute_p_prune(moves: Moves, move_counts: Counts, min_points_per_leaf):
     """
     Compute the probability of proposing a prune move.
 
@@ -1434,8 +1486,8 @@ def compute_p_prune(moves: Moves, left_count, right_count, min_points_per_leaf):
     other_growable_leaves = moves.num_growable >= 2
     new_leaves_growable = moves.node < moves.var_trees.shape[1] // 2
     if min_points_per_leaf is not None:
-        any_above_threshold = left_count >= 2 * min_points_per_leaf
-        any_above_threshold |= right_count >= 2 * min_points_per_leaf
+        any_above_threshold = move_counts.left >= 2 * min_points_per_leaf
+        any_above_threshold |= move_counts.right >= 2 * min_points_per_leaf
         new_leaves_growable &= any_above_threshold
     grow_again_allowed = other_growable_leaves | new_leaves_growable
     grow_p_prune = jnp.where(grow_again_allowed, 0.5, 1)
@@ -1513,7 +1565,7 @@ class PreLk(Module):
     exp_factor: Float32[Array, '']
 
 
-def precompute_likelihood_terms(sigma2, move_precs: Precs):
+def precompute_likelihood_terms(sigma2, sigma_mu2, move_precs: Precs):
     """
     Pre-compute terms used in the likelihood ratio of the acceptance step.
 
@@ -1534,8 +1586,6 @@ def precompute_likelihood_terms(sigma2, move_precs: Precs):
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
-    num_trees = len(move_precs.total)
-    sigma_mu2 = 1 / num_trees
     sigma2_left = sigma2 + move_precs.left * sigma_mu2
     sigma2_right = sigma2 + move_precs.right * sigma_mu2
     sigma2_total = sigma2 + move_precs.total * sigma_mu2
@@ -1570,7 +1620,7 @@ class PreLf(Module):
     centered_leaves: Float32[Array, 'num_trees 2**d']
 
 
-def precompute_leaf_terms(key, prec_trees, sigma2) -> PreLf:
+def precompute_leaf_terms(key, prec_trees, sigma2, sigma_mu2) -> PreLf:
     """
     Pre-compute terms used to sample leaves from their posterior.
 
@@ -1588,12 +1638,20 @@ def precompute_leaf_terms(key, prec_trees, sigma2) -> PreLf:
     prelf : dict
         Dictionary with pre-computed terms of the leaf sampling, with fields:
     """
-    num_trees = len(prec_trees)
     prec_lk = prec_trees / sigma2
-    var_post = lax.reciprocal(prec_lk + num_trees)  # = 1 / (prec_lk + prec_prior)
+    prec_prior = lax.reciprocal(sigma_mu2)
+    var_post = lax.reciprocal(prec_lk + prec_prior)
     z = random.normal(key, prec_trees.shape, sigma2.dtype)
     return PreLf(
-        mean_factor=var_post / sigma2,  # = mean_lk * prec_lk * var_post / resid_tree
+        mean_factor=var_post / sigma2,
+        # mean = mean_lk * prec_lk * var_post
+        # resid_tree = mean_lk * prec_tree  -->
+        #    -->  mean_lk = resid_tree / prec_tree  (kind of)
+        # mean_factor =
+        #    = mean / resid_tree =
+        #    = resid_tree / prec_tree * prec_lk * var_post / resid_tree =
+        #    = 1 / prec_tree * prec_tree / sigma2 * var_post =
+        #    = var_post / sigma2
         centered_leaves=z * jnp.sqrt(var_post),
     )
 
@@ -1643,7 +1701,6 @@ def accept_moves_sequential_stage(
     def loop(resid, item):
         resid, leaf_tree, acc, to_prune, ratios = accept_move_and_sample_leaves(
             bart.X,
-            len(bart.forest.leaf_trees),
             bart.forest.resid_batch_size,
             resid,
             bart.prec_scale,
@@ -1684,7 +1741,6 @@ def accept_moves_sequential_stage(
 
 def accept_move_and_sample_leaves(
     X,
-    num_trees,
     resid_batch_size,
     resid,
     prec_scale,
@@ -1707,8 +1763,6 @@ def accept_move_and_sample_leaves(
     ----------
     X : int array (p, n)
         The predictors.
-    num_trees : int
-        The number of trees in the forest.
     resid_batch_size : int, None
         The batch size for computing the sum of residuals in each leaf.
     resid : float array (n,)
@@ -1844,9 +1898,7 @@ def sum_resid(scaled_resid, leaf_indices, tree_size, batch_size):
         aggr_func = _aggregate_scatter
     else:
         aggr_func = functools.partial(_aggregate_batched_onetree, batch_size=batch_size)
-    return aggr_func(
-        scaled_resid, leaf_indices, tree_size, jnp.float32
-    )  # TODO: use large_float
+    return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32)
 
 
 def _aggregate_batched_onetree(values, indices, size, dtype, batch_size):
@@ -2015,3 +2067,30 @@ def sample_sigma(key, bart):
 
     sample = random.gamma(key, alpha)
     return replace(bart, sigma2=beta / sample)
+
+
+def sample_z(key: Key[Array, ''], bart: State) -> State:
+    """
+    Update the latent variable for binary regression.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    bart
+        A BART MCMC state.
+
+    Returns
+    -------
+    The updated BART MCMC state.
+    """
+    trees_plus_offset = bart.z - bart.resid
+    lower = jnp.where(bart.y, -trees_plus_offset, -jnp.inf)
+    upper = jnp.where(bart.y, jnp.inf, -trees_plus_offset)
+    resid = random.truncated_normal(key, lower, upper)
+    # TODO jax's implementation of truncated_normal is not good, it just does
+    # cdf inversion with erf and erf_inv. I can do better, at least avoiding to
+    # compute one of the boundaries, and maybe also flipping and using ndtr
+    # instead of erf for numerical stability (open an issue in jax?)
+    z = trees_plus_offset + resid
+    return replace(bart, z=z, resid=resid)

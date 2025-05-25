@@ -6,6 +6,7 @@ import appnope
 appnope.nope()
 
 from functools import partial
+
 import jax
 from jax import numpy as jnp
 import numpy as np

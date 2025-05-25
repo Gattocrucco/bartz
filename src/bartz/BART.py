@@ -25,11 +25,17 @@
 """Implement a user interface that mimics the R BART package."""
 
 import functools
+import math
+from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.special import ndtri
+from jaxtyping import Array, Bool, Float, Float32
 
 from . import grove, jaxext, mcmcloop, mcmcstep, prepcovars
+
+FloatLike = float | Float[Any, '']
 
 
 class gbart:
@@ -48,6 +54,9 @@ class gbart:
         The training responses.
     x_test : array (p, m) or DataFrame, optional
         The test predictors.
+    type
+        The type of regression. 'wbart' for continuous regression, 'pbart' for
+        binary regression with probit link.
     usequants : bool, default False
         Whether to use predictors quantiles instead of a uniform grid to bin
         predictors.
@@ -72,13 +81,20 @@ class gbart:
         Parameters of the prior on tree node generation. The probability that a
         node at depth `d` (0-based) is non-terminal is ``base / (1 + d) **
         power``.
-    lamda : float, optional
-        The scale of the prior on the noise variance. If ``lamda==1``, the
-        prior is an inverse chi-squared scaled to have harmonic mean 1. If
-        not specified, it is set based on `sigest` and `sigquant`.
-    offset : float, optional
+    tau_num
+        The numerator in the expression that determines the prior standard
+        deviation of leaves. If not specified, default to ``(max(y_train) -
+        min(y_train)) / 2`` (or 1 if `y_train` has less than two elements) for
+        continuous regression, and 3 for binary regression.
+    lamda
+        The prior harmonic mean of the error variance. (The harmonic mean of x
+        is 1/mean(1/x).) If not specified, it is set based on `sigest` and
+        `sigquant`.
+    offset
         The prior mean of the latent mean function. If not specified, it is set
-        to the mean of `y_train`. If `y_train` is empty, it is set to 0.
+        to the mean of `y_train` for continuous regression, and to
+        ``Phi^-1(mean(y_train))`` for binary regression. If `y_train` is empty,
+        `offset` is set to 0.
     w : array (n,), optional
         Coefficients that rescale the error standard deviation on each
         datapoint. Not specifying `w` is equivalent to setting it to 1 for all
@@ -142,16 +158,8 @@ class gbart:
         The standard deviation of the error in the burn-in phase.
     offset : float
         The prior mean of the latent mean function.
-    scale : float
-        The prior standard deviation of the latent mean function.
-    lamda : float
-        The prior harmonic mean of the error variance.
     sigest : float or None
         The estimated standard deviation of the error used to set `lamda`.
-    ntree : int
-        The number of trees.
-    maxdepth : int
-        The maximum depth of the trees.
 
     Notes
     -----
@@ -160,14 +168,17 @@ class gbart:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
       instead of per column.
+    - If `type` is not specified, it is determined solely based on the data type
+      of `y_train`, and not on whether it contains only two unique values.
     - If ``usequants=False``, R BART switches to quantiles anyway if there are
       less predictor values than the required number of bins, while bartz
       always follows the specification.
     - The error variance parameter is called `lamda` instead of `lambda`.
     - `rm_const` is always `False`.
     - The default `numcut` is 255 instead of 100.
-    - A lot of functionality is missing (variable selection, discrete response).
+    - A lot of functionality is missing (e.g., variable selection).
     - There are some additional attributes, and some missing.
+    - The trees have a maximum depth.
 
     """
 
@@ -177,6 +188,7 @@ class gbart:
         y_train,
         *,
         x_test=None,
+        type: Literal['wbart', 'pbart'] = 'wbart',
         usequants=False,
         sigest=None,
         sigdf=3,
@@ -184,8 +196,9 @@ class gbart:
         k=2,
         power=2,
         base=0.95,
-        lamda=None,
-        offset=None,
+        lamda: FloatLike | None = None,
+        tau_num: FloatLike | None = None,
+        offset: FloatLike | None = None,
         w=None,
         ntree=200,
         numcut=255,
@@ -205,22 +218,25 @@ class gbart:
             w, _ = self._process_response_input(w)
             self._check_same_length(x_train, w)
 
+        y_train = self._process_type_settings(y_train, type, w)
+        # from here onwards, the type is determined by y_train.dtype == bool
         offset = self._process_offset_settings(y_train, offset)
-        scale = self._process_scale_settings(y_train, k)
-        lamda, sigest = self._process_noise_variance_settings(
-            x_train, y_train, sigest, sigdf, sigquant, lamda, offset
+        sigma_mu = self._process_leaf_sdev_settings(y_train, k, ntree, tau_num)
+        lamda, sigest = self._process_error_variance_settings(
+            x_train, y_train, sigest, sigdf, sigquant, lamda
         )
 
         splits, max_split = self._determine_splits(x_train, usequants, numcut)
         x_train = self._bin_predictors(x_train, splits)
-        y_train, lamda_scaled = self._transform_input(y_train, lamda, offset, scale)
 
         mcmc_state = self._setup_mcmc(
             x_train,
             y_train,
+            offset,
             w,
             max_split,
-            lamda_scaled,
+            lamda,
+            sigma_mu,
             sigdf,
             power,
             base,
@@ -232,15 +248,11 @@ class gbart:
             mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
         )
 
-        sigma = self._extract_sigma(main_trace, scale)
-        first_sigma = self._extract_sigma(burnin_trace, scale)
+        sigma = self._extract_sigma(main_trace)
+        first_sigma = self._extract_sigma(burnin_trace)
 
-        self.offset = offset
-        self.scale = scale
-        self.lamda = lamda
+        self.offset = final_state.offset  # from the state because of buffer donation
         self.sigest = sigest
-        self.ntree = ntree
-        self.maxdepth = maxdepth
         self.sigma = sigma
         self.first_sigma = first_sigma
 
@@ -257,8 +269,7 @@ class gbart:
     @functools.cached_property
     def yhat_train(self):
         x_train = self._mcmc_state.X
-        yhat_train = self._predict(self._main_trace, x_train)
-        return self._transform_output(yhat_train, self.offset, self.scale)
+        return self._predict(self._main_trace, x_train)
 
     @functools.cached_property
     def yhat_train_mean(self):
@@ -289,8 +300,7 @@ class gbart:
                 f'Input format mismatch: {x_test_fmt=} != x_train_fmt={self._x_train_fmt!r}'
             )
         x_test = self._bin_predictors(x_test, self._splits)
-        yhat_test = self._predict(self._main_trace, x_test)
-        return self._transform_output(yhat_test, self.offset, self.scale)
+        return self._predict(self._main_trace, x_test)
 
     @staticmethod
     def _process_predictor_input(x):
@@ -320,18 +330,26 @@ class gbart:
         assert get_length(x1) == get_length(x2)
 
     @staticmethod
-    def _process_noise_variance_settings(
-        x_train, y_train, sigest, sigdf, sigquant, lamda, offset
-    ):
-        if lamda is not None:
+    def _process_error_variance_settings(
+        x_train, y_train, sigest, sigdf, sigquant, lamda
+    ) -> tuple[Float32[Array, ''] | None, ...]:
+        if y_train.dtype == bool:
+            if sigest is not None:
+                raise ValueError('Let `sigest=None` for binary regression')
+            if lamda is not None:
+                raise ValueError('Let `lamda=None` for binary regression')
+            return None, None
+        elif lamda is not None:
+            if sigest is not None:
+                raise ValueError('Let `sigest=None` if `lamda` is specified')
             return lamda, None
         else:
             if sigest is not None:
-                sigest2 = sigest * sigest
+                sigest2 = jnp.square(sigest)
             elif y_train.size < 2:
                 sigest2 = 1
             elif y_train.size <= x_train.shape[0]:
-                sigest2 = jnp.var(y_train - offset)
+                sigest2 = jnp.var(y_train)
             else:
                 x_centered = x_train.T - x_train.mean(axis=1)
                 y_centered = y_train - y_train.mean()
@@ -346,20 +364,62 @@ class gbart:
             return sigest2 / invchi2rid, jnp.sqrt(sigest2)
 
     @staticmethod
-    def _process_offset_settings(y_train, offset):
-        if offset is not None:
-            return offset
-        elif y_train.size < 1:
-            return 0
-        else:
-            return y_train.mean()
+    def _process_type_settings(y_train, type, w):
+        match type:
+            case 'wbart':
+                if y_train.dtype != jnp.float32:
+                    raise TypeError(
+                        'Continuous regression requires y_train.dtype=float32,'
+                        f' got {y_train.dtype=} instead.'
+                    )
+            case 'pbart':
+                if w is not None:
+                    raise ValueError(
+                        'Binary regression does not support weights, set `w=None`'
+                    )
+                if y_train.dtype != bool:
+                    raise TypeError(
+                        'Binary regression requires y_train.dtype=bool,'
+                        f' got {y_train.dtype=} instead.'
+                    )
+            case _:
+                raise ValueError(f'Invalid {type=}')
+
+        return y_train
 
     @staticmethod
-    def _process_scale_settings(y_train, k):
-        if y_train.size < 2:
-            return 1
+    def _process_offset_settings(
+        y_train: Float32[Array, 'n'] | Bool[Array, 'n'],
+        offset: float | Float32[Any, ''] | None,
+    ) -> Float32[Array, '']:
+        if offset is not None:
+            return jnp.asarray(offset)
+        elif y_train.size < 1:
+            return jnp.array(0.0)
         else:
-            return (y_train.max() - y_train.min()) / (2 * k)
+            mean = y_train.mean()
+
+        if y_train.dtype == bool:
+            return ndtri(mean)
+        else:
+            return mean
+
+    @staticmethod
+    def _process_leaf_sdev_settings(
+        y_train: Float32[Array, 'n'] | Bool[Array, 'n'],
+        k: float,
+        ntree: int,
+        tau_num: FloatLike | None,
+    ):
+        if tau_num is None:
+            if y_train.dtype == bool:
+                tau_num = 3.0
+            elif y_train.size < 2:
+                tau_num = 1.0
+            else:
+                tau_num = (y_train.max() - y_train.min()) / 2
+
+        return tau_num / (k * math.sqrt(ntree))
 
     @staticmethod
     def _determine_splits(x_train, usequants, numcut):
@@ -373,18 +433,14 @@ class gbart:
         return prepcovars.bin_predictors(x, splits)
 
     @staticmethod
-    def _transform_input(y, lamda, offset, scale):
-        y = (y - offset) / scale
-        lamda = lamda / (scale * scale)
-        return y, lamda
-
-    @staticmethod
     def _setup_mcmc(
         x_train,
         y_train,
+        offset,
         w,
         max_split,
         lamda,
+        sigma_mu,
         sigdf,
         power,
         base,
@@ -394,15 +450,24 @@ class gbart:
     ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
-        sigma2_alpha = sigdf / 2
-        sigma2_beta = lamda * sigma2_alpha
+
+        if y_train.dtype == bool:
+            sigma2_alpha = None
+            sigma2_beta = None
+        else:
+            sigma2_alpha = sigdf / 2
+            sigma2_beta = lamda * sigma2_alpha
+
         kw = dict(
             X=x_train,
-            y=y_train,
+            # copy y_train because it's going to be donated in the mcmc loop
+            y=jnp.array(y_train),
+            offset=offset,
             error_scale=w,
             max_split=max_split,
             num_trees=ntree,
             p_nonterminal=p_nonterminal,
+            sigma_mu2=jnp.square(sigma_mu),
             sigma2_alpha=sigma2_alpha,
             sigma2_beta=sigma2_beta,
             min_points_per_leaf=5,
@@ -435,16 +500,15 @@ class gbart:
         return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
 
     @staticmethod
+    def _extract_sigma(trace) -> Float32[Array, 'trace_length'] | None:
+        if trace['sigma2'] is None:
+            return None
+        else:
+            return jnp.sqrt(trace['sigma2'])
+
+    @staticmethod
     def _predict(trace, x):
         return mcmcloop.evaluate_trace(trace, x)
-
-    @staticmethod
-    def _transform_output(y, offset, scale):
-        return offset + scale * y
-
-    @staticmethod
-    def _extract_sigma(trace, scale):
-        return scale * jnp.sqrt(trace['sigma2'])
 
     def _show_tree(self, i_sample, i_tree, print_all=False):
         from . import debug
@@ -468,19 +532,26 @@ class gbart:
             )
             beta = bart['sigma2_beta'] + norm2 / 2
         sigma2 = beta / alpha
-        return jnp.sqrt(sigma2) * self.scale
+        return jnp.sqrt(sigma2)
 
     def _compare_resid(self):
         bart = self._mcmc_state
         resid1 = bart.resid
-        yhat = grove.evaluate_forest(
+
+        trees = grove.evaluate_forest(
             bart.X,
             bart.forest.leaf_trees,
             bart.forest.var_trees,
             bart.forest.split_trees,
-            jnp.float32,
+            jnp.float32,  # TODO remove these configurable dtypes around
         )
-        resid2 = bart.y - yhat
+
+        if bart.z is not None:
+            ref = bart.z
+        else:
+            ref = bart.y
+        resid2 = ref - (trees + bart.offset)
+
         return resid1, resid2
 
     def _avg_acc(self):

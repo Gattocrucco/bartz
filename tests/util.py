@@ -28,7 +28,7 @@ import numpy as np
 from scipy import linalg
 
 
-def assert_close_matrices(actual, desired, *, rtol=0, atol=0, tozero=False):
+def assert_close_matrices(actual, desired, *, rtol=0.0, atol=0.0, tozero=False):
     """
     Check if two matrices are similar.
 

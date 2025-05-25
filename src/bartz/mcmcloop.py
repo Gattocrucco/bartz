@@ -42,6 +42,7 @@ def default_onlymain_extractor(state: State) -> dict[str, Real[Array, '...']]:
         leaf_trees=state.forest.leaf_trees,
         var_trees=state.forest.var_trees,
         split_trees=state.forest.split_trees,
+        offset=state.offset,
     )
 
 
@@ -82,7 +83,9 @@ def run_mcmc(
         A key for random number generation.
     bart : dict
         The initial MCMC state, as created and updated by the functions in
-        `bartz.mcmcstep`.
+        `bartz.mcmcstep`. The MCMC loop uses buffer donation to avoid copies,
+        so this variable is invalidated after running `run_mcmc`. Make a copy
+        beforehand to use it again.
     n_save : int
         The number of iterations to save.
     n_burn : int, default 0
@@ -498,11 +501,11 @@ def evaluate_trace(trace, X):
     evaluate_trees = functools.partial(grove.evaluate_forest, sum_trees=False)
     evaluate_trees = jaxext.autobatch(evaluate_trees, 2**29, (None, 0, 0, 0))
 
-    def loop(_, state):
+    def loop(_, row):
         values = evaluate_trees(
-            X, state['leaf_trees'], state['var_trees'], state['split_trees']
+            X, row['leaf_trees'], row['var_trees'], row['split_trees']
         )
-        return None, jnp.sum(values, axis=0, dtype=jnp.float32)
+        return None, row['offset'] + jnp.sum(values, axis=0, dtype=jnp.float32)
 
     _, y = lax.scan(loop, None, trace)
     return y
