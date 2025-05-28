@@ -35,7 +35,9 @@ import polars as pl
 import pytest
 from jax import numpy as jnp
 from jax import random
+from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
+from jaxtyping import Array, Float
 from numpy.testing import assert_allclose, assert_array_equal
 
 import bartz
@@ -381,50 +383,76 @@ def test_comparison_rbart(kw, keys):
     # I would check sigest as well, but it's not in the R object despite what
     # the documentation says
 
-    # TODO: instead of this comparison function which I made up without enough
-    # care, use the multivariate Gelman-Rubin R-hat, which is something similar
-    # but very likely better thought out.
-    dist2, rank = mahalanobis_distance2(bart.yhat_train, rbart.yhat_train)
-    assert dist2 < rank / 10
+    rhat_yhat_train = multivariate_rhat(jnp.stack([bart.yhat_train, rbart.yhat_train]))
+    assert rhat_yhat_train < 1.2
 
     if kw['y_train'].dtype != bool:
-        dist2, rank = mahalanobis_distance2(bart.sigma[:, None], rbart.sigma[:, None])
-        assert dist2 < rank / 10
+        rhat_sigma = multivariate_rhat(
+            jnp.stack([bart.sigma[:, None], rbart.sigma[:, None]])
+        )
+        assert rhat_sigma < 1.02
 
 
-def mahalanobis_distance2(x, y):
-    """Compute the Mahalanobis squared distance, given observations.
+def multivariate_rhat(chains: Float[Array, 'chain sample dim']) -> Float[Array, '']:
+    """
+    Compute the multivariate Gelman-Rubin R-hat.
 
     Parameters
     ----------
-    x : array (nobs, dim)
-    y : array (nobs, dim)
-        The two ``dim``-dimensional variables to compare.
+    chains
+        Independent chains of samples of a vector.
 
     Returns
     -------
-    dist2 : float
-        The Mahalanobis squared distance between the means of the two variables.
-        The distance is the euclidean distance with metric given by the inverse
-        of the sample covariance matrix of the average of `x` and `y`.
-    rank : int
-        The estimated rank of the covariance matrix.
+    Multivariate R-hat statistic.
     """
-    avg = (x + y) / 2
-    cov = jnp.atleast_2d(jnp.cov(avg, rowvar=False))
+    m, n, p = chains.shape
 
-    w, O = jnp.linalg.eigh(cov)  # cov = O w O^T
-    eps = len(w) * jnp.max(jnp.abs(w)) * jnp.finfo(w.dtype).eps
-    nonzero = w > eps
-    w = w[nonzero]
-    O = O[:, nonzero]
-    rank = len(w)
+    if m < 2:
+        raise ValueError('Need at least 2 chains')
+    if n < 2:
+        raise ValueError('Need at least 2 samples per chain')
 
-    d = x.mean(0) - y.mean(0)
-    Od = O.T @ d
-    dist2 = Od @ (Od / w)
+    chain_means = jnp.mean(chains, axis=1)
 
-    return dist2, rank
+    def compute_chain_cov(chain_samples, chain_mean):
+        centered = chain_samples - chain_mean
+        return jnp.dot(centered.T, centered) / (n - 1)
+
+    within_chain_covs = jax.vmap(compute_chain_cov)(chains, chain_means)
+    W = jnp.mean(within_chain_covs, axis=0)
+
+    overall_mean = jnp.mean(chain_means, axis=0)
+    chain_mean_diffs = chain_means - overall_mean
+    B = (n / (m - 1)) * jnp.dot(chain_mean_diffs.T, chain_mean_diffs)
+
+    V_hat = ((n - 1) / n) * W + ((m + 1) / (m * n)) * B
+
+    # Add regularization to W for numerical stability
+    gershgorin = jnp.max(jnp.sum(jnp.abs(W), axis=1))
+    regularization = jnp.finfo(W.dtype).eps * len(W) * gershgorin
+    W_reg = W + regularization * jnp.eye(p)
+
+    # Compute max(eigvals(W^-1 V_hat))
+    L = jnp.linalg.cholesky(W_reg)
+    # Solve L @ L.T @ x = V_hat @ x = λ @ W @ x
+    # This is equivalent to solving (L^-1 V_hat L^-T) @ y = λ @ y
+    L_1V = solve_triangular(L, V_hat, lower=True)
+    L_1VL_T = solve_triangular(L, L_1V.T, lower=True).T
+    eigenvals = jnp.linalg.eigvalsh(L_1VL_T)
+
+    return jnp.max(eigenvals)
+
+
+def test_rhat(keys):
+    """Test the multivariate R-hat implementation."""
+    chains, divergent_chains = random.normal(keys.pop(), (2, 2, 1000, 10))
+    mean_offset = jnp.arange(len(chains))
+    divergent_chains += mean_offset[:, None, None]
+    rhat = multivariate_rhat(chains)
+    rhat_divergent = multivariate_rhat(divergent_chains)
+    assert rhat < 1.02
+    assert rhat_divergent > 5
 
 
 def test_jit(keys, kw):
