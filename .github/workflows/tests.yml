@@ -45,7 +45,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target-suffix: ""
-          - os: ubuntu-22.04
+          - os: macos-latest
             target-suffix: "-old"
 
     steps:
