@@ -81,15 +81,15 @@ class gbart:
         Parameters of the prior on tree node generation. The probability that a
         node at depth `d` (0-based) is non-terminal is ``base / (1 + d) **
         power``.
+    lamda
+        The prior harmonic mean of the error variance. (The harmonic mean of x
+        is 1/mean(1/x).) If not specified, it is set based on `sigest` and
+        `sigquant`.
     tau_num
         The numerator in the expression that determines the prior standard
         deviation of leaves. If not specified, default to ``(max(y_train) -
         min(y_train)) / 2`` (or 1 if `y_train` has less than two elements) for
         continuous regression, and 3 for binary regression.
-    lamda
-        The prior harmonic mean of the error variance. (The harmonic mean of x
-        is 1/mean(1/x).) If not specified, it is set based on `sigest` and
-        `sigquant`.
     offset
         The prior mean of the latent mean function. If not specified, it is set
         to the mean of `y_train` for continuous regression, and to

@@ -36,7 +36,7 @@ from . import grove, jaxext, mcmcstep
 from .mcmcstep import State
 
 
-def default_onlymain_extractor(state: State) -> dict[str, Real[Array, '...']]:
+def default_onlymain_extractor(state: State) -> dict[str, Real[Array, 'samples *']]:
     """Extract variables for the main trace, to be used in `run_mcmc`."""
     return dict(
         leaf_trees=state.forest.leaf_trees,
@@ -46,7 +46,7 @@ def default_onlymain_extractor(state: State) -> dict[str, Real[Array, '...']]:
     )
 
 
-def default_both_extractor(state: State) -> dict[str, Real[Array, '...'] | None]:
+def default_both_extractor(state: State) -> dict[str, Real[Array, 'samples *'] | None]:
     """Extract variables for main & burn-in traces, to be used in `run_mcmc`."""
     return dict(
         sigma2=state.sigma2,

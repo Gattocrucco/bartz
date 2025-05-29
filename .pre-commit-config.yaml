@@ -22,10 +22,10 @@ repos:
     - id: ruff
       args: [ --fix ]
     - id: ruff-format
-# - repo: https://github.com/jsh9/pydoclint
-#   rev: 0.6.6
-#   hooks:
-#     - id: pydoclint
+- repo: https://github.com/jsh9/pydoclint
+  rev: 0.6.6
+  hooks:
+    - id: pydoclint
 - repo: https://github.com/abravalheri/validate-pyproject
   rev: v0.24.1
   hooks:

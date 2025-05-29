@@ -574,3 +574,4 @@ def test_automatic_integer_types(kw):
     assert bart._mcmc_state.forest.split_trees.dtype == split_trees_type
     assert bart._mcmc_state.forest.leaf_indices.dtype == leaf_indices_type
     assert bart._mcmc_state.X.dtype == X_type
+    assert bart._mcmc_state.max_split.dtype == split_trees_type

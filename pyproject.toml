@@ -168,6 +168,8 @@ convention = "numpy"
 ignore-decorators = ["functools.cached_property"]
 
 [tool.pydoclint]
+baseline = "config/pydoclint-baseline.txt"
+auto-regenerate-baseline = true
 arg-type-hints-in-signature = true
 arg-type-hints-in-docstring = false
 check-return-types = false
@@ -175,7 +177,7 @@ check-yield-types = false
 treat-property-methods-as-class-attributes = true
 check-style-mismatch = true
 show-filenames-in-every-violation-message = true
-check-class-attributes = true
+check-class-attributes = false
 
 [tool.uv]
 python-downloads = "never"
