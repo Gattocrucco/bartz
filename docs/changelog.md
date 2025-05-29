@@ -31,6 +31,28 @@ SOFTWARE.
 # Changelog
 
 
+## 0.6.0 bruv bernoulli got gauss beat any time (2025-05-29)
+
+* binary regression with probit link
+* allow to interrupt the MCMC with ^C
+* logging shows how much the tree heaps are filled; if it's above 50% you should definitely increase the number of trees and/or the maximum depth
+* `BART.gbart(..., run_mcmc_kw=dict(...))` allows to pass additional arguments to `mcmcloop.run_mcmc`
+* option to disable logging
+* refactor internals
+  * set offset in the MCMC state to avoid centering the responses
+  * set leaf variance in the MCMC state to avoid rescaling responses
+  * immutable dataclasses instead of dicts
+  * improvements to `mcmcloop.run_mcmc`
+    * simpler to use signature with only three required parameters
+    * the callback is allowed to carry a state and to modify the chain state (opt-in)
+    * custom functions to change what is extracted from the state and put into the traces
+    * two distinct callbacks, one invoked under jit and one out of it
+    * more sophisticate default logging callback
+  * complete type hints
+  * improved documentation
+  * `jaxext.split` is a less error-prone alternative to `jax.random.split`
+
+
 ## 0.5.0 Our work promotes diversity in error variances by following heteroscedasticity best-practices such as multiplying the variance parameter by different factors (2025-05-16)
 
 * Heteroskedasticity with fixed weights.

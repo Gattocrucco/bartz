@@ -75,9 +75,9 @@ def test_random_keys_are_consumed(consume_one_key, consume_another_key, keys):
 
 def test_debug_key_reuse(keys):
     """Check that the jax debug_key_reuse option works."""
+    key = keys.pop()
+    random.uniform(key)
     with pytest.raises(KeyReuseError):
-        key = keys.pop()
-        random.uniform(key)
         random.uniform(key)
 
 

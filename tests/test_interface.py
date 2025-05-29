@@ -28,6 +28,8 @@ import os
 import signal
 import threading
 import time
+from collections.abc import Callable
+from typing import Any
 
 import jax
 import numpy
@@ -405,6 +407,11 @@ def multivariate_rhat(chains: Float[Array, 'chain sample dim']) -> Float[Array, 
     Returns
     -------
     Multivariate R-hat statistic.
+
+    Raises
+    ------
+    ValueError
+        If there are not enough chains or samples.
     """
     m, n, p = chains.shape
 
@@ -478,7 +485,9 @@ def test_jit(keys, kw):
     assert_close_matrices(pred1, pred2, rtol=1e-5)
 
 
-def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
+def call_with_timed_interrupt(
+    time_to_sigint: float, func: Callable, *args: Any, **kw: Any
+):
     """
     Call a function and send SIGINT after a certain time.
 
@@ -486,12 +495,12 @@ def call_with_timed_interrupt(time_to_sigint, func, *args, **kw):
 
     Parameters
     ----------
-    time_to_sigint : float
+    time_to_sigint
         Time in seconds after which to send SIGINT.
-    func : callable
+    func
         An arbitrary callable.
-    *args : any
-    **kw : any
+    *args
+    **kw
         Arguments to pass to `func`.
 
     Returns
@@ -552,7 +561,7 @@ def test_data_format_mismatch(kw):
         w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
     )
     bart = bartz.BART.gbart(**kw)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='format mismatch'):
         bart.predict(kw['x_train'].to_numpy().T)
 
 

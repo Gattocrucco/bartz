@@ -93,7 +93,12 @@ setup-ci-old:
 	$(UV_SYNC) --group ci
 
 .PHONY: release
-release: copy-version lock lock-old check-committed setup-old tests setup tests docs
+release: copy-version lock lock-old check-committed
+	@$(MAKE) setup-old
+	@$(MAKE) tests
+	@$(MAKE) setup
+	@$(MAKE) tests
+	@$(MAKE) docs
 	test ! -d dist || rm -r dist
 	uv build
 

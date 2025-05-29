@@ -28,7 +28,7 @@ build-backend = "uv_build"
 
 [project]
 name = "bartz"
-version = "0.5.0"
+version = "0.6.0"
 description = "Super-fast BART (Bayesian Additive Regression Trees) in Python"
 authors = [
     {name = "Giacomo Petrillo", email = "info@giacomopetrillo.com"},
@@ -143,8 +143,9 @@ select = [
     "B", # bugbear: grab bag of additional stuff
     "UP", # pyupgrade: fix some outdated idioms
     "I", # isort: sort and reformat import statements
-    "F", # flake8
+    "F", # pyflakes
     "D", # pydocstyle
+    "PT", # flake8-pytest-style
 ]
 ignore = [
     "B028",  # warn with stacklevel = 2
