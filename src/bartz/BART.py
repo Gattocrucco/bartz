@@ -31,7 +31,7 @@ from typing import Any, Literal
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtri
-from jaxtyping import Array, Bool, Float, Float32
+from jaxtyping import Array, Bool, Float, Float32, Int32
 
 from . import grove, jaxext, mcmcloop, mcmcstep, prepcovars
 
@@ -144,21 +144,17 @@ class gbart:
 
     Attributes
     ----------
-    yhat_train : array (ndpost, n)
-        The conditional posterior mean at `x_train` for each MCMC iteration.
-    yhat_train_mean : array (n,)
-        The marginal posterior mean at `x_train`.
-    yhat_test : array (ndpost, m)
+    yhat_test : Float32[Array, 'ndpost m'] | None
         The conditional posterior mean at `x_test` for each MCMC iteration.
-    yhat_test_mean : array (m,)
+    yhat_test_mean : Float32[Array, 'm'] | None
         The marginal posterior mean at `x_test`.
-    sigma : array (ndpost,)
+    sigma : Float32[Array, 'ndpost'] | None
         The standard deviation of the error.
-    first_sigma : array (nskip,)
+    first_sigma : Float32[Array, 'nskip'] | None
         The standard deviation of the error in the burn-in phase.
-    offset : float
+    offset : Float32[Array, '']
         The prior mean of the latent mean function.
-    sigest : float or None
+    sigest : Float32[Array, ''] | None
         The estimated standard deviation of the error used to set `lamda`.
 
     Notes
@@ -181,6 +177,13 @@ class gbart:
     - The trees have a maximum depth.
 
     """
+
+    yhat_test: Float32[Array, 'ndpost m'] | None = None
+    yhat_test_mean: Float32[Array, ' m'] | None = None
+    sigma: Float32[Array, ' ndpost'] | None
+    first_sigma: Float32[Array, ' nskip'] | None
+    offset: Float32[Array, '']
+    sigest: Float32[Array, ''] | None
 
     def __init__(
         self,
@@ -248,13 +251,10 @@ class gbart:
             mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
         )
 
-        sigma = self._extract_sigma(main_trace)
-        first_sigma = self._extract_sigma(burnin_trace)
-
         self.offset = final_state.offset  # from the state because of buffer donation
         self.sigest = sigest
-        self.sigma = sigma
-        self.first_sigma = first_sigma
+        self.sigma = self._extract_sigma(main_trace)
+        self.first_sigma = self._extract_sigma(burnin_trace)
 
         self._x_train_fmt = x_train_fmt
         self._splits = splits
@@ -267,13 +267,27 @@ class gbart:
             self.yhat_test_mean = yhat_test.mean(axis=0)
 
     @functools.cached_property
-    def yhat_train(self):
+    def yhat_train(self) -> Float32[Array, 'ndpost n']:
+        """The conditional posterior mean at `x_train` for each MCMC iteration."""
         x_train = self._mcmc_state.X
         return self._predict(self._main_trace, x_train)
 
     @functools.cached_property
-    def yhat_train_mean(self):
+    def yhat_train_mean(self) -> Float32[Array, ' n']:
+        """The marginal posterior mean at `x_train`."""
         return self.yhat_train.mean(axis=0)
+
+    @functools.cached_property
+    def varcount(self) -> Int32[Array, 'ndpost p']:
+        """Histogram of predictor usage for decision rules in the trees."""
+        return mcmcloop.compute_varcount(
+            self._mcmc_state.max_split.size, self._main_trace
+        )
+
+    @functools.cached_property
+    def varcount_mean(self) -> Float32[Array, ' p']:
+        """Average of `varcount` across MCMC iterations."""
+        return self.varcount.mean(axis=0)
 
     def predict(self, x_test):
         """
@@ -389,7 +403,7 @@ class gbart:
 
     @staticmethod
     def _process_offset_settings(
-        y_train: Float32[Array, 'n'] | Bool[Array, 'n'],
+        y_train: Float32[Array, ' n'] | Bool[Array, ' n'],
         offset: float | Float32[Any, ''] | None,
     ) -> Float32[Array, '']:
         if offset is not None:
@@ -406,7 +420,7 @@ class gbart:
 
     @staticmethod
     def _process_leaf_sdev_settings(
-        y_train: Float32[Array, 'n'] | Bool[Array, 'n'],
+        y_train: Float32[Array, ' n'] | Bool[Array, ' n'],
         k: float,
         ntree: int,
         tau_num: FloatLike | None,
@@ -500,7 +514,7 @@ class gbart:
         return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
 
     @staticmethod
-    def _extract_sigma(trace) -> Float32[Array, 'trace_length'] | None:
+    def _extract_sigma(trace) -> Float32[Array, ' trace_length'] | None:
         if trace['sigma2'] is None:
             return None
         else:

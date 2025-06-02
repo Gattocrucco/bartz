@@ -30,7 +30,7 @@ import jax
 import numpy
 from jax import debug, lax, tree
 from jax import numpy as jnp
-from jaxtyping import Array, Real
+from jaxtyping import Array, Int32, Real
 
 from . import grove, jaxext, mcmcstep
 from .mcmcstep import State
@@ -509,3 +509,25 @@ def evaluate_trace(trace, X):
 
     _, y = lax.scan(loop, None, trace)
     return y
+
+
+@jax.jit
+def compute_varcount(
+    p: int, trace: dict[str, Real[Array, 'lentrace ...']]
+) -> Int32[Array, 'lentrace {p}']:
+    """
+    Count how many times each predictor is used in each MCMC state.
+
+    Parameters
+    ----------
+    p
+        The number of predictors.
+    trace
+        A trace of the BART MCMC, as returned by `run_mcmc`.
+
+    Returns
+    -------
+    Histogram of predictor usage in each MCMC state.
+    """
+    vmapped_var_histogram = jax.vmap(grove.var_histogram, in_axes=(None, 0, 0))
+    return vmapped_var_histogram(p, trace['var_trees'], trace['split_trees'])

@@ -46,6 +46,7 @@ import math
 import jax
 from jax import lax
 from jax import numpy as jnp
+from jaxtyping import Array, Int32, UInt
 
 from . import jaxext
 
@@ -308,3 +309,34 @@ def forest_fill(split_trees):
     used = jax.vmap(is_used)(split_trees)
     count = jnp.count_nonzero(used)
     return count / (used.size - m)
+
+
+def var_histogram(
+    p: int,
+    var_tree: UInt[Array, '... 2**(d-1)'],
+    split_tree: UInt[Array, '... 2**(d-1)'],
+) -> Int32[Array, ' {p}']:
+    """
+    Count how many times each variable appears in a tree.
+
+    Parameters
+    ----------
+    p
+        The number of variables (the maximum value that can occur in
+        `var_tree` is ``p - 1``).
+    var_tree
+        The decision axes of the tree.
+    split_tree
+        The decision boundaries of the tree.
+
+    Returns
+    -------
+    The histogram of the variables used in the tree.
+
+    Notes
+    -----
+    If there are leading axes in the tree arrays (i.e., multiple trees), the
+    returned counts are cumulative over trees.
+    """
+    is_internal = split_tree.astype(bool)
+    return jnp.zeros(p, int).at[var_tree].add(is_internal)

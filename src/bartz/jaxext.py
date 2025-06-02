@@ -48,6 +48,7 @@ def _castto(func, type):
     return newfunc
 
 
+# TODO these mockups are bad because I can't do `from bartz.jaxext.scipy import ...`
 class scipy:
     """Mockup of the :external:py:mod:`scipy` module."""
 

@@ -151,7 +151,6 @@ ignore = [
     "B028",  # warn with stacklevel = 2
     "D105",  # Missing docstring in magic method
     "F722",  # Syntax error in forward annotation. I ignore this because jaxtyping uses strings for shapes instead of for deferred annotations.
-    "F821",  # Undefined name. I ignore this because strings in jaxtyping.
     "UP037",  # Remove quotes from type annotation. Ignore because jaxtyping.
 ]
 
@@ -166,7 +165,6 @@ ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
-ignore-decorators = ["functools.cached_property"]
 
 [tool.pydoclint]
 baseline = "config/pydoclint-baseline.txt"
