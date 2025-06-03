@@ -24,7 +24,7 @@
 
 """Functions that implement the full BART posterior MCMC loop."""
 
-import functools
+from functools import partial, wraps
 
 import jax
 import numpy
@@ -257,7 +257,7 @@ def _compute_i_skip(i_total, n_burn, n_skip):
     )
 
 
-@functools.partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
+@partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
 def _run_mcmc_inner_loop(
     carry,
     inner_loop_length,
@@ -425,7 +425,7 @@ def _convert_jax_arrays_in_args(func):
 
         return tree.map(convert_jax_arrays, pytree)
 
-    @functools.wraps(func)
+    @wraps(func)
     def new_func(*args, **kw):
         args = convert_jax_arrays(args)
         kw = convert_jax_arrays(kw)
@@ -498,7 +498,7 @@ def evaluate_trace(trace, X):
     y : array (n_trace, n)
         The predictions for each iteration of the MCMC.
     """
-    evaluate_trees = functools.partial(grove.evaluate_forest, sum_trees=False)
+    evaluate_trees = partial(grove.evaluate_forest, sum_trees=False)
     evaluate_trees = jaxext.autobatch(evaluate_trees, 2**29, (None, 0, 0, 0))
 
     def loop(_, row):
@@ -511,7 +511,7 @@ def evaluate_trace(trace, X):
     return y
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(0,))
 def compute_varcount(
     p: int, trace: dict[str, Real[Array, 'lentrace ...']]
 ) -> Int32[Array, 'lentrace {p}']:

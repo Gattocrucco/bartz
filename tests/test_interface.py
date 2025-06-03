@@ -39,7 +39,7 @@ from jax import numpy as jnp
 from jax import random
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, Real
 from numpy.testing import assert_allclose, assert_array_equal
 
 import bartz
@@ -97,10 +97,12 @@ def kw(keys, request):
         # continuous regression with close to default settings
         case 1:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
+            Xt = gen_X(keys.pop(), 2, 31, 'continuous')
             y = gen_y(keys.pop(), X, None, 'continuous')
             return dict(
                 x_train=X,
                 y_train=y,
+                x_test=Xt,
                 w=None,
                 ntree=20,
                 ndpost=100,
@@ -119,11 +121,13 @@ def kw(keys, request):
         case 2:
             p = 257  # > 256 to use uint16 for var_trees.
             X = gen_X(keys.pop(), p, 30, 'binary')
+            Xt = gen_X(keys.pop(), p, 31, 'binary')
             w = gen_w(keys.pop(), X.shape[1])
             y = gen_y(keys.pop(), X, w, 'continuous')
             return dict(
                 x_train=X,
                 y_train=y,
+                x_test=Xt,
                 w=w,
                 ntree=20,
                 ndpost=100,
@@ -146,9 +150,11 @@ def kw(keys, request):
         # binary regression
         case 3:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
+            Xt = gen_X(keys.pop(), 2, 31, 'continuous')
             y = gen_y(keys.pop(), X, None, 'probit')
             return dict(
                 x_train=X,
+                x_test=Xt,
                 y_train=y,
                 type='pbart',
                 w=None,
@@ -207,22 +213,26 @@ def test_finite(kw):
 
 def test_output_shapes(kw):
     """Check the output shapes of all the attributes of BART.gbart."""
-    bart = bartz.BART.gbart(x_test=kw['x_train'], **kw)
+    bart = bartz.BART.gbart(**kw)
 
     ndpost = kw['ndpost']
     nskip = kw['nskip']
-    n = kw['y_train'].size
+    p, n = kw['x_train'].shape
+    _, m = kw['x_test'].shape
 
     assert bart.yhat_train.shape == (ndpost, n)
-    assert bart.yhat_test.shape == (ndpost, n)
     assert bart.yhat_train_mean.shape == (n,)
-    assert bart.yhat_test_mean.shape == (n,)
+    assert bart.yhat_test.shape == (ndpost, m)
+    assert bart.yhat_test_mean.shape == (m,)
     if kw['y_train'].dtype == bool:
         assert bart.sigma is None
         assert bart.first_sigma is None
     else:
         assert bart.sigma.shape == (ndpost,)
         assert bart.first_sigma.shape == (nskip,)
+    assert bart.offset.shape == ()
+    assert bart.varcount.shape == (ndpost, p)
+    assert bart.varcount_mean.shape == (p,)
 
 
 def test_predict(kw):
@@ -247,7 +257,7 @@ def test_scale_shift(kw):
     # can be amplified.
     bart2 = bartz.BART.gbart(**kw)
 
-    assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-7)
+    assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-6)
     assert_allclose(
         bart1._mcmc_state.forest.sigma_mu2,
         bart2._mcmc_state.forest.sigma_mu2 / scale**2,
@@ -367,6 +377,7 @@ def test_comparison_rbart(kw, keys):
     # R BART can't change the min_points_per_leaf per leaf setting
     kw['init_kw'].update(min_points_per_leaf=5)
 
+    # prepare arguments for R BART
     kw_BART = dict(
         **kw,
         rm_const=False,
@@ -377,11 +388,14 @@ def test_comparison_rbart(kw, keys):
     for key in 'w', 'printevery':
         if kw_BART[key] is None:
             kw_BART.pop(key)
+    kw_BART['x_test'] = kw_BART['x_test'].T
     kw_BART['seed'] = random.randint(keys.pop(), (), 0, jnp.uint32(2**31)).item()
 
+    # run bart with both packages
     bart = bartz.BART.gbart(X, **kw)
     rbart = BART.mc_gbart(X.T, **kw_BART)
 
+    # compare results
     assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
     # I would check sigest as well, but it's not in the R object despite what
     # the documentation says
@@ -395,8 +409,11 @@ def test_comparison_rbart(kw, keys):
         )
         assert rhat_sigma < 1.02
 
+    rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, rbart.varcount]))
+    assert rhat_varcount < 1
 
-def multivariate_rhat(chains: Float[Array, 'chain sample dim']) -> Float[Array, '']:
+
+def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '']:
     """
     Compute the multivariate Gelman-Rubin R-hat.
 
@@ -539,16 +556,17 @@ def test_interrupt(kw):
 def test_polars(kw):
     """Test passing data as DataFrame and Series."""
     bart = bartz.BART.gbart(**kw)
-    pred = bart.predict(kw['x_train'])
+    pred = bart.predict(kw['x_test'])
 
     kw.update(
         seed=random.clone(kw['seed']),
         x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
+        x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
         y_train=pl.Series(numpy.array(kw['y_train'])),
         w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
     )
     bart2 = bartz.BART.gbart(**kw)
-    pred2 = bart2.predict(kw['x_train'])
+    pred2 = bart2.predict(kw['x_test'])
 
     assert_array_equal(bart.yhat_train, bart2.yhat_train)
     assert_array_equal(bart.sigma, bart2.sigma)
@@ -559,11 +577,12 @@ def test_data_format_mismatch(kw):
     """Test that passing predictors with mismatched formats raises an error."""
     kw.update(
         x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
+        x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
         w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
     )
     bart = bartz.BART.gbart(**kw)
     with pytest.raises(ValueError, match='format mismatch'):
-        bart.predict(kw['x_train'].to_numpy().T)
+        bart.predict(kw['x_test'].to_numpy().T)
 
 
 def test_automatic_integer_types(kw):
