@@ -31,6 +31,7 @@ import warnings
 import jax
 from jax import lax, random, tree_util
 from jax import numpy as jnp
+from jaxtyping import Array, Key
 from scipy import special
 
 
@@ -366,6 +367,9 @@ def autobatch(func, max_io_nbytes, in_axes=0, out_axes=0, return_nbatches=False)
     return batched_func
 
 
+Shape = int | tuple[int] | tuple[()]
+
+
 class split:
     """
     Split a key into `num` keys.
@@ -384,21 +388,20 @@ class split:
     def __len__(self):
         return self._keys.size
 
-    def pop(self, shape=None):
+    def pop(self, shape: Shape | None = None) -> Key[Array, '*']:
         """
         Pop one or more keys from the list.
 
         Parameters
         ----------
-        shape : int or tuple of int, optional
+        shape
             The shape of the keys to pop. If `None`, a single key is popped.
             If an integer, that many keys are popped. If a tuple, the keys are
             reshaped to that shape.
 
         Returns
         -------
-        keys : jax.dtypes.prng_key array
-            The popped keys.
+        The popped keys as a jax array with the requested shape.
 
         Raises
         ------

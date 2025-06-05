@@ -31,7 +31,7 @@ from typing import Any, Literal
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import ndtri
-from jaxtyping import Array, Bool, Float, Float32, Int32
+from jaxtyping import Array, Bool, Float, Float32, Int32, Key
 
 from . import grove, jaxext, mcmcloop, mcmcstep, prepcovars
 
@@ -132,7 +132,7 @@ class gbart:
         iterations is a multiple of `printevery`, so if ``nskip + keepevery *
         ndpost`` is not a multiple of `printevery`, some of the last iterations
         will not be saved.
-    seed : int or jax random key, default 0
+    seed
         The seed for the random number generator.
     maxdepth : int, default 6
         The maximum depth of the trees. This is 1-based, so with the default
@@ -209,7 +209,7 @@ class gbart:
         nskip=100,
         keepevery=1,
         printevery=100,
-        seed=0,
+        seed: int | Key[Array, ''] = 0,
         maxdepth=6,
         init_kw=None,
         run_mcmc_kw=None,
@@ -609,7 +609,7 @@ class gbart:
     def _check_trees(self):
         from . import debug
 
-        return debug.check_trace(self._main_trace, self._mcmc_state)
+        return debug.check_trace(self._main_trace, self._mcmc_state.max_split)
 
     def _tree_goes_bad(self):
         bad = self._check_trees().astype(bool)

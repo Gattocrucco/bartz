@@ -1,7 +1,11 @@
-from . import _base
+from jaxtyping import Float64, Int64
+from numpy import ndarray
+from rpy2.rlike.container import OrdDict
+
+from ._base import RObjectABC
 
 
-class mc_gbart(_base.RObjectABC):
+class mc_gbart(RObjectABC):
     """
     Additional notes:
     - using the `x_test` argument may create problems, try not passing it
@@ -10,6 +14,13 @@ class mc_gbart(_base.RObjectABC):
 
     _rfuncname = 'BART::mc.gbart'
     _methods = ['predict']
+
+    yhat_train: Float64[ndarray, 'ndpost n']
+    yhat_test: Float64[ndarray, 'ndpost m']
+    offset: float
+    varcount: Int64[ndarray, 'ndpost p']
+    varcount_mean: Float64[ndarray, ' p']
+    treedraws: OrdDict
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
@@ -33,3 +44,7 @@ class mc_gbart(_base.RObjectABC):
     @property
     def type(self):
         return self._robject.rclass[0]
+
+
+class bartModelMatrix(RObjectABC):
+    _rfuncname = 'BART::bartModelMatrix'
