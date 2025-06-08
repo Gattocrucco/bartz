@@ -26,10 +26,16 @@
 
 import numpy
 import pytest
+from jax import debug_infs, random
 from jax import numpy as jnp
-from jax import random
+from jax.scipy.special import ndtri
+from numpy.testing import assert_allclose
+from scipy.stats import invgamma as scipy_invgamma
+from scipy.stats import ks_1samp, truncnorm
 
 from bartz import jaxext
+from bartz.jaxext.scipy.special import ndtri as patched_ndtri
+from bartz.jaxext.scipy.stats import invgamma
 
 
 class TestUnique:
@@ -126,6 +132,22 @@ class TestAutoBatch:
 
         numpy.testing.assert_array_max_ulp(out1, out2)
 
+    def test_batch_axis_pytree(self):
+        """Check the that a batch axis can be specified for a whole sub-pytree."""
+
+        def func(a, b):
+            return a + b['foo'] + b['bar']
+
+        batched_func = jaxext.autobatch(func, 32, (None, 0))
+
+        a = 2
+        b = dict(foo=jnp.arange(100), bar=jnp.arange(100))
+
+        out1 = func(a, b)
+        out2 = batched_func(a, b)
+
+        numpy.testing.assert_array_max_ulp(out1, out2)
+
     def test_large_batch_warning(self):
         """Check the function emits a warning if the size limit can't be honored."""
         x = jnp.arange(10_000).reshape(10, 1000)
@@ -197,3 +219,69 @@ def test_split(keys):
     assert not different_keys(key1, key1a)
     assert not different_keys(key2, key23[0])
     assert not different_keys(key3, key23[1])
+
+
+class TestJaxPatches:
+    """Check that some jax stuff I patch is correct and still to be patched."""
+
+    def test_invgamma_missing(self):
+        """Check that jax does not implement the inverse gamma distribution."""
+        with pytest.raises(ImportError, match=r'gammainccinv'):
+            from jax.scipy.special import gammainccinv  # noqa: F401
+        with pytest.raises(ImportError, match=r'invgamma'):
+            from jax.scipy.stats import invgamma  # noqa: F401
+
+    def test_invgamma_correct(self, keys):
+        """Compare my implementation of invgamma against scipy's."""
+        p = random.uniform(keys.pop(), (100,), float, 0.01, 0.99)
+        alpha = 3.5
+        x0 = scipy_invgamma.ppf(p, alpha)
+        x1 = invgamma.ppf(p, alpha)
+        assert_allclose(x1, x0)
+
+    def test_ndtri_bugged(self, keys):
+        """Check that `jax.scipy.special.ndtri` triggers `jax.debug_infs`."""
+        x = random.uniform(keys.pop(), (100,), float, 0.01, 0.99)
+        with debug_infs(True), pytest.raises(FloatingPointError, match=r'inf'):
+            ndtri(x)
+
+    def test_ndtri_correct(self, keys):
+        """Check that my copy-pasted ndtri impl is equivalent to the jax one."""
+        x = random.uniform(keys.pop(), (100,), float, 0.01, 0.99)
+        with debug_infs(False):
+            y1 = ndtri(x)
+        y2 = patched_ndtri(x)
+        assert jnp.all(y1 == y2)
+
+    def test_truncated_normal_inaccurate(self, keys):
+        """Check that `jax.random.truncated_normal` under/overshoots."""
+        x = random.truncated_normal(keys.pop(), -jnp.inf, -6)
+        assert x < -1e38
+        x = random.truncated_normal(keys.pop(), 6, jnp.inf)
+        assert x > 1e38
+
+    def test_truncated_normal_onesided_correct(self, keys):
+        """Check that my implementation is correct."""
+        nparams = 20
+        nsamples = 1000
+        upper = random.bernoulli(keys.pop(), 0.5, (nparams,))
+        bound = random.uniform(keys.pop(), (nparams,), float, -10, 10)
+        x = jaxext.truncated_normal_onesided(
+            keys.pop(), (nparams, nsamples), upper[:, None], bound[:, None]
+        )
+        for sample, u, b in zip(x, upper, bound, strict=True):
+            left = -jnp.inf if u else b
+            right = b if u else jnp.inf
+            test = ks_1samp(sample, truncnorm(left, right).cdf)
+            assert test.pvalue > 0.1
+
+    def test_truncated_normal_onesided_accurate(self, keys):
+        """Check that my implementation does not over/under shoot."""
+        x = jaxext.truncated_normal_onesided(
+            keys.pop(), (), jnp.bool_(True), jnp.float32(-12)
+        )
+        assert -12.1 <= x < -12
+        x = jaxext.truncated_normal_onesided(
+            keys.pop(), (), jnp.bool_(False), jnp.float32(12)
+        )
+        assert 12 < x <= 12.1

@@ -1,4 +1,28 @@
-import abc
+# bartz/tests/rbartpackages/_base.py
+#
+# Copyright (c) 2024-2025, Giacomo Petrillo
+#
+# This file is part of bartz.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+from collections.abc import Callable
 
 import numpy as np
 from rpy2 import robjects
@@ -8,17 +32,19 @@ from rpy2.robjects import conversion, methods, numpy2ri
 pandas_converter = conversion.Converter('pandas')
 try:
     from rpy2.robjects import pandas2ri
-
-    pandas_converter = pandas2ri.converter
 except ImportError:
-    pandas_converter = conversion.Converter('pandas')
+    pass
+else:
+    pandas_converter = pandas2ri.converter
 
 # converter for polars
-# TODO i'd like to copy the code of the pandas converter to relinquish the dependency on pandas
 polars_converter = conversion.Converter('polars')
 try:
     import polars
     from rpy2.robjects import pandas2ri
+except ImportError:
+    pass
+else:
 
     def polars_to_r(df):
         df = df.to_pandas()
@@ -26,13 +52,14 @@ try:
 
     polars_converter.py2rpy.register(polars.DataFrame, polars_to_r)
     polars_converter.py2rpy.register(polars.Series, polars_to_r)
-except ImportError:
-    pass
 
 # converter for jax
 jax_converter = conversion.Converter('jax')
 try:
     import jax
+except ImportError:
+    pass
+else:
 
     def jax_to_r(x):
         x = np.asarray(x)
@@ -41,16 +68,7 @@ try:
         return numpy2ri.py2rpy(x)
 
     jax_converter.py2rpy.register(jax.Array, jax_to_r)
-except ImportError:
-    pass
 
-# alternative numpy converter because the default one produces conflicts
-# => the problem with this is that it does not handle r -> numpy
-# numpy_converter = conversion.Converter('numpy')
-# def numpy_to_r(x):
-#     return numpy2ri.py2rpy(x)
-# numpy_converter.py2rpy.register(np.ndarray, numpy_to_r)
-# numpy_converter.py2rpy.register(np.generic, numpy_to_r)
 numpy_converter = numpy2ri.converter
 
 # converter for python dictionaries
@@ -64,10 +82,9 @@ def dict_to_r(x):
 dict_converter.py2rpy.register(dict, dict_to_r)
 
 
-class RObjectABC(abc.ABC):
+class RObjectBase:
     """
-
-    Abstract base class for Python wrappers of R objects creators.
+    Base class for Python wrappers of R objects creators.
 
     Subclasses should define the class attributes `_rfuncname` and `_methods`.
 
@@ -115,19 +132,13 @@ class RObjectABC(abc.ABC):
     def _kw2r(self, kw):
         return {key: self._py2r(value) for key, value in kw.items()}
 
-    @property
-    @abc.abstractmethod
-    def _rfuncname(self):
-        """Function/class to be wrapped, written as 'library::name'.
-
-        Override this property with a class string attribute.
-        """
-        raise NotImplementedError
+    _rfuncname: str = NotImplemented
+    _methods: tuple[str, ...] = ()
 
     def __init__(self, *args, **kw):
         library, _ = self._rfuncname.split('::')
-        robjects.r(f'library({library})')
-        # TODO I would like to do loadNamespace('<library>') and then always use <library>::<thing>. However this does not work with methods (see __init_subclass__). I have to look up how to reference methods directly in a namespace. Alternatively, I could do library(<library>, quietly=TRUE), but I prefer not to suppress eventual errors.
+        robjects.r(f'loadNamespace("{library}")')
+        self._library = library
         func = robjects.r(self._rfuncname)
         obj = func(*self._args2r(args), **self._kw2r(kw))
         self._robject = obj
@@ -138,22 +149,21 @@ class RObjectABC(abc.ABC):
     def __init_subclass__(cls, **kw):
         """Automatically modify subclasses."""
 
-        # if the subclass had an attribute `_methods` (a list of method
-        # names), create automatically Python wrappers for those methods if
-        # missing
-        def implof(method):
+        def implof(method: str) -> Callable:
             def impl(self, *args, **kw):
                 if isinstance(self._robject, methods.RS4):
                     func = robjects.r['$'](self._robject, method)
                     out = func(*self._args2r(args), **self._kw2r(kw))
                 else:
-                    func = robjects.r(method)
+                    func = robjects.r(f'{self._library}::{method}')
                     out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
                 return self._r2py(out)
 
             return impl
 
-        for method in getattr(cls, '_methods', []):
+        # if the subclass lists method names, create automatically Python
+        # wrappers for those methods if they are not already defined
+        for method in cls._methods:
             if not hasattr(cls, method):
                 setattr(cls, method, implof(method))
 

@@ -25,22 +25,30 @@
 """Functions intended to be shared across the test suite."""
 
 import numpy as np
+from jaxtyping import ArrayLike
 from scipy import linalg
 
 
-def assert_close_matrices(actual, desired, *, rtol=0.0, atol=0.0, tozero=False):
+def assert_close_matrices(
+    actual: ArrayLike,
+    desired: ArrayLike,
+    *,
+    rtol: float = 0.0,
+    atol: float = 0.0,
+    tozero: bool = False,
+):
     """
     Check if two matrices are similar.
 
     Parameters
     ----------
-    actual : array_like
-    desired : array_like
+    actual
+    desired
         The two matrices to be compared. Must be scalars, vectors, or 2d arrays.
         Scalars and vectors are intepreted as 1x1 and Nx1 matrices, but the two
         arrays must have the same shape beforehand.
-    rtol : scalar, default 0
-    atol : scalar, default 0
+    rtol
+    atol
         Relative and absolute tolerances for the comparison. The closeness
         condition is:
 
@@ -48,7 +56,7 @@ def assert_close_matrices(actual, desired, *, rtol=0.0, atol=0.0, tozero=False):
 
         where the norm is the matrix 2-norm, i.e., the maximum (in absolute
         value) singular value.
-    tozero : bool, default False
+    tozero
         If True, use the following codition instead:
 
             ||actual|| <= atol + rtol * ||desired||
@@ -71,7 +79,7 @@ def assert_close_matrices(actual, desired, *, rtol=0.0, atol=0.0, tozero=False):
             ref = 'desired'
 
         dnorm = linalg.norm(desired, 2)
-        adnorm = linalg.norm(eval(expr), 2)
+        adnorm = linalg.norm(eval(expr), 2)  # noqa: S307, expr is a literal
         ratio = adnorm / dnorm if dnorm else np.nan
 
         msg = f"""\

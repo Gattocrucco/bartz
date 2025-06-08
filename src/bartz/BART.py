@@ -30,10 +30,12 @@ from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.special import ndtri
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key
 
-from . import grove, jaxext, mcmcloop, mcmcstep, prepcovars
+from bartz.jaxext.scipy.special import ndtri
+from bartz.jaxext.scipy.stats import invgamma
+
+from . import grove, mcmcloop, mcmcstep, prepcovars
 
 FloatLike = float | Float[Any, '']
 
@@ -94,7 +96,9 @@ class gbart:
         The prior mean of the latent mean function. If not specified, it is set
         to the mean of `y_train` for continuous regression, and to
         ``Phi^-1(mean(y_train))`` for binary regression. If `y_train` is empty,
-        `offset` is set to 0.
+        `offset` is set to 0. With binary regression, if `y_train` is all
+        `False` or `True`, it is set to ``Phi^-1(1/(n+1))`` or
+        ``Phi^-1(n/(n+1))``, respectively.
     w : array (n,), optional
         Coefficients that rescale the error standard deviation on each
         datapoint. Not specifying `w` is equivalent to setting it to 1 for all
@@ -185,13 +189,16 @@ class gbart:
     offset: Float32[Array, '']
     sigest: Float32[Array, ''] | None
 
+    _mcmc_state: mcmcstep.State
+    _main_trace: mcmcloop.MainTrace
+
     def __init__(
         self,
         x_train,
         y_train,
         *,
         x_test=None,
-        type: Literal['wbart', 'pbart'] = 'wbart',
+        type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
         usequants=False,
         sigest=None,
         sigdf=3,
@@ -270,7 +277,7 @@ class gbart:
     def yhat_train(self) -> Float32[Array, 'ndpost n']:
         """The conditional posterior mean at `x_train` for each MCMC iteration."""
         x_train = self._mcmc_state.X
-        return self._predict(self._main_trace, x_train)
+        return self._predict(x_train)
 
     @functools.cached_property
     def yhat_train_mean(self) -> Float32[Array, ' n']:
@@ -310,11 +317,10 @@ class gbart:
         """
         x_test, x_test_fmt = self._process_predictor_input(x_test)
         if x_test_fmt != self._x_train_fmt:
-            raise ValueError(
-                f'Input format mismatch: {x_test_fmt=} != x_train_fmt={self._x_train_fmt!r}'
-            )
+            msg = f'Input format mismatch: {x_test_fmt=} != x_train_fmt={self._x_train_fmt!r}'
+            raise ValueError(msg)
         x_test = self._bin_predictors(x_test, self._splits)
-        return self._predict(self._main_trace, x_test)
+        return self._predict(x_test)
 
     @staticmethod
     def _process_predictor_input(x):
@@ -349,13 +355,16 @@ class gbart:
     ) -> tuple[Float32[Array, ''] | None, ...]:
         if y_train.dtype == bool:
             if sigest is not None:
-                raise ValueError('Let `sigest=None` for binary regression')
+                msg = 'Let `sigest=None` for binary regression'
+                raise ValueError(msg)
             if lamda is not None:
-                raise ValueError('Let `lamda=None` for binary regression')
+                msg = 'Let `lamda=None` for binary regression'
+                raise ValueError(msg)
             return None, None
         elif lamda is not None:
             if sigest is not None:
-                raise ValueError('Let `sigest=None` if `lamda` is specified')
+                msg = 'Let `sigest=None` if `lamda` is specified'
+                raise ValueError(msg)
             return lamda, None
         else:
             if sigest is not None:
@@ -373,31 +382,33 @@ class gbart:
                 dof = len(y_train) - rank
                 sigest2 = chisq / dof
             alpha = sigdf / 2
-            invchi2 = jaxext.scipy.stats.invgamma.ppf(sigquant, alpha) / 2
+            invchi2 = invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
             return sigest2 / invchi2rid, jnp.sqrt(sigest2)
 
     @staticmethod
-    def _process_type_settings(y_train, type, w):
+    def _process_type_settings(y_train, type, w):  # noqa: A002
         match type:
             case 'wbart':
                 if y_train.dtype != jnp.float32:
-                    raise TypeError(
+                    msg = (
                         'Continuous regression requires y_train.dtype=float32,'
                         f' got {y_train.dtype=} instead.'
                     )
+                    raise TypeError(msg)
             case 'pbart':
                 if w is not None:
-                    raise ValueError(
-                        'Binary regression does not support weights, set `w=None`'
-                    )
+                    msg = 'Binary regression does not support weights, set `w=None`'
+                    raise ValueError(msg)
                 if y_train.dtype != bool:
-                    raise TypeError(
+                    msg = (
                         'Binary regression requires y_train.dtype=bool,'
                         f' got {y_train.dtype=} instead.'
                     )
+                    raise TypeError(msg)
             case _:
-                raise ValueError(f'Invalid {type=}')
+                msg = f'Invalid {type=}'
+                raise ValueError(msg)
 
         return y_train
 
@@ -414,6 +425,8 @@ class gbart:
             mean = y_train.mean()
 
         if y_train.dtype == bool:
+            bound = 1 / (1 + y_train.size)
+            mean = jnp.clip(mean, bound, 1 - bound)
             return ndtri(mean)
         else:
             return mean
@@ -514,37 +527,41 @@ class gbart:
         return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
 
     @staticmethod
-    def _extract_sigma(trace) -> Float32[Array, ' trace_length'] | None:
-        if trace['sigma2'] is None:
+    def _extract_sigma(
+        trace: mcmcloop.MainTrace,
+    ) -> Float32[Array, ' trace_length'] | None:
+        if trace.sigma2 is None:
             return None
         else:
-            return jnp.sqrt(trace['sigma2'])
+            return jnp.sqrt(trace.sigma2)
 
-    @staticmethod
-    def _predict(trace, x):
-        return mcmcloop.evaluate_trace(trace, x)
+    def _predict(self, x):
+        return mcmcloop.evaluate_trace(self._main_trace, x)
 
     def _show_tree(self, i_sample, i_tree, print_all=False):
-        from . import debug
+        from .debug import format_tree
 
-        trace = self._main_trace
-        leaf_tree = trace['leaf_trees'][i_sample, i_tree]
-        var_tree = trace['var_trees'][i_sample, i_tree]
-        split_tree = trace['split_trees'][i_sample, i_tree]
-        debug.print_tree(leaf_tree, var_tree, split_tree, print_all)
+        tree = mcmcloop.TreesTrace(
+            leaf_tree=self._main_trace.leaf_tree,
+            var_tree=self._main_trace.var_tree,
+            split_tree=self._main_trace.split_tree,
+        )
+        tree = jax.tree.map(lambda x: x[i_sample, i_tree, :], tree)
+        s = format_tree(tree, print_all=print_all)
+        print(s)  # noqa: T201, this method is intended for debug
 
     def _sigma_harmonic_mean(self, prior=False):
         bart = self._mcmc_state
+        assert bart.sigma2_alpha is not None
+        assert bart.z is None
         if prior:
-            alpha = bart['sigma2_alpha']
-            beta = bart['sigma2_beta']
+            alpha = bart.sigma2_alpha
+            beta = bart.sigma2_beta
         else:
-            resid = bart['resid']
-            alpha = bart['sigma2_alpha'] + resid.size / 2
-            norm2 = jnp.dot(
-                resid, resid, preferred_element_type=bart['sigma2_beta'].dtype
-            )
-            beta = bart['sigma2_beta'] + norm2 / 2
+            resid = bart.resid
+            alpha = bart.sigma2_alpha + resid.size / 2
+            norm2 = resid @ resid
+            beta = bart.sigma2_beta + norm2 / 2
         sigma2 = beta / alpha
         return jnp.sqrt(sigma2)
 
@@ -552,13 +569,7 @@ class gbart:
         bart = self._mcmc_state
         resid1 = bart.resid
 
-        trees = grove.evaluate_forest(
-            bart.X,
-            bart.forest.leaf_trees,
-            bart.forest.var_trees,
-            bart.forest.split_trees,
-            jnp.float32,  # TODO remove these configurable dtypes around
-        )
+        trees = grove.evaluate_forest(bart.X, bart.forest)
 
         if bart.z is not None:
             ref = bart.z
@@ -572,8 +583,8 @@ class gbart:
         trace = self._main_trace
 
         def acc(prefix):
-            acc = trace[f'{prefix}_acc_count']
-            prop = trace[f'{prefix}_prop_count']
+            acc = getattr(trace, f'{prefix}_acc_count')
+            prop = getattr(trace, f'{prefix}_prop_count')
             return acc.sum() / prop.sum()
 
         return acc('grow'), acc('prune')
@@ -582,7 +593,7 @@ class gbart:
         trace = self._main_trace
 
         def prop(prefix):
-            return trace[f'{prefix}_prop_count'].sum()
+            return getattr(trace, f'{prefix}_prop_count').sum()
 
         pgrow = prop('grow')
         pprune = prop('prune')
@@ -597,9 +608,7 @@ class gbart:
     def _depth_distr(self):
         from . import debug
 
-        trace = self._main_trace
-        split_trees = trace['split_trees']
-        return debug.trace_depth_distr(split_trees)
+        return debug.trace_depth_distr(self._main_trace.split_tree)
 
     def _points_per_leaf_distr(self):
         from . import debug

@@ -69,3 +69,24 @@ The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. B
     uv run asv preview
 
 :literal:`asv run` writes the results into files saved in :literal:`./benchmarks`. These files are tracked by git; consider deliberately not committing all results generated while developing.
+
+Documentation
+-------------
+
+To build the documentation for the current working copy, do
+
+.. code-block:: shell
+
+    make docs
+
+To build the documentation for the latest release tag, do
+
+.. code-block:: shell
+
+    make docs-latest
+
+To debug the documentation build, do
+
+.. code-block:: shell
+
+    make docs SPHINXOPTS='--fresh-env --pdb'

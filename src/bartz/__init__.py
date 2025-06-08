@@ -28,5 +28,5 @@ Super-fast BART (Bayesian Additive Regression Trees) in Python.
 See the manual at https://gattocrucco.github.io/bartz/docs
 """
 
-from . import BART, debug, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
+from . import BART, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
 from ._version import __version__  # noqa: F401

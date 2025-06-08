@@ -24,156 +24,203 @@
 
 """Functions that implement the full BART posterior MCMC loop."""
 
+from collections.abc import Callable
+from dataclasses import fields
 from functools import partial, wraps
+from typing import Any, Protocol
 
 import jax
 import numpy
+from equinox import Module
 from jax import debug, lax, tree
 from jax import numpy as jnp
-from jaxtyping import Array, Int32, Real
+from jaxtyping import Array, Float32, Int32, Key, PyTree, Real, Shaped, UInt
 
 from . import grove, jaxext, mcmcstep
 from .mcmcstep import State
 
 
-def default_onlymain_extractor(state: State) -> dict[str, Real[Array, 'samples *']]:
-    """Extract variables for the main trace, to be used in `run_mcmc`."""
-    return dict(
-        leaf_trees=state.forest.leaf_trees,
-        var_trees=state.forest.var_trees,
-        split_trees=state.forest.split_trees,
-        offset=state.offset,
-    )
+class BurninTrace(Module):
+    """MCMC trace with only diagnostic values."""
+
+    sigma2: Float32[Array, '*trace_length'] | None
+    grow_prop_count: Int32[Array, '*trace_length']
+    grow_acc_count: Int32[Array, '*trace_length']
+    prune_prop_count: Int32[Array, '*trace_length']
+    prune_acc_count: Int32[Array, '*trace_length']
+    log_likelihood: Float32[Array, '*trace_length'] | None
+    log_trans_prior: Float32[Array, '*trace_length'] | None
+
+    @classmethod
+    def from_state(cls, state: State) -> 'BurninTrace':
+        """Create a single-item burn-in trace from a MCMC state."""
+        return cls(
+            sigma2=state.sigma2,
+            grow_prop_count=state.forest.grow_prop_count,
+            grow_acc_count=state.forest.grow_acc_count,
+            prune_prop_count=state.forest.prune_prop_count,
+            prune_acc_count=state.forest.prune_acc_count,
+            log_likelihood=state.forest.log_likelihood,
+            log_trans_prior=state.forest.log_trans_prior,
+        )
 
 
-def default_both_extractor(state: State) -> dict[str, Real[Array, 'samples *'] | None]:
-    """Extract variables for main & burn-in traces, to be used in `run_mcmc`."""
-    return dict(
-        sigma2=state.sigma2,
-        grow_prop_count=state.forest.grow_prop_count,
-        grow_acc_count=state.forest.grow_acc_count,
-        prune_prop_count=state.forest.prune_prop_count,
-        prune_acc_count=state.forest.prune_acc_count,
-        log_likelihood=state.forest.log_likelihood,
-        log_trans_prior=state.forest.log_trans_prior,
-    )
+class MainTrace(BurninTrace):
+    """MCMC trace with trees and diagnostic values."""
+
+    leaf_tree: Real[Array, '*trace_length 2**d']
+    var_tree: Real[Array, '*trace_length 2**(d-1)']
+    split_tree: Real[Array, '*trace_length 2**(d-1)']
+    offset: Float32[Array, '*trace_length']
+
+    @classmethod
+    def from_state(cls, state: State) -> 'MainTrace':
+        """Create a single-item main trace from a MCMC state."""
+        return cls(
+            leaf_tree=state.forest.leaf_tree,
+            var_tree=state.forest.var_tree,
+            split_tree=state.forest.split_tree,
+            offset=state.offset,
+            **vars(BurninTrace.from_state(state)),
+        )
+
+
+CallbackState = PyTree[Any, 'T']
+
+
+class Callback(Protocol):
+    """Callback type for `run_mcmc`."""
+
+    def __call__(
+        self,
+        *,
+        bart: State,
+        burnin: bool,
+        overflow: bool,
+        i_total: int,
+        i_skip: int,
+        callback_state: CallbackState,
+        n_burn: int,
+        n_save: int,
+        n_skip: int,
+        i_outer: int,
+        inner_loop_length: int,
+    ) -> tuple[State, CallbackState] | None:
+        """Do an arbitrary action after an iteration of the MCMC.
+
+        Parameters
+        ----------
+        bart
+            The MCMC state just after updating it.
+        burnin
+            Whether the last iteration was in the burn-in phase.
+        overflow
+            Whether the last iteration was in the overflow phase (iterations
+            not saved due to `inner_loop_length` not being a divisor of the
+            total number of iterations).
+        i_total
+            The index of the last MCMC iteration (0-based).
+        i_skip
+            The number of MCMC updates from the last saved state. The initial
+            state counts as saved, even if it's not copied into the trace.
+        callback_state
+            The callback state, initially set to the argument passed to
+            `run_mcmc`, afterwards to the value returned by the last invocation
+            of `inner_callback` or `outer_callback`.
+        n_burn
+        n_save
+        n_skip
+            The corresponding `run_mcmc` arguments as-is.
+        i_outer
+            The index of the last outer loop iteration (0-based).
+        inner_loop_length
+            The number of MCMC iterations in the inner loop.
+
+        Returns
+        -------
+        The callback may return `None`. Otherwise, return:
+
+        bart : dict
+            A possibly modified MCMC state. To avoid modifying the state,
+            return the `bart` argument passed to the callback as-is.
+        callback_state : CallbackState
+            The new state to be passed on the next callback invocation.
+        """
+        ...
 
 
 def run_mcmc(
-    key,
-    bart,
-    n_save,
+    key: Key[Array, ''],
+    bart: State,
+    n_save: int,
     *,
-    n_burn=0,
-    n_skip=1,
-    inner_loop_length=None,
-    allow_overflow=False,
-    inner_callback=None,
-    outer_callback=None,
-    callback_state=None,
-    onlymain_extractor=default_onlymain_extractor,
-    both_extractor=default_both_extractor,
-):
+    n_burn: int = 0,
+    n_skip: int = 1,
+    inner_loop_length: int | None = None,
+    allow_overflow: bool = False,
+    inner_callback: Callback | None = None,
+    outer_callback: Callback | None = None,
+    callback_state: CallbackState = None,
+    burnin_extractor: Callable[[State], PyTree] = BurninTrace.from_state,
+    main_extractor: Callable[[State], PyTree] = MainTrace.from_state,
+) -> tuple[State, PyTree[Shaped[Array, 'n_burn *']], PyTree[Shaped[Array, 'n_save *']]]:
     """
     Run the MCMC for the BART posterior.
 
     Parameters
     ----------
-    key : jax.dtypes.prng_key array
+    key
         A key for random number generation.
-    bart : dict
+    bart
         The initial MCMC state, as created and updated by the functions in
         `bartz.mcmcstep`. The MCMC loop uses buffer donation to avoid copies,
         so this variable is invalidated after running `run_mcmc`. Make a copy
         beforehand to use it again.
-    n_save : int
+    n_save
         The number of iterations to save.
-    n_burn : int, default 0
+    n_burn
         The number of initial iterations which are not saved.
-    n_skip : int, default 1
+    n_skip
         The number of iterations to skip between each saved iteration, plus 1.
         The effective burn-in is ``n_burn + n_skip - 1``.
-    inner_loop_length : int, optional
+    inner_loop_length
         The MCMC loop is split into an outer and an inner loop. The outer loop
         is in Python, while the inner loop is in JAX. `inner_loop_length` is the
         number of iterations of the inner loop to run for each iteration of the
         outer loop. If not specified, the outer loop will iterate just once,
         with all iterations done in a single inner loop run. The inner stride is
         unrelated to the stride used for saving the trace.
-    allow_overflow : bool, default False
+    allow_overflow
         If `False`, `inner_loop_length` must be a divisor of the total number of
         iterations ``n_burn + n_skip * n_save``. If `True` and
         `inner_loop_length` is not a divisor, some of the MCMC iterations in the
         last outer loop iteration will not be saved to the trace.
-    inner_callback : callable, optional
-    outer_callback : callable, optional
+    inner_callback
+    outer_callback
         Arbitrary functions run during the loop after updating the state.
         `inner_callback` is called after each update, while `outer_callback` is
-        called after completing an inner loop. The callbacks are invoked with
-        the following arguments, passed by keyword:
-
-        bart : dict
-            The MCMC state just after updating it.
-        burnin : bool
-            Whether the last iteration was in the burn-in phase.
-        overflow : bool
-            Whether the last iteration was in the overflow phase (iterations
-            not saved due to `inner_loop_length` not being a divisor of the
-            total number of iterations).
-        i_total : int
-            The index of the last MCMC iteration (0-based).
-        i_skip : int
-            The number of MCMC updates from the last saved state. The initial
-            state counts as saved, even if it's not copied into the trace.
-        callback_state : jax pytree
-            The callback state, initially set to the argument passed to
-            `run_mcmc`, afterwards to the value returned by the last invocation
-            of `inner_callback` or `outer_callback`.
-        n_burn, n_save, n_skip : int
-            The corresponding arguments as-is.
-        i_outer : int
-            The index of the last outer loop iteration (0-based).
-        inner_loop_length : int
-            The number of MCMC iterations in the inner loop.
-
-        `inner_callback` is called under the jax jit, so the argument values are
-        not available at the time the Python code is executed. Use the utilities
-        in `jax.debug` to access the values at actual runtime.
-
-        The callbacks must return two values:
-
-        bart : dict
-            A possibly modified MCMC state. To avoid modifying the state,
-            return the `bart` argument passed to the callback as-is.
-        callback_state : jax pytree
-            The new state to be passed on the next callback invocation.
-
-        For convenience, if a callback returns `None`, the states are not
-        updated.
-    callback_state : jax pytree, optional
+        called after completing an inner loop. For the signature, see
+        `Callback`. `inner_callback` is called under the jax jit, so the
+        argument values are not available at the time the Python code is
+        executed. Use the utilities in `jax.debug` to access the values at
+        actual runtime. The callbacks may return new values for the MCMC state
+        and the callback state.
+    callback_state
         The initial state for the callbacks.
-    onlymain_extractor : callable, optional
-    both_extractor : callable, optional
+    burnin_extractor
+    main_extractor
         Functions that extract the variables to be saved respectively only in
         the main trace and in both traces, given the MCMC state as argument.
         Must return a pytree, and must be vmappable.
 
     Returns
     -------
-    bart : dict
+    bart : State
         The final MCMC state.
-    burnin_trace : dict of (n_burn, ...) arrays
-        The trace of the burn-in phase, containing the following subset of
-        fields from the `bart` dictionary, with an additional head index that
-        runs over MCMC iterations: 'sigma2', 'grow_prop_count',
-        'grow_acc_count', 'prune_prop_count', 'prune_acc_count' (or if specified
-        the fields in `tracevars_both`).
-    main_trace : dict of (n_save, ...) arrays
-        The trace of the main phase, containing the following subset of fields
-        from the `bart` dictionary, with an additional head index that runs over
-        MCMC iterations: 'leaf_trees', 'var_trees', 'split_trees' (or if
-        specified the fields in `tracevars_onlymain`), plus the fields in
-        `burnin_trace`.
+    burnin_trace : PyTree[Shaped[Array, 'n_burn *']]
+        The trace of the burn-in phase. For the default layout, see `BurninTrace`.
+    main_trace : PyTree[Shaped[Array, 'n_save *']]
+        The trace of the main phase. For the default layout, see `MainTrace`.
 
     Raises
     ------
@@ -190,8 +237,8 @@ def run_mcmc(
     def empty_trace(length, bart, extractor):
         return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
 
-    trace_both = empty_trace(n_burn + n_save, bart, both_extractor)
-    trace_onlymain = empty_trace(n_save, bart, onlymain_extractor)
+    burnin_trace = empty_trace(n_burn, bart, burnin_extractor)
+    main_trace = empty_trace(n_save, bart, main_extractor)
 
     # determine number of iterations for inner and outer loops
     n_iters = n_burn + n_skip * n_save
@@ -202,23 +249,24 @@ def run_mcmc(
         if allow_overflow:
             n_outer += 1
         else:
-            raise ValueError(f'{n_iters=} is not divisible by {inner_loop_length=}')
+            msg = f'{n_iters=} is not divisible by {inner_loop_length=}'
+            raise ValueError(msg)
 
-    carry = (bart, 0, key, trace_both, trace_onlymain, callback_state)
+    carry = (bart, 0, key, burnin_trace, main_trace, callback_state)
     for i_outer in range(n_outer):
         carry = _run_mcmc_inner_loop(
             carry,
             inner_loop_length,
             inner_callback,
-            onlymain_extractor,
-            both_extractor,
+            burnin_extractor,
+            main_extractor,
             n_burn,
             n_save,
             n_skip,
             i_outer,
         )
         if outer_callback is not None:
-            bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
+            bart, i_total, key, burnin_trace, main_trace, callback_state = carry
             i_total -= 1  # because i_total is updated at the end of the inner loop
             i_skip = _compute_i_skip(i_total, n_burn, n_skip)
             rt = outer_callback(
@@ -237,14 +285,9 @@ def run_mcmc(
             if rt is not None:
                 bart, callback_state = rt
                 i_total += 1
-                carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
+                carry = (bart, i_total, key, burnin_trace, main_trace, callback_state)
 
-    bart, _, _, trace_both, trace_onlymain, _ = carry
-
-    burnin_trace = tree.map(lambda x: x[:n_burn, ...], trace_both)
-    main_trace = tree.map(lambda x: x[n_burn:, ...], trace_both)
-    main_trace.update(trace_onlymain)
-
+    bart, _, _, burnin_trace, main_trace, _ = carry
     return bart, burnin_trace, main_trace
 
 
@@ -262,15 +305,15 @@ def _run_mcmc_inner_loop(
     carry,
     inner_loop_length,
     inner_callback,
-    onlymain_extractor,
-    both_extractor,
+    burnin_extractor,
+    main_extractor,
     n_burn,
     n_save,
     n_skip,
     i_outer,
 ):
     def loop(carry, _):
-        bart, i_total, key, trace_both, trace_onlymain, callback_state = carry
+        bart, i_total, key, burnin_trace, main_trace, callback_state = carry
 
         keys = jaxext.split(key)
         key = keys.pop()
@@ -295,8 +338,8 @@ def _run_mcmc_inner_loop(
             if rt is not None:
                 bart, callback_state = rt
 
-        i_onlymain = jnp.where(burnin, 0, (i_total - n_burn) // n_skip)
-        i_both = jnp.where(burnin, i_total, n_burn + i_onlymain)
+        i_burnin = i_total  # out of bounds after burnin
+        i_main = jnp.where(burnin, 0, (i_total - n_burn) // n_skip)
 
         def update_trace(index, trace, state):
             def assign_at_index(trace_array, state_array):
@@ -310,13 +353,11 @@ def _run_mcmc_inner_loop(
 
             return tree.map(assign_at_index, trace, state)
 
-        trace_onlymain = update_trace(
-            i_onlymain, trace_onlymain, onlymain_extractor(bart)
-        )
-        trace_both = update_trace(i_both, trace_both, both_extractor(bart))
+        burnin_trace = update_trace(i_burnin, burnin_trace, burnin_extractor(bart))
+        main_trace = update_trace(i_main, main_trace, main_extractor(bart))
 
         i_total += 1
-        carry = (bart, i_total, key, trace_both, trace_onlymain, callback_state)
+        carry = (bart, i_total, key, burnin_trace, main_trace, callback_state)
         return carry, None
 
     carry, _ = lax.scan(loop, carry, None, inner_loop_length)
@@ -366,12 +407,13 @@ def _print_callback_inner(*, i_total, callback_state, **_):
 
 def _print_dot(cond):
     if cond:
-        print('.', end='', flush=True)
+        print('.', end='', flush=True)  # noqa: T201
+        # logging can't do in-line printing so I'll stick to print
 
 
 def _print_callback_outer(
     *,
-    bart,
+    bart: State,
     burnin,
     overflow,
     i_total,
@@ -402,8 +444,8 @@ def _print_callback_outer(
             grow_acc_count=bart.forest.grow_acc_count,
             prune_prop_count=bart.forest.prune_prop_count,
             prune_acc_count=bart.forest.prune_acc_count,
-            prop_total=len(bart.forest.leaf_trees),
-            fill=grove.forest_fill(bart.forest.split_trees),
+            prop_total=len(bart.forest.leaf_tree),
+            fill=grove.forest_fill(bart.forest.split_tree),
         )
 
 
@@ -473,7 +515,7 @@ def _print_report(
         else:
             flag = ''
 
-        print(
+        print(  # noqa: T201, see _print_dot for why not logging
             f'{newline}It {i_total + 1}/{n_iters} '
             f'grow P={grow_prop:.0%} A={grow_acc}, '
             f'prune P={prune_prop:.0%} A={prune_acc}, '
@@ -481,40 +523,59 @@ def _print_report(
         )
 
 
+class Trace(grove.TreeHeaps, Protocol):
+    """Protocol for a MCMC trace."""
+
+    offset: Float32[Array, ' trace_length']
+
+
+class TreesTrace(Module):
+    """Implementation of `TreeHeaps` for an MCMC trace."""
+
+    leaf_tree: Float32[Array, 'trace_length num_trees 2**d']
+    var_tree: UInt[Array, 'trace_length num_trees 2**(d-1)']
+    split_tree: UInt[Array, 'trace_length num_trees 2**(d-1)']
+
+    @classmethod
+    def from_dataclass(cls, obj: grove.TreeHeaps):
+        """Create a `TreesTrace` from any `TreeHeaps`."""
+        names = [f.name for f in fields(cls)]
+        return cls(**{name: getattr(obj, name) for name in names})
+
+
 @jax.jit
-def evaluate_trace(trace, X):
+def evaluate_trace(
+    trace: Trace, X: UInt[Array, 'p n']
+) -> Float32[Array, 'trace_length n']:
     """
     Compute predictions for all iterations of the BART MCMC.
 
     Parameters
     ----------
-    trace : dict
+    trace
         A trace of the BART MCMC, as returned by `run_mcmc`.
-    X : array (p, n)
+    X
         The predictors matrix, with `p` predictors and `n` observations.
 
     Returns
     -------
-    y : array (n_trace, n)
-        The predictions for each iteration of the MCMC.
+    The predictions for each iteration of the MCMC.
     """
     evaluate_trees = partial(grove.evaluate_forest, sum_trees=False)
-    evaluate_trees = jaxext.autobatch(evaluate_trees, 2**29, (None, 0, 0, 0))
+    evaluate_trees = jaxext.autobatch(evaluate_trees, 2**29, (None, 0))
+    trees = TreesTrace.from_dataclass(trace)
 
-    def loop(_, row):
-        values = evaluate_trees(
-            X, row['leaf_trees'], row['var_trees'], row['split_trees']
-        )
-        return None, row['offset'] + jnp.sum(values, axis=0, dtype=jnp.float32)
+    def loop(_, item):
+        offset, trees = item
+        values = evaluate_trees(X, trees)
+        return None, offset + jnp.sum(values, axis=0, dtype=jnp.float32)
 
-    _, y = lax.scan(loop, None, trace)
+    _, y = lax.scan(loop, None, (trace.offset, trees))
     return y
 
 
 @partial(jax.jit, static_argnums=(0,))
-def compute_varcount(
-    p: int, trace: dict[str, Real[Array, 'lentrace ...']]
-) -> Int32[Array, 'lentrace {p}']:
+def compute_varcount(p: int, trace: Trace) -> Int32[Array, 'trace_length {p}']:
     """
     Count how many times each predictor is used in each MCMC state.
 
@@ -530,4 +591,4 @@ def compute_varcount(
     Histogram of predictor usage in each MCMC state.
     """
     vmapped_var_histogram = jax.vmap(grove.var_histogram, in_axes=(None, 0, 0))
-    return vmapped_var_histogram(p, trace['var_trees'], trace['split_trees'])
+    return vmapped_var_histogram(p, trace.var_tree, trace.split_tree)

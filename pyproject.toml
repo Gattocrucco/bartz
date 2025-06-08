@@ -140,17 +140,59 @@ quote-style = "single"
 
 [tool.ruff.lint]
 select = [
-    "B", # bugbear: grab bag of additional stuff
-    "UP", # pyupgrade: fix some outdated idioms
-    "I", # isort: sort and reformat import statements
+    "ERA",  # eradicate
+    "S", # flake8-bandit
+    "BLE", # flake8-blind-except
+    "B", # bugbear
+    "A", # flake8-builtins
+    "C4", # flake8-comprehensions
+    "CPY", # flake8-copyright
+    "DTZ", # flake8-datetimez
+    "T10", # flake8-debugger
+    "EM", # flake8-errmsg
+    "EXE", # flake8-executable
+    "FIX", # flake8-fixme
+    "ISC", # flake8-implicit-str-concat
+    "INP", # flake8-no-pep420
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "PT", # flake8-pytest-style
+    "RSE", # flake8-raise
+    "RET", # flake8-return
+    "SLF", # flake8-self
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "ARG", # flake8-unused-arguments
+    "PTH", # flake8-use-pathlib
+    "FLY", # flynt
+    "I", # isort
+    "C90", # mccabe
+    "NPY", # NumPy-specific rules
+    "PERF", # Perflint
+    "W", # pycodestyle Warning
     "F", # pyflakes
     "D", # pydocstyle
-    "PT", # flake8-pytest-style
+    "PGH", # pygrep-hooks
+    "PLC", # Pylint Convention
+    "PLE", # Pylint Error
+    "PLR", # Pylint Refactor
+    "PLW", # Pyling Warning
+    "UP", # pyupgrade
+    "FURB", # refurb
+    "RUF", # Ruff-specific rules
+    "TRY", # tryceratops
 ]
 ignore = [
     "B028",  # warn with stacklevel = 2
+    "C408",  # Unnecessary `dict()` call (rewrite as a literal), it's too convenient for kwargs
     "D105",  # Missing docstring in magic method
     "F722",  # Syntax error in forward annotation. I ignore this because jaxtyping uses strings for shapes instead of for deferred annotations.
+    "PLR0913",  # Too many arguments in function definition. Maybe I should do something about this?
+    "PLR2004",  # Magic value used in comparison, consider replacing `*` with a constant variable
+    "RET505",  # Unnecessary `{branch}` after `return` statement. I ignore this because I like to keep branches for readability.
+    "S101",  # Use of `assert` detected. Too annoying.
+    "S603",  # `subprocess` call: check for execution of untrusted input. Too many false positives.
+    "SIM108",  # SIM108 Use ternary operator `*` instead of `if`-`else`-block, I find blocks more readable
     "UP037",  # Remove quotes from type annotation. Ignore because jaxtyping.
 ]
 
@@ -162,9 +204,31 @@ ignore = [
     "D103",  # Missing docstring in public function
     "D104",  # Missing docstring in public package
 ]
+"src/bartz/_version.py" = [
+    "CPY001",  # Missing copyright notice at top of file
+]
+"{config/*,docs/*}" = [
+    "INP001",  # File * is part of an implicit namespace package. Add an `__init__.py`.
+]
+"{config/*,docs/*,tests/*}" = [
+    "T201",  # `print` found
+]
+"{tests/*,benchmarks/*}" = [
+    "SLF001",  # Private member accessed: `*`
+    "TID253",  # `{module}` is banned at the module level
+]
+"docs/conf.py" = [
+    "S607",  # Starting a process with a partial executable path. For a build script it makes more sense to use PATH.
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[tool.ruff.lint.flake8-copyright]
+min-file-size = 1
+
+[tool.ruff.lint.flake8-tidy-imports]
+banned-module-level-imports = ["bartz.debug"]
 
 [tool.pydoclint]
 baseline = "config/pydoclint-baseline.txt"

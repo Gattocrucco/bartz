@@ -42,13 +42,22 @@ Since the nodes at the bottom can only be leaves and not decision nodes, the 'va
 
 import functools
 import math
+from typing import Protocol
 
 import jax
 from jax import lax
 from jax import numpy as jnp
-from jaxtyping import Array, Int32, UInt
+from jaxtyping import Array, Float32, Int32, Shaped, UInt
 
 from . import jaxext
+
+
+class TreeHeaps(Protocol):
+    """A protocol for dataclasses that represent trees."""
+
+    leaf_tree: Float32[Array, '* 2**d']
+    var_tree: UInt[Array, '* 2**(d-1)']
+    split_tree: UInt[Array, '* 2**(d-1)']
 
 
 def make_tree(depth, dtype):
@@ -71,22 +80,21 @@ def make_tree(depth, dtype):
     return jnp.zeros(2**depth, dtype)
 
 
-def tree_depth(tree):
+def tree_depth(tree: Shaped[Array, '* 2**d']) -> int:
     """
     Return the maximum depth of a tree.
 
     Parameters
     ----------
-    tree : array
+    tree
         A tree created by `make_tree`. If the array is ND, the tree structure is
         assumed to be along the last axis.
 
     Returns
     -------
-    depth : int
-        The maximum depth of the tree.
+    The maximum depth of the tree.
     """
-    return int(round(math.log2(tree.shape[-1])))
+    return round(math.log2(tree.shape[-1]))
 
 
 def traverse_tree(x, var_tree, split_tree):
@@ -152,24 +160,17 @@ def traverse_forest(X, var_trees, split_trees):
     return traverse_tree(X, var_trees, split_trees)
 
 
-def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees=True):
+def evaluate_forest(X: UInt[Array, 'p n'], trees: TreeHeaps, *, sum_trees: bool = True):
     """
     Evaluate a ensemble of trees at an array of points.
 
     Parameters
     ----------
-    X : array (p, n)
+    X
         The coordinates to evaluate the trees at.
-    leaf_trees : array (m, 2 ** d)
-        The leaf values of the tree or forest. If the input is a forest, the
-        first axis is the tree index, and the values are summed.
-    var_trees : array (m, 2 ** (d - 1))
-        The decision axes of the trees.
-    split_trees : array (m, 2 ** (d - 1))
-        The decision boundaries of the trees.
-    dtype : dtype, optional
-        The dtype of the output. Ignored if `sum_trees` is `False`.
-    sum_trees : bool, default True
+    trees
+        The tree heaps, with batch shape (m,).
+    sum_trees
         Whether to sum the values across trees.
 
     Returns
@@ -177,12 +178,12 @@ def evaluate_forest(X, leaf_trees, var_trees, split_trees, dtype=None, sum_trees
     out : array (n,) or (m, n)
         The (sum of) the values of the trees at the points in `X`.
     """
-    indices = traverse_forest(X, var_trees, split_trees)
-    ntree, _ = leaf_trees.shape
+    indices = traverse_forest(X, trees.var_tree, trees.split_tree)
+    ntree, _ = trees.leaf_tree.shape
     tree_index = jnp.arange(ntree, dtype=jaxext.minimal_unsigned_dtype(ntree - 1))
-    leaves = leaf_trees[tree_index[:, None], indices]
+    leaves = trees.leaf_tree[tree_index[:, None], indices]
     if sum_trees:
-        return jnp.sum(leaves, axis=0, dtype=dtype)
+        return jnp.sum(leaves, axis=0, dtype=jnp.float32)
     # this sum suggests to swap the vmaps, but I think it's better for X
     # copying to keep it that way
     else:
@@ -290,31 +291,30 @@ def is_used(split_tree):
     return internal_node | actual_leaf
 
 
-def forest_fill(split_trees):
+def forest_fill(split_trees: UInt[Array, 'num_trees 2**(d-1)']) -> Float32[Array, '']:
     """
     Return the fraction of used nodes in a set of trees.
 
     Parameters
     ----------
-    split_trees : array (m, 2 ** (d - 1),)
+    split_trees
         The decision boundaries of the trees.
 
     Returns
     -------
-    fill : float
-        The number of tree nodes in the forest over the maximum number that
-        could be stored in the arrays.
+    The number of tree nodes in the forest over the maximum number that could be
+    stored in the arrays.
     """
-    m, _ = split_trees.shape
+    num_trees, _ = split_trees.shape
     used = jax.vmap(is_used)(split_trees)
     count = jnp.count_nonzero(used)
-    return count / (used.size - m)
+    return count / (used.size - num_trees)
 
 
 def var_histogram(
     p: int,
-    var_tree: UInt[Array, '... 2**(d-1)'],
-    split_tree: UInt[Array, '... 2**(d-1)'],
+    var_tree: UInt[Array, '* 2**(d-1)'],
+    split_tree: UInt[Array, '* 2**(d-1)'],
 ) -> Int32[Array, ' {p}']:
     """
     Count how many times each variable appears in a tree.

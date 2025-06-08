@@ -34,18 +34,20 @@ import os
 import pathlib
 import subprocess
 import sys
+from functools import cached_property
 
-import packaging
+from packaging import version as pkgversion
 
 # -- Doc variant -------------------------------------------------------------
 
 variant = os.environ.get('BARTZ_DOC_VARIANT', 'dev')
-assert variant in ('dev', 'latest')
 
 if variant == 'dev':
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    modif = subprocess.run(['git', 'diff', '--quiet']).returncode
-    modif_staged = subprocess.run(['git', 'diff', '--quiet', '--staged']).returncode
+    modif = subprocess.run(['git', 'diff', '--quiet'], check=False).returncode
+    modif_staged = subprocess.run(
+        ['git', 'diff', '--quiet', '--staged'], check=False
+    ).returncode
     uncommitted_stuff = modif or modif_staged
     version = f'{commit[:7]}{"+" if uncommitted_stuff else ""}'
 
@@ -58,8 +60,8 @@ elif variant == 'latest':
     versions = []
     for t in tags:
         try:
-            v = packaging.version.parse(t)
-        except packaging.version.InvalidVersion:
+            v = pkgversion.parse(t)
+        except pkgversion.InvalidVersion:
             continue
         if v.is_prerelease or v.is_devrelease:
             continue
@@ -74,10 +76,13 @@ elif variant == 'latest':
     subprocess.run(['git', 'checkout', tag], check=True)
     import bartz
 
-    assert packaging.version.parse(bartz.__version__) == version
+    assert pkgversion.parse(bartz.__version__) == version
 
     version = str(version)
     uncommitted_stuff = False
+
+else:
+    raise KeyError(variant)
 
 import bartz
 
@@ -86,11 +91,11 @@ import bartz
 project = f'bartz {version}'
 author = 'Giacomo Petrillo'
 
-now = datetime.datetime.now()
+now = datetime.datetime.now(tz=datetime.timezone.utc)
 year = '2024'
 if now.year > int(year):
     year += '-' + str(now.year)
-copyright = year + ', ' + author
+copyright = year + ', ' + author  # noqa: A001, because sphinx uses this variable
 
 release = version
 
@@ -125,7 +130,7 @@ myst_enable_extensions = [
 ]
 
 # Add any paths that contain templates here, relative to this directory.
-# templates_path = ['_templates']
+# templates_path = ['_templates'] # noqa: ERA001
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -161,6 +166,8 @@ master_doc = 'index'
 
 # -- Other options -------------------------------------------------
 
+default_role = 'py:obj'
+
 # autodoc
 autoclass_content = 'both'  # concatenate the class and __init__ docstrings
 # default arguments are printed as in source instead of being evaluated
@@ -178,15 +185,15 @@ napoleon_google_docstring = False
 napoleon_use_ivar = True
 napoleon_use_rtype = False
 
-default_role = 'py:obj'
-
+# intersphinx
 intersphinx_mapping = dict(
     scipy=('https://docs.scipy.org/doc/scipy', None),
     numpy=('https://numpy.org/doc/stable', None),
     jax=('https://docs.jax.dev/en/latest', None),
 )
 
-viewcode_line_numbers = True  # for 'viewcode' extension
+# viewcode
+viewcode_line_numbers = True
 
 
 def linkcode_resolve(domain, info):
@@ -195,47 +202,29 @@ def linkcode_resolve(domain, info):
 
     Adapted from scipy/doc/release/conf.py.
     """
-    if domain != 'py':
-        return None
+    assert domain == 'py'
 
     modname = info['module']
+    assert modname.startswith('bartz')
     fullname = info['fullname']
 
     submod = sys.modules.get(modname)
-    if submod is None:
-        return None
+    assert submod
 
     obj = submod
     for part in fullname.split('.'):
-        try:
-            obj = getattr(obj, part)
-        except Exception:
-            return None
+        obj = getattr(obj, part)
 
-    # Use the original function object if it is wrapped.
+    if isinstance(obj, cached_property):
+        obj = obj.func
     obj = inspect.unwrap(obj)
 
-    try:
-        fn = inspect.getsourcefile(obj)
-    except Exception:
-        fn = None
-    if not fn:
-        try:
-            fn = inspect.getsourcefile(sys.modules[obj.__module__])
-        except Exception:
-            fn = None
-    if not fn:
-        return None
+    fn = inspect.getsourcefile(obj)
+    assert fn
 
-    try:
-        source, lineno = inspect.getsourcelines(obj)
-    except Exception:
-        lineno = None
-
-    if lineno:
-        linespec = f'#L{lineno}-L{lineno + len(source) - 1}'
-    else:
-        linespec = ''
+    source, lineno = inspect.getsourcelines(obj)
+    assert lineno
+    linespec = f'#L{lineno}-L{lineno + len(source) - 1}'
 
     prefix = 'https://github.com/Gattocrucco/bartz/blob'
     root = pathlib.Path(bartz.__file__).parent

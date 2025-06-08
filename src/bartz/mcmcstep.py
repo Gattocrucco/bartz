@@ -47,7 +47,7 @@ from jax import numpy as jnp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
 from . import grove
-from .jaxext import minimal_unsigned_dtype, split, vmap_nodoc
+from .jaxext import minimal_unsigned_dtype, split, truncated_normal_onesided, vmap_nodoc
 
 
 class Forest(Module):
@@ -56,11 +56,11 @@ class Forest(Module):
 
     Parameters
     ----------
-    leaf_trees
+    leaf_tree
         The leaf values.
-    var_trees
+    var_tree
         The decision axes.
-    split_trees
+    split_tree
         The decision boundaries.
     p_nonterminal
         The probability of a nonterminal node at each depth, padded with a
@@ -93,18 +93,18 @@ class Forest(Module):
         The prior variance of a leaf, conditional on the tree structure.
     """
 
-    leaf_trees: Float32[Array, 'num_trees 2**d']
-    var_trees: UInt[Array, 'num_trees 2**(d-1)']
-    split_trees: UInt[Array, 'num_trees 2**(d-1)']
-    p_nonterminal: Float32[Array, 'd']
-    p_propose_grow: Float32[Array, '2**(d-1)']
+    leaf_tree: Float32[Array, 'num_trees 2**d']
+    var_tree: UInt[Array, 'num_trees 2**(d-1)']
+    split_tree: UInt[Array, 'num_trees 2**(d-1)']
+    p_nonterminal: Float32[Array, ' d']
+    p_propose_grow: Float32[Array, ' 2**(d-1)']
     leaf_indices: UInt[Array, 'num_trees n']
     min_points_per_leaf: Int32[Array, ''] | None
     affluence_trees: Bool[Array, 'num_trees 2**(d-1)'] | None
     resid_batch_size: int | None = field(static=True)
     count_batch_size: int | None = field(static=True)
-    log_trans_prior: Float32[Array, 'num_trees'] | None
-    log_likelihood: Float32[Array, 'num_trees'] | None
+    log_trans_prior: Float32[Array, ' num_trees'] | None
+    log_likelihood: Float32[Array, ' num_trees'] | None
     grow_prop_count: Int32[Array, '']
     prune_prop_count: Int32[Array, '']
     grow_acc_count: Int32[Array, '']
@@ -145,13 +145,13 @@ class State(Module):
     """
 
     X: UInt[Array, 'p n']
-    max_split: UInt[Array, 'p']
-    y: Float32[Array, 'n'] | Bool[Array, 'n']
-    z: None | Float32[Array, 'n']
+    max_split: UInt[Array, ' p']
+    y: Float32[Array, ' n'] | Bool[Array, ' n']
+    z: None | Float32[Array, ' n']
     offset: Float32[Array, '']
-    resid: Float32[Array, 'n']
+    resid: Float32[Array, ' n']
     sigma2: Float32[Array, ''] | None
-    prec_scale: Float32[Array, 'n'] | None
+    prec_scale: Float32[Array, ' n'] | None
     sigma2_alpha: Float32[Array, ''] | None
     sigma2_beta: Float32[Array, ''] | None
     forest: Forest
@@ -160,15 +160,15 @@ class State(Module):
 def init(
     *,
     X: UInt[Any, 'p n'],
-    y: Float32[Any, 'n'] | Bool[Any, 'n'],
+    y: Float32[Any, ' n'] | Bool[Any, ' n'],
     offset: float | Float32[Any, ''] = 0.0,
-    max_split: UInt[Any, 'p'],
+    max_split: UInt[Any, ' p'],
     num_trees: int,
-    p_nonterminal: Float32[Any, 'd-1'],
+    p_nonterminal: Float32[Any, ' d-1'],
     sigma_mu2: float | Float32[Any, ''],
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
-    error_scale: Float32[Any, 'n'] | None = None,
+    error_scale: Float32[Any, ' n'] | None = None,
     min_points_per_leaf: int | None = None,
     resid_batch_size: int | None | str = 'auto',
     count_batch_size: int | None | str = 'auto',
@@ -244,20 +244,18 @@ def init(
     is_binary = y.dtype == bool
     if is_binary:
         if (error_scale, sigma2_alpha, sigma2_beta) != 3 * (None,):
-            raise ValueError(
+            msg = (
                 'error_scale, sigma2_alpha, and sigma2_beta must be set '
                 ' to `None` for binary regression.'
             )
+            raise ValueError(msg)
         sigma2 = None
     else:
         sigma2_alpha = jnp.asarray(sigma2_alpha)
         sigma2_beta = jnp.asarray(sigma2_beta)
         sigma2 = sigma2_beta / sigma2_alpha
-        # sigma2 = jnp.where(jnp.isfinite(sigma2) & (sigma2 > 0), sigma2, 1)
-        # TODO: I don't like this isfinite check, these functions should be
-        # low-level and just do the thing. Why was it here?
 
-    bart = State(
+    return State(
         X=jnp.asarray(X),
         max_split=jnp.asarray(max_split),
         y=y,
@@ -271,11 +269,9 @@ def init(
         sigma2_alpha=sigma2_alpha,
         sigma2_beta=sigma2_beta,
         forest=Forest(
-            leaf_trees=make_forest(max_depth, jnp.float32),
-            var_trees=make_forest(
-                max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)
-            ),
-            split_trees=make_forest(max_depth - 1, max_split.dtype),
+            leaf_tree=make_forest(max_depth, jnp.float32),
+            var_tree=make_forest(max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)),
+            split_tree=make_forest(max_depth - 1, max_split.dtype),
             grow_prop_count=jnp.zeros((), int),
             grow_acc_count=jnp.zeros((), int),
             prune_prop_count=jnp.zeros((), int),
@@ -299,13 +295,11 @@ def init(
             ),
             resid_batch_size=resid_batch_size,
             count_batch_size=count_batch_size,
-            log_trans_prior=jnp.full(num_trees, jnp.nan) if save_ratios else None,
-            log_likelihood=jnp.full(num_trees, jnp.nan) if save_ratios else None,
+            log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
+            log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
             sigma_mu2=jnp.asarray(sigma_mu2),
         ),
     )
-
-    return bart
 
 
 def _choose_suffstat_batch_size(
@@ -319,16 +313,17 @@ def _choose_suffstat_batch_size(
             device = jax.devices()[0]
         platform = device.platform
         if platform not in ('cpu', 'gpu'):
-            raise KeyError(f'Unknown platform: {platform}')
+            msg = f'Unknown platform: {platform}'
+            raise KeyError(msg)
         return platform
 
     if resid_batch_size == 'auto':
         platform = get_platform()
         n = max(1, y.size)
         if platform == 'cpu':
-            resid_batch_size = 2 ** int(round(math.log2(n / 6)))  # n/6
+            resid_batch_size = 2 ** round(math.log2(n / 6))  # n/6
         elif platform == 'gpu':
-            resid_batch_size = 2 ** int(round((1 + math.log2(n)) / 3))  # n^1/3
+            resid_batch_size = 2 ** round((1 + math.log2(n)) / 3)  # n^1/3
         resid_batch_size = max(1, resid_batch_size)
 
     if count_batch_size == 'auto':
@@ -337,11 +332,11 @@ def _choose_suffstat_batch_size(
             count_batch_size = None
         elif platform == 'gpu':
             n = max(1, y.size)
-            count_batch_size = 2 ** int(round(math.log2(n) / 2 - 2))  # n^1/2
+            count_batch_size = 2 ** round(math.log2(n) / 2 - 2)  # n^1/2
             # /4 is good on V100, /2 on L4/T4, still haven't tried A100
             max_memory = 2**29
             itemsize = 4
-            min_batch_size = int(math.ceil(forest_size * itemsize * n / max_memory))
+            min_batch_size = math.ceil(forest_size * itemsize * n / max_memory)
             count_batch_size = max(count_batch_size, min_batch_size)
             count_batch_size = max(1, count_batch_size)
 
@@ -408,8 +403,8 @@ class Moves(Module):
     Parameters
     ----------
     allowed
-        Whether the move is possible in the first place. There are additional
-        constraints that could forbid it, but they are computed at acceptance
+        Whether the move is attempted in the first place. There are additional
+        constraints that could forbid it, but they are determined at acceptance
         time.
     grow
         Whether the move is a grow move or a prune move.
@@ -446,24 +441,24 @@ class Moves(Module):
         computed.
     """
 
-    allowed: Bool[Array, 'num_trees']
-    grow: Bool[Array, 'num_trees']
-    num_growable: UInt[Array, 'num_trees']
-    node: UInt[Array, 'num_trees']
-    left: UInt[Array, 'num_trees']
-    right: UInt[Array, 'num_trees']
-    partial_ratio: Float32[Array, 'num_trees'] | None
-    log_trans_prior_ratio: None | Float32[Array, 'num_trees']
-    grow_var: UInt[Array, 'num_trees']
-    grow_split: UInt[Array, 'num_trees']
+    allowed: Bool[Array, ' num_trees']
+    grow: Bool[Array, ' num_trees']
+    num_growable: UInt[Array, ' num_trees']
+    node: UInt[Array, ' num_trees']
+    left: UInt[Array, ' num_trees']
+    right: UInt[Array, ' num_trees']
+    partial_ratio: Float32[Array, ' num_trees'] | None
+    log_trans_prior_ratio: None | Float32[Array, ' num_trees']
+    grow_var: UInt[Array, ' num_trees']
+    grow_split: UInt[Array, ' num_trees']
     var_trees: UInt[Array, 'num_trees 2**(d-1)']
-    logu: Float32[Array, 'num_trees']
-    acc: None | Bool[Array, 'num_trees']
-    to_prune: None | Bool[Array, 'num_trees']
+    logu: Float32[Array, ' num_trees']
+    acc: None | Bool[Array, ' num_trees']
+    to_prune: None | Bool[Array, ' num_trees']
 
 
 def propose_moves(
-    key: Key[Array, ''], forest: Forest, max_split: UInt[Array, 'p']
+    key: Key[Array, ''], forest: Forest, max_split: UInt[Array, ' p']
 ) -> Moves:
     """
     Propose moves for all the trees.
@@ -485,14 +480,14 @@ def propose_moves(
     -------
     The proposed move for each tree.
     """
-    num_trees, _ = forest.leaf_trees.shape
+    num_trees, _ = forest.leaf_tree.shape
     keys = split(key, 1 + 2 * num_trees)
 
     # compute moves
     grow_moves = propose_grow_moves(
         keys.pop(num_trees),
-        forest.var_trees,
-        forest.split_trees,
+        forest.var_tree,
+        forest.split_tree,
         forest.affluence_trees,
         max_split,
         forest.p_nonterminal,
@@ -500,17 +495,18 @@ def propose_moves(
     )
     prune_moves = propose_prune_moves(
         keys.pop(num_trees),
-        forest.split_trees,
+        forest.split_tree,
         forest.affluence_trees,
         forest.p_nonterminal,
         forest.p_propose_grow,
     )
 
-    u, logu = random.uniform(keys.pop(), (2, num_trees), jnp.float32)
+    u, exp1mlogu = random.uniform(keys.pop(), (2, num_trees))
 
     # choose between grow or prune
-    grow_allowed = grow_moves.num_growable.astype(bool)
-    p_grow = jnp.where(grow_allowed & prune_moves.allowed, 0.5, grow_allowed)
+    p_grow = jnp.where(
+        grow_moves.allowed & prune_moves.allowed, 0.5, grow_moves.allowed
+    )
     grow = u < p_grow  # use < instead of <= because u is in [0, 1)
 
     # compute children indices
@@ -519,7 +515,7 @@ def propose_moves(
     right = left + 1
 
     return Moves(
-        allowed=grow | prune_moves.allowed,
+        allowed=grow_moves.allowed | prune_moves.allowed,
         grow=grow,
         num_growable=grow_moves.num_growable,
         node=node,
@@ -532,7 +528,7 @@ def propose_moves(
         grow_var=grow_moves.var,
         grow_split=grow_moves.split,
         var_trees=grow_moves.var_tree,
-        logu=jnp.log1p(-logu),
+        logu=jnp.log1p(-exp1mlogu),
         acc=None,  # will be set in accept_moves_sequential_stage
         to_prune=None,  # will be set in accept_moves_sequential_stage
     )
@@ -544,6 +540,8 @@ class GrowMoves(Module):
 
     Parameters
     ----------
+    allowed
+        Whether the move is allowed in the first place.
     num_growable
         The number of growable leaves.
     node
@@ -558,25 +556,31 @@ class GrowMoves(Module):
         move.
     var_tree
         The updated decision axes of the tree.
+
+    Notes
+    -----
+    `var`, `split` and `partial_ratio` are nonsensical if the move is not
+    allowed.
     """
 
-    num_growable: UInt[Array, 'num_trees']
-    node: UInt[Array, 'num_trees']
-    var: UInt[Array, 'num_trees']
-    split: UInt[Array, 'num_trees']
-    partial_ratio: Float32[Array, 'num_trees']
+    allowed: Bool[Array, ' num_trees']
+    num_growable: UInt[Array, ' num_trees']
+    node: UInt[Array, ' num_trees']
+    var: UInt[Array, ' num_trees']
+    split: UInt[Array, ' num_trees']
+    partial_ratio: Float32[Array, ' num_trees']
     var_tree: UInt[Array, 'num_trees 2**(d-1)']
 
 
 @partial(vmap_nodoc, in_axes=(0, 0, 0, 0, None, None, None))
 def propose_grow_moves(
-    key: Key[Array, ''],
-    var_tree: UInt[Array, '2**(d-1)'],
-    split_tree: UInt[Array, '2**(d-1)'],
-    affluence_tree: Bool[Array, '2**(d-1)'] | None,
-    max_split: UInt[Array, 'p'],
-    p_nonterminal: Float32[Array, 'd'],
-    p_propose_grow: Float32[Array, '2**(d-1)'],
+    key: Key[Array, ' num_trees'],
+    var_tree: UInt[Array, 'num_trees 2**(d-1)'],
+    split_tree: UInt[Array, 'num_trees 2**(d-1)'],
+    affluence_tree: Bool[Array, 'num_trees 2**(d-1)'] | None,
+    max_split: UInt[Array, ' p'],
+    p_nonterminal: Float32[Array, ' d'],
+    p_propose_grow: Float32[Array, ' 2**(d-1)'],
 ) -> GrowMoves:
     """
     Propose a GROW move for each tree.
@@ -607,11 +611,11 @@ def propose_grow_moves(
 
     Notes
     -----
-    The move is not proposed if a leaf is already at maximum depth, or if a leaf
-    has less than twice the requested minimum number of datapoints per leaf.
-    This is marked by returning `num_growable` set to 0.
+    The move is not proposed if each leaf is already at maximum depth or has
+    less than twice the requested minimum number of datapoints per leaf. This is
+    marked by returning `allowed` set to `False` and `num_growable` set to 0.
 
-    The move is also not be possible if the ancestors of a leaf have
+    The move is also not possible if the ancestors of the chosen leaf have
     exhausted the possible decision rules that lead to a non-empty selection.
     This is marked by returning `var` set to `p` and `split` set to 0. But this
     does not block the move from counting as "proposed", even though it is
@@ -634,6 +638,7 @@ def propose_grow_moves(
     )
 
     return GrowMoves(
+        allowed=num_growable > 0,
         num_growable=num_growable,
         node=leaf_to_grow,
         var=var,
@@ -642,18 +647,19 @@ def propose_grow_moves(
         var_tree=var_tree,
     )
 
-    # TODO it is not clear to me how var=p and split=0 when the move is not
-    # possible lead to corrent behavior downstream. Like, the move is proposed,
-    # but then it's a noop? And since it's a noop, it makes no difference if
-    # it's "accepted" or "rejected", it's like it's always rejected, so who
-    # cares if the likelihood ratio or a lot of other numbers are wrong? Uhm.
+    # TODO # noqa: FIX002 it is not clear to me how var=p and split=0 when the
+    # move is not possible lead to corrent behavior downstream. Like, the move
+    # is proposed, but then it's a noop? And since it's a noop, it makes no
+    # difference if it's "accepted" or "rejected", it's like it's always
+    # rejected, so who cares if the likelihood ratio or a lot of other numbers
+    # are wrong? Uhm.
 
 
 def choose_leaf(
     key: Key[Array, ''],
-    split_tree: UInt[Array, '2**(d-1)'],
-    affluence_tree: Bool[Array, '2**(d-1)'] | None,
-    p_propose_grow: Float32[Array, '2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    affluence_tree: Bool[Array, ' 2**(d-1)'] | None,
+    p_propose_grow: Float32[Array, ' 2**(d-1)'],
 ) -> tuple[Int32[Array, ''], Int32[Array, ''], Float32[Array, ''], Int32[Array, '']]:
     """
     Choose a leaf node to grow in a tree.
@@ -677,7 +683,7 @@ def choose_leaf(
         ``2 ** d``.
     num_growable : int
         The number of leaf nodes that can be grown, i.e., are nonterminal
-        and have at least twice `min_points_per_leaf` if set.
+        and have at least twice `min_points_per_leaf`.
     prob_choose : float
         The (normalized) probability that this function had to choose that
         specific leaf, given the arguments.
@@ -690,16 +696,16 @@ def choose_leaf(
     distr = jnp.where(is_growable, p_propose_grow, 0)
     leaf_to_grow, distr_norm = categorical(key, distr)
     leaf_to_grow = jnp.where(num_growable, leaf_to_grow, 2 * split_tree.size)
-    prob_choose = distr[leaf_to_grow] / distr_norm
+    prob_choose = distr[leaf_to_grow] / jnp.where(distr_norm, distr_norm, 1)
     is_parent = grove.is_leaves_parent(split_tree.at[leaf_to_grow].set(1))
     num_prunable = jnp.count_nonzero(is_parent)
     return leaf_to_grow, num_growable, prob_choose, num_prunable
 
 
 def growable_leaves(
-    split_tree: UInt[Array, '2**(d-1)'],
-    affluence_tree: Bool[Array, '2**(d-1)'] | None,
-) -> Bool[Array, '2**(d-1)']:
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    affluence_tree: Bool[Array, ' 2**(d-1)'] | None,
+) -> Bool[Array, ' 2**(d-1)']:
     """
     Return a mask indicating the leaf nodes that can be proposed for growth.
 
@@ -724,7 +730,7 @@ def growable_leaves(
 
 
 def categorical(
-    key: Key[Array, ''], distr: Float32[Array, 'n']
+    key: Key[Array, ''], distr: Float32[Array, ' n']
 ) -> tuple[Int32[Array, ''], Float32[Array, '']]:
     """
     Return a random integer from an arbitrary distribution.
@@ -751,9 +757,9 @@ def categorical(
 
 def choose_variable(
     key: Key[Array, ''],
-    var_tree: UInt[Array, '2**(d-1)'],
-    split_tree: UInt[Array, '2**(d-1)'],
-    max_split: UInt[Array, 'p'],
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    max_split: UInt[Array, ' p'],
     leaf_index: Int32[Array, ''],
 ) -> Int32[Array, '']:
     """
@@ -786,11 +792,11 @@ def choose_variable(
 
 
 def fully_used_variables(
-    var_tree: UInt[Array, '2**(d-1)'],
-    split_tree: UInt[Array, '2**(d-1)'],
-    max_split: UInt[Array, 'p'],
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    max_split: UInt[Array, ' p'],
     leaf_index: Int32[Array, ''],
-) -> UInt[Array, 'd-2']:
+) -> UInt[Array, ' d-2']:
     """
     Return a list of variables that have an empty split range at a given node.
 
@@ -823,20 +829,20 @@ def fully_used_variables(
 
 
 def ancestor_variables(
-    var_tree: UInt[Array, '2**(d-1)'],
-    max_split: UInt[Array, 'p'],
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    max_split: UInt[Array, ' p'],
     node_index: Int32[Array, ''],
-) -> UInt[Array, 'd-2']:
+) -> UInt[Array, ' d-2']:
     """
     Return the list of variables in the ancestors of a node.
 
     Parameters
     ----------
-    var_tree : int array (2 ** (d - 1),)
+    var_tree
         The variable indices of the tree.
-    max_split : int array (p,)
+    max_split
         The maximum split index for each variable. Used only to get `p`.
-    node_index : int
+    node_index
         The index of the node, assumed to be valid for `var_tree`.
 
     Returns
@@ -860,15 +866,16 @@ def ancestor_variables(
         var = jnp.where(index, var, max_split.size)
         ancestor_vars = ancestor_vars.at[i].set(var)
         return (i - 1, index, ancestor_vars), None
+        # why am I filling it in reverse?
 
     (_, _, ancestor_vars), _ = lax.scan(loop, carry, None, ancestor_vars.size)
     return ancestor_vars
 
 
 def split_range(
-    var_tree: UInt[Array, '2**(d-1)'],
-    split_tree: UInt[Array, '2**(d-1)'],
-    max_split: UInt[Array, 'p'],
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    max_split: UInt[Array, ' p'],
     node_index: Int32[Array, ''],
     ref_var: Int32[Array, ''],
 ) -> tuple[Int32[Array, ''], Int32[Array, '']]:
@@ -913,7 +920,7 @@ def split_range(
 
 
 def randint_exclude(
-    key: Key[Array, ''], sup: int, exclude: Integer[Array, 'n']
+    key: Key[Array, ''], sup: int, exclude: Integer[Array, ' n']
 ) -> Int32[Array, '']:
     """
     Return a random integer in a range, excluding some values.
@@ -949,9 +956,9 @@ def randint_exclude(
 
 def choose_split(
     key: Key[Array, ''],
-    var_tree: UInt[Array, '2**(d-1)'],
-    split_tree: UInt[Array, '2**(d-1)'],
-    max_split: UInt[Array, 'p'],
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    max_split: UInt[Array, ' p'],
     leaf_index: Int32[Array, ''],
 ) -> Int32[Array, '']:
     """
@@ -974,19 +981,17 @@ def choose_split(
     Returns
     -------
     The cutpoint. If ``var_tree[leaf_index]`` is out of bounds, return 0.
+    If `leaf_index` is out of bounds, the output won't make sense.
     """
     var = var_tree[leaf_index]
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
     return random.randint(key, (), l, r)
 
-    # TODO what happens if leaf_index is out of bounds? And is the value used
-    # in that case?
-
 
 def compute_partial_ratio(
     prob_choose: Float32[Array, ''],
     num_prunable: Int32[Array, ''],
-    p_nonterminal: Float32[Array, 'd'],
+    p_nonterminal: Float32[Array, ' d'],
     leaf_to_grow: Int32[Array, ''],
 ) -> Float32[Array, '']:
     """
@@ -1035,7 +1040,7 @@ def compute_partial_ratio(
     cp_children = 1 - p_nonterminal[depth + 1]
     tree_ratio = cp_children * cp_children * p_parent / (1 - p_parent)
 
-    return tree_ratio / inv_trans_ratio
+    return tree_ratio / jnp.where(inv_trans_ratio, inv_trans_ratio, 1)
 
 
 class PruneMoves(Module):
@@ -1055,18 +1060,18 @@ class PruneMoves(Module):
         `accept_move_and_sample_leaves`.
     """
 
-    allowed: Bool[Array, 'num_trees']
-    node: UInt[Array, 'num_trees']
-    partial_ratio: Float32[Array, 'num_trees']
+    allowed: Bool[Array, ' num_trees']
+    node: UInt[Array, ' num_trees']
+    partial_ratio: Float32[Array, ' num_trees']
 
 
 @partial(vmap_nodoc, in_axes=(0, 0, 0, None, None))
 def propose_prune_moves(
     key: Key[Array, ''],
-    split_tree: UInt[Array, '2**(d-1)'],
-    affluence_tree: Bool[Array, '2**(d-1)'] | None,
-    p_nonterminal: Float32[Array, 'd'],
-    p_propose_grow: Float32[Array, '2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    affluence_tree: Bool[Array, ' 2**(d-1)'] | None,
+    p_nonterminal: Float32[Array, ' d'],
+    p_propose_grow: Float32[Array, ' 2**(d-1)'],
 ) -> PruneMoves:
     """
     Tree structure prune move proposal of BART MCMC.
@@ -1091,14 +1096,13 @@ def propose_prune_moves(
     node_to_prune, num_prunable, prob_choose = choose_leaf_parent(
         key, split_tree, affluence_tree, p_propose_grow
     )
-    allowed = split_tree[1].astype(bool)  # allowed iff the tree is not a root
 
     ratio = compute_partial_ratio(
         prob_choose, num_prunable, p_nonterminal, node_to_prune
     )
 
     return PruneMoves(
-        allowed=allowed,
+        allowed=split_tree[1].astype(bool),  # allowed iff the tree is not a root
         node=node_to_prune,
         partial_ratio=ratio,
     )
@@ -1106,9 +1110,9 @@ def propose_prune_moves(
 
 def choose_leaf_parent(
     key: Key[Array, ''],
-    split_tree: UInt[Array, '2**(d-1)'],
-    affluence_tree: Bool[Array, '2**(d-1)'] | None,
-    p_propose_grow: Float32[Array, '2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    affluence_tree: Bool[Array, ' 2**(d-1)'] | None,
+    p_propose_grow: Float32[Array, ' 2**(d-1)'],
 ) -> tuple[Int32[Array, ''], Int32[Array, ''], Float32[Array, '']]:
     """
     Pick a non-terminal node with leaf children to prune in a tree.
@@ -1145,13 +1149,14 @@ def choose_leaf_parent(
     if affluence_tree is not None:
         affluence_tree = affluence_tree.at[node_to_prune].set(True)
     is_growable_leaf = growable_leaves(split_tree, affluence_tree)
-    prob_choose = p_propose_grow[node_to_prune]
-    prob_choose /= jnp.sum(p_propose_grow, where=is_growable_leaf)
+    distr_norm = jnp.sum(p_propose_grow, where=is_growable_leaf)
+    prob_choose = p_propose_grow.at[node_to_prune].get(mode='fill', fill_value=0)
+    prob_choose = prob_choose / jnp.where(distr_norm, distr_norm, 1)
 
     return node_to_prune, num_prunable, prob_choose
 
 
-def randint_masked(key: Key[Array, ''], mask: Bool[Array, 'n']) -> Int32[Array, '']:
+def randint_masked(key: Key[Array, ''], mask: Bool[Array, ' n']) -> Int32[Array, '']:
     """
     Return a random integer in a range, including only some values.
 
@@ -1213,9 +1218,9 @@ class Counts(Module):
         Number of datapoints in the parent (``= left + right``).
     """
 
-    left: UInt[Array, 'num_trees']
-    right: UInt[Array, 'num_trees']
-    total: UInt[Array, 'num_trees']
+    left: UInt[Array, ' num_trees']
+    right: UInt[Array, ' num_trees']
+    total: UInt[Array, ' num_trees']
 
 
 class Precs(Module):
@@ -1235,9 +1240,9 @@ class Precs(Module):
         Likelihood precision scale in the parent (``= left + right``).
     """
 
-    left: Float32[Array, 'num_trees']
-    right: Float32[Array, 'num_trees']
-    total: Float32[Array, 'num_trees']
+    left: Float32[Array, ' num_trees']
+    right: Float32[Array, ' num_trees']
+    total: Float32[Array, ' num_trees']
 
 
 class PreLkV(Module):
@@ -1261,10 +1266,10 @@ class PreLkV(Module):
         The **logarithm** of the square root term of the likelihood ratio.
     """
 
-    sigma2_left: Float32[Array, 'num_trees']
-    sigma2_right: Float32[Array, 'num_trees']
-    sigma2_total: Float32[Array, 'num_trees']
-    sqrt_term: Float32[Array, 'num_trees']
+    sigma2_left: Float32[Array, ' num_trees']
+    sigma2_right: Float32[Array, ' num_trees']
+    sigma2_total: Float32[Array, ' num_trees']
+    sqrt_term: Float32[Array, ' num_trees']
 
 
 class PreLk(Module):
@@ -1362,9 +1367,9 @@ def accept_moves_parallel_stage(
         bart,
         forest=replace(
             bart.forest,
-            var_trees=moves.var_trees,
+            var_tree=moves.var_trees,
             leaf_indices=apply_grow_to_indices(moves, bart.forest.leaf_indices, bart.X),
-            leaf_trees=adapt_leaf_trees_to_grow_indices(bart.forest.leaf_trees, moves),
+            leaf_tree=adapt_leaf_trees_to_grow_indices(bart.forest.leaf_tree, moves),
         ),
     )
 
@@ -1382,7 +1387,7 @@ def accept_moves_parallel_stage(
     # datapoints. This check is not actually used now, it will be used at the
     # beginning of the next step to propose moves.
     if bart.forest.min_points_per_leaf is not None:
-        count_half_trees = count_trees[:, : bart.forest.var_trees.shape[1]]
+        count_half_trees = count_trees[:, : bart.forest.var_tree.shape[1]]
         bart = replace(
             bart,
             forest=replace(
@@ -1402,18 +1407,23 @@ def accept_moves_parallel_stage(
             moves,
             bart.forest.count_batch_size,
         )
+    assert move_precs is not None
 
     # compute some missing information about moves
     moves = complete_ratio(moves, move_counts, bart.forest.min_points_per_leaf)
+    save_ratios = bart.forest.log_likelihood is not None
     bart = replace(
         bart,
         forest=replace(
             bart.forest,
             grow_prop_count=jnp.sum(moves.grow),
             prune_prop_count=jnp.sum(moves.allowed & ~moves.grow),
+            log_trans_prior=moves.log_trans_prior_ratio if save_ratios else None,
         ),
     )
 
+    # pre-compute some likelihood ratio & posterior terms
+    assert bart.sigma2 is not None  # `step` shall temporarily set it to 1
     prelkv, prelk = precompute_likelihood_terms(
         bart.sigma2, bart.forest.sigma_mu2, move_precs
     )
@@ -1543,7 +1553,7 @@ def _aggregate_scatter(
     indices: Integer[Array, '*'],
     size: int,
     dtype: jnp.dtype,
-) -> Shaped[Array, '{size}']:
+) -> Shaped[Array, ' {size}']:
     return jnp.zeros(size, dtype).at[indices].add(values)
 
 
@@ -1576,7 +1586,7 @@ def _aggregate_batched_alltrees(
 
 
 def compute_prec_trees(
-    prec_scale: Float32[Array, 'n'],
+    prec_scale: Float32[Array, ' n'],
     leaf_indices: UInt[Array, 'num_trees n'],
     moves: Moves,
     batch_size: int | None,
@@ -1621,7 +1631,7 @@ def compute_prec_trees(
 
 
 def prec_per_leaf(
-    prec_scale: Float32[Array, 'n'],
+    prec_scale: Float32[Array, ' n'],
     leaf_indices: UInt[Array, 'num_trees n'],
     tree_size: int,
     batch_size: int | None,
@@ -1651,7 +1661,7 @@ def prec_per_leaf(
 
 
 def _prec_scan(
-    prec_scale: Float32[Array, 'n'],
+    prec_scale: Float32[Array, ' n'],
     leaf_indices: UInt[Array, 'num_trees n'],
     tree_size: int,
 ) -> Float32[Array, 'num_trees {tree_size}']:
@@ -1665,7 +1675,7 @@ def _prec_scan(
 
 
 def _prec_vec(
-    prec_scale: Float32[Array, 'n'],
+    prec_scale: Float32[Array, ' n'],
     leaf_indices: UInt[Array, 'num_trees n'],
     tree_size: int,
     batch_size: int,
@@ -1676,7 +1686,9 @@ def _prec_vec(
 
 
 def complete_ratio(
-    moves: Moves, move_counts: Counts | None, min_points_per_leaf: int | None
+    moves: Moves,
+    move_counts: Counts | None,
+    min_points_per_leaf: Int32[Array, ''] | None,
 ) -> Moves:
     """
     Complete non-likelihood MH ratio calculation.
@@ -1706,8 +1718,10 @@ def complete_ratio(
 
 
 def compute_p_prune(
-    moves: Moves, move_counts: Counts | None, min_points_per_leaf: int | None
-) -> Float32[Array, 'num_trees']:
+    moves: Moves,
+    move_counts: Counts | None,
+    min_points_per_leaf: Int32[Array, ''] | None,
+) -> Float32[Array, ' num_trees']:
     """
     Compute the probability of proposing a prune move for each tree.
 
@@ -1851,14 +1865,14 @@ def precompute_leaf_terms(
     z = random.normal(key, prec_trees.shape, sigma2.dtype)
     return PreLf(
         mean_factor=var_post / sigma2,
-        # mean = mean_lk * prec_lk * var_post
-        # resid_tree = mean_lk * prec_tree  -->
-        #    -->  mean_lk = resid_tree / prec_tree  (kind of)
-        # mean_factor =
-        #    = mean / resid_tree =
-        #    = resid_tree / prec_tree * prec_lk * var_post / resid_tree =
-        #    = 1 / prec_tree * prec_tree / sigma2 * var_post =
-        #    = var_post / sigma2
+        # | mean = mean_lk * prec_lk * var_post
+        # | resid_tree = mean_lk * prec_tree  -->
+        # |    -->  mean_lk = resid_tree / prec_tree  (kind of)
+        # | mean_factor =
+        # |    = mean / resid_tree =
+        # |    = resid_tree / prec_tree * prec_lk * var_post / resid_tree =
+        # |    = 1 / prec_tree * prec_tree / sigma2 * var_post =
+        # |    = var_post / sigma2
         centered_leaves=z * jnp.sqrt(var_post),
     )
 
@@ -1899,7 +1913,7 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
         return resid, (leaf_tree, acc, to_prune, ratios)
 
     pts = SeqStageInPerTree(
-        pso.bart.forest.leaf_trees,
+        pso.bart.forest.leaf_tree,
         pso.prec_trees,
         pso.moves,
         pso.move_counts,
@@ -1916,9 +1930,8 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
         resid=resid,
         forest=replace(
             pso.bart.forest,
-            leaf_trees=leaf_trees,
+            leaf_tree=leaf_trees,
             log_likelihood=ratios['log_likelihood'] if save_ratios else None,
-            log_trans_prior=ratios['log_trans_prior'] if save_ratios else None,
         ),
     )
     moves = replace(pso.moves, acc=acc, to_prune=to_prune)
@@ -1950,7 +1963,7 @@ class SeqStageInAllTrees(Module):
 
     X: UInt[Array, 'p n']
     resid_batch_size: int | None
-    prec_scale: Float32[Array, 'n'] | None
+    prec_scale: Float32[Array, ' n'] | None
     min_points_per_leaf: Int32[Array, ''] | None
     save_ratios: bool
     prelk: PreLk
@@ -1982,23 +1995,23 @@ class SeqStageInPerTree(Module):
         are specific to the tree.
     """
 
-    leaf_tree: Float32[Array, '2**d']
-    prec_tree: Float32[Array, '2**d']
+    leaf_tree: Float32[Array, ' 2**d']
+    prec_tree: Float32[Array, ' 2**d']
     move: Moves
     move_counts: Counts | None
     move_precs: Precs | Counts
-    leaf_indices: UInt[Array, 'n']
+    leaf_indices: UInt[Array, ' n']
     prelkv: PreLkV
     prelf: PreLf
 
 
 def accept_move_and_sample_leaves(
-    resid: Float32[Array, 'n'],
+    resid: Float32[Array, ' n'],
     at: SeqStageInAllTrees,
     pt: SeqStageInPerTree,
 ) -> tuple[
-    Float32[Array, 'n'],
-    Float32[Array, '2**d'],
+    Float32[Array, ' n'],
+    Float32[Array, ' 2**d'],
     Bool[Array, ''],
     Bool[Array, ''],
     dict[str, Float32[Array, '']],
@@ -2061,12 +2074,7 @@ def accept_move_and_sample_leaves(
     log_ratio = jnp.where(pt.move.grow, log_ratio, -log_ratio)
     ratios = {}
     if at.save_ratios:
-        ratios.update(
-            log_trans_prior=pt.move.log_trans_prior_ratio,
-            # TODO save log_trans_prior_ratio as a vector outside of this loop,
-            # then change the option everywhere to `save_likelihood_ratio`.
-            log_likelihood=log_lk_ratio,
-        )
+        ratios.update(log_likelihood=log_lk_ratio)
 
     # determine whether to accept the move
     acc = pt.move.allowed & (pt.move.logu <= log_ratio)
@@ -2096,11 +2104,11 @@ def accept_move_and_sample_leaves(
 
 
 def sum_resid(
-    scaled_resid: Float32[Array, 'n'],
-    leaf_indices: UInt[Array, 'n'],
+    scaled_resid: Float32[Array, ' n'],
+    leaf_indices: UInt[Array, ' n'],
     tree_size: int,
     batch_size: int | None,
-) -> Float32[Array, '{tree_size}']:
+) -> Float32[Array, ' {tree_size}']:
     """
     Sum the residuals in each leaf.
 
@@ -2134,7 +2142,7 @@ def _aggregate_batched_onetree(
     size: int,
     dtype: jnp.dtype,
     batch_size: int,
-) -> Float32[Array, '{size}']:
+) -> Float32[Array, ' {size}']:
     (n,) = indices.shape
     nbatches = n // batch_size + bool(n % batch_size)
     batch_indices = jnp.arange(n) % nbatches
@@ -2206,7 +2214,7 @@ def accept_moves_final_stage(bart: State, moves: Moves) -> State:
             grow_acc_count=jnp.sum(moves.acc & moves.grow),
             prune_acc_count=jnp.sum(moves.acc & ~moves.grow),
             leaf_indices=apply_moves_to_leaf_indices(bart.forest.leaf_indices, moves),
-            split_trees=apply_moves_to_split_trees(bart.forest.split_trees, moves),
+            split_tree=apply_moves_to_split_trees(bart.forest.split_tree, moves),
         ),
     )
 
@@ -2324,12 +2332,7 @@ def step_z(key: Key[Array, ''], bart: State) -> State:
     The updated BART MCMC state.
     """
     trees_plus_offset = bart.z - bart.resid
-    lower = jnp.where(bart.y, -trees_plus_offset, -jnp.inf)
-    upper = jnp.where(bart.y, jnp.inf, -trees_plus_offset)
-    resid = random.truncated_normal(key, lower, upper)
-    # TODO jax's implementation of truncated_normal is not good, it just does
-    # cdf inversion with erf and erf_inv. I can do better, at least avoiding to
-    # compute one of the boundaries, and maybe also flipping and using ndtr
-    # instead of erf for numerical stability (open an issue in jax?)
+    assert bart.y.dtype == bool
+    resid = truncated_normal_onesided(key, (), ~bart.y, -trees_plus_offset)
     z = trees_plus_offset + resid
     return replace(bart, z=z, resid=resid)

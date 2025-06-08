@@ -198,20 +198,6 @@ def test_sequential_guarantee(kw):
     assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
 
 
-def test_finite(kw):
-    """Check basic numerical outputs are not inf or nan."""
-    # XXX: maybe this could be replaced by a global jax debug option
-    bart = bartz.BART.gbart(**kw)
-
-    assert jnp.all(jnp.isfinite(bart.yhat_train))
-
-    if kw['y_train'].dtype == bool:
-        assert bart.sigma is None
-    else:
-        assert bart.sigma is not None
-        assert jnp.all(jnp.isfinite(bart.sigma))
-
-
 def test_output_shapes(kw):
     """Check the output shapes of all the attributes of BART.gbart."""
     bart = bartz.BART.gbart(**kw)
@@ -337,9 +323,11 @@ def test_one_datapoint(kw):
     if kw['y_train'].dtype == bool:
         tau_num = 3
         assert bart.sigest is None
+        assert bart.offset == 0
     else:
         tau_num = 1
         assert bart.sigest == 1
+        assert bart.offset == kw['y_train'].item()
     assert_allclose(
         bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
     )
@@ -359,8 +347,7 @@ def test_few_datapoints(kw):
     If there are less than 10 datapoints, it is not possible to satisfy the 5
     points per leaf requirement.
     """
-    if kw['init_kw'].get('min_points_per_leaf', 5) is None:
-        pytest.skip('Datapoints per leaf limit disabled.')
+    kw.setdefault('init_kw', {}).update(min_points_per_leaf=5)
     kw = set_num_datapoints(kw, 9)  # < 2 * 5
     bart = bartz.BART.gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
@@ -410,14 +397,9 @@ def test_rbart(kw, keys):
     # first cross-check the outputs of R BART alone
 
     # convert the trees to bartz format
-    trees_str = rbart.treedraws['trees'].item()
-    trees, meta = trees_BART_to_bartz(trees_str)
-    trace = vars(trees).copy()
-    trace['offset'] = jnp.full(kw['ndpost'], rbart.offset)
+    trees: str = rbart.treedraws['trees'].item()
+    trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
 
-    # TODO I should probably always use a subset of the mcmcstep.Forest format,
-    # maybe make a protocol for that. It's convenient to carry around the three
-    # heaps. Maybe define it in grove.
     varcount = compute_varcount(meta.p, trace)
     assert jnp.all(varcount == rbart.varcount)
 
@@ -451,7 +433,7 @@ def test_rbart(kw, keys):
         # skip if p is large because it would be difficult for the MCMC to get
         # stuff about predictors right
         rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, rbart.varcount]))
-        assert rhat_varcount < 100  # TODO !!!
+        assert rhat_varcount < 100  # TODO !!! # noqa: FIX002, will take a while
         # loose criterion as a patch
         assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.15)
 
@@ -477,9 +459,11 @@ def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '
     m, n, p = chains.shape
 
     if m < 2:
-        raise ValueError('Need at least 2 chains')
+        msg = 'Need at least 2 chains'
+        raise ValueError(msg)
     if n < 2:
-        raise ValueError('Need at least 2 samples per chain')
+        msg = 'Need at least 2 samples per chain'
+        raise ValueError(msg)
 
     chain_means = jnp.mean(chains, axis=1)
 
@@ -523,7 +507,7 @@ def test_rhat(keys):
     assert rhat_divergent > 5
 
 
-def test_jit(keys, kw):
+def test_jit(kw):
     """Test that jitting around the whole interface works."""
     kw.update(printevery=None)
     # set printevery to None to move all iterations to the inner loop and avoid
@@ -590,7 +574,7 @@ def call_with_timed_interrupt(
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     if kw['printevery'] is None:
-        pytest.skip('With logging disabled, the MCMC cannot be interrupted.')
+        kw['printevery'] = 50
     kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
         call_with_timed_interrupt(3, bartz.BART.gbart, **kw)
@@ -642,8 +626,8 @@ def test_automatic_integer_types(kw):
     split_trees_type = X_type = select_type(kw['numcut'] <= 255)
     var_trees_type = select_type(kw['x_train'].shape[0] <= 256)
 
-    assert bart._mcmc_state.forest.var_trees.dtype == var_trees_type
-    assert bart._mcmc_state.forest.split_trees.dtype == split_trees_type
+    assert bart._mcmc_state.forest.var_tree.dtype == var_trees_type
+    assert bart._mcmc_state.forest.split_tree.dtype == split_trees_type
     assert bart._mcmc_state.forest.leaf_indices.dtype == leaf_indices_type
     assert bart._mcmc_state.X.dtype == X_type
     assert bart._mcmc_state.max_split.dtype == split_trees_type

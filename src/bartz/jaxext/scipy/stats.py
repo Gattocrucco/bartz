@@ -1,6 +1,6 @@
-# bartz/tests/conftest.py
+# bartz/src/bartz/jaxext/scipy/stats.py
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2025, Giacomo Petrillo
 #
 # This file is part of bartz.
 #
@@ -22,31 +22,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Pytest configuration."""
+"""Mockup of the :external:py:mod:`scipy.stats` module."""
 
-import jax
-import numpy as np
-import pytest
-
-from bartz import jaxext
-
-jax.config.update('jax_debug_key_reuse', True)
-jax.config.update('jax_debug_nans', True)
-jax.config.update('jax_debug_infs', True)
-jax.config.update('jax_legacy_prng_key', 'error')
+from .special import gammainccinv
 
 
-@pytest.fixture
-def keys(request):
-    """
-    Return a deterministic per-test-case list of jax random keys.
+class invgamma:
+    """Class that represents the distribution InvGamma(a, 1)."""
 
-    To use a key, do `keys.pop()`. If consumed this way, this list of keys can
-    be safely used by multiple fixtures involved in the test case.
-    """
-    nodeid = request.node.nodeid
-    seed = np.array([nodeid], np.bytes_).view(np.uint8)
-    rng = np.random.default_rng(seed)
-    seed = np.array(rng.bytes(4)).view(np.uint32)
-    key = jax.random.key(seed)
-    return jaxext.split(key, 128)
+    @staticmethod
+    def ppf(q, a):
+        """Percentile point function."""
+        return 1 / gammainccinv(a, q)

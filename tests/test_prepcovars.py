@@ -26,6 +26,7 @@
 
 import numpy
 import pytest
+from jax import debug_infs
 from jax import numpy as jnp
 
 import bartz
@@ -37,9 +38,10 @@ class TestQuantilizer:
     @pytest.mark.parametrize('fill_value', [jnp.inf, 2**31 - 1])
     def test_splits_fill(self, fill_value):
         """Check that predictors with less unique values are right-padded."""
-        fill_value = jnp.array(fill_value)
-        x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], fill_value.dtype)
-        splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
+        with debug_infs(not jnp.isinf(fill_value)):
+            fill_value = jnp.array(fill_value)
+            x = jnp.array([[1, 3, 3, 5], [1, 3, 5, 7]], fill_value.dtype)
+            splits, _ = bartz.prepcovars.quantilized_splits_from_matrix(x, 100)
         expected_splits = [[2, 4, fill_value], [2, 4, 6]]
         numpy.testing.assert_array_equal(splits, expected_splits)
 
