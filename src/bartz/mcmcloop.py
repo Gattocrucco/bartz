@@ -539,8 +539,7 @@ class TreesTrace(Module):
     @classmethod
     def from_dataclass(cls, obj: grove.TreeHeaps):
         """Create a `TreesTrace` from any `TreeHeaps`."""
-        names = [f.name for f in fields(cls)]
-        return cls(**{name: getattr(obj, name) for name in names})
+        return cls(**{f.name: getattr(obj, f.name) for f in fields(cls)})
 
 
 @jax.jit

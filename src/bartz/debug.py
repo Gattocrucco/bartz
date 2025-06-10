@@ -23,19 +23,21 @@
 # SOFTWARE.
 
 import functools
+import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from inspect import signature
 from math import ceil, log2
 
 import jax
 import numpy
-from equinox import Module
-from jax import lax
+from equinox import Module, field
+from jax import jit, lax, random
 from jax import numpy as jnp
-from jaxtyping import Array, Bool, DTypeLike, Float, Float32, UInt
+from jaxtyping import Array, Bool, DTypeLike, Float, Float32, Int32, Key, UInt
 
 from bartz.mcmcloop import Trace, TreesTrace
+from bartz.mcmcstep import randint_masked
 
 from . import grove, jaxext
 
@@ -268,7 +270,7 @@ class BARTTraceMeta:
     ndpost: int
     ntree: int
     p: int
-    max_split: int
+    numcut: int
     max_heap_index: int
     var_dtype: DTypeLike
     split_dtype: DTypeLike
@@ -279,7 +281,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
         ndpost=0,
         ntree=0,
         p=0,
-        max_split=0,
+        numcut=0,
         max_heap_index=0,
         var_dtype=numpy.uint32,
         split_dtype=numpy.uint32,
@@ -287,14 +289,14 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
 
     # parse first line
     line, i_char = get_next_line(trees, 0)
+    i_line = 1
     match = re.fullmatch(r'(\d+) (\d+) (\d+)', line)
     if match is None:
-        msg = 'Malformed header at i_line=0'
+        msg = f'Malformed header at {i_line=}'
         raise ValueError(msg)
     meta.ndpost, meta.ntree, meta.p = map(int, match.groups())
 
     # cycle over iterations and trees
-    i_line = 1
     for i_iter in range(meta.ndpost):
         for i_tree in range(meta.ntree):
             # parse first line of tree definition
@@ -321,7 +323,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
                 split = int(match.group(3))
 
                 # update maxima
-                meta.max_split = max(meta.max_split, split)
+                meta.numcut = max(meta.numcut, split)
                 meta.max_heap_index = max(meta.max_heap_index, i_heap)
 
     assert i_char <= len(trees)
@@ -331,8 +333,8 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
 
     # determine minimal integer types
     meta.var_dtype = jaxext.minimal_unsigned_dtype(meta.p - 1)
-    # + 1 because BART is 0-based while bartz 1-based
-    meta.split_dtype = jaxext.minimal_unsigned_dtype(meta.max_split + 1)
+    meta.split_dtype = jaxext.minimal_unsigned_dtype(meta.numcut + 1)
+    # + 1 because BART is 0-based while bartz is 1-based
 
     return meta
 
@@ -379,7 +381,7 @@ def trees_BART_to_bartz(
     meta = scan_BART_trees(trees)
 
     # skip first line
-    line, i_char = get_next_line(trees, 0)
+    _, i_char = get_next_line(trees, 0)
 
     heap_size = 2 ** ceil(log2(meta.max_heap_index + 1))
     heap_size = max(heap_size, 2**min_maxdepth)
@@ -392,12 +394,10 @@ def trees_BART_to_bartz(
     )
 
     # cycle over iterations and trees
-    i_line = 1
     for i_iter in range(meta.ndpost):
         for i_tree in range(meta.ntree):
             # parse first line of tree definition
             line, i_char = get_next_line(trees, i_char)
-            i_line += 1
             num_nodes = int(line)
 
             is_internal = numpy.zeros(heap_size // 2, dtype=bool)
@@ -406,7 +406,6 @@ def trees_BART_to_bartz(
             for _ in range(num_nodes):
                 # parse node definition
                 line, i_char = get_next_line(trees, i_char)
-                i_line += 1
                 values = line.split()
                 i_heap = int(values[0])
                 var = int(values[1])
@@ -429,5 +428,145 @@ def trees_BART_to_bartz(
         split_tree=jnp.array(split_trees),
         offset=jnp.zeros(meta.ndpost)
         if offset is None
-        else jnp.repeat(offset, meta.ndpost),
+        else jnp.full(meta.ndpost, offset),
     ), meta
+
+
+class SamplePriorMeta(Module):
+    heap_size: int = field(static=True)
+    p_nonterminal: Float32[Array, ' d-1']
+    sigma_mu: Float32[Array, '']
+
+    @classmethod
+    def initial_value(
+        cls, p_nonterminal: Float32[Array, ' d-1'], sigma_mu: Float32[Array, '']
+    ) -> 'SamplePriorMeta':
+        return cls(
+            heap_size=2 ** (p_nonterminal.size + 1),
+            p_nonterminal=p_nonterminal,
+            sigma_mu=sigma_mu,
+        )
+
+
+class SamplePriorRange(Module):
+    lower: Int32[Array, ' p']
+    upper: Int32[Array, ' p']
+
+    @classmethod
+    def initial_value(cls, max_split: UInt[Array, ' p']) -> 'SamplePriorRange':
+        return cls(
+            lower=jnp.zeros(max_split.size, int),
+            upper=1 + max_split.astype(int),
+        )
+
+
+class SamplePriorTrees(Module):
+    leaf_tree: Float32[Array, '* 2**d']
+    var_tree: UInt[Array, '* 2**(d-1)']
+    split_tree: UInt[Array, '* 2**(d-1)']
+
+    @classmethod
+    def initial_value(
+        cls,
+        key: Key[Array, ''],
+        sigma_mu: Float32[Array, ''],
+        heap_size: int,
+        max_split: UInt[Array, ' p'],
+    ) -> 'SamplePriorTrees':
+        return cls(
+            leaf_tree=sigma_mu * random.normal(key, (heap_size,)),
+            var_tree=jnp.zeros(
+                heap_size // 2, dtype=jaxext.minimal_unsigned_dtype(max_split.size - 1)
+            ),
+            split_tree=jnp.zeros(heap_size // 2, dtype=max_split.dtype),
+        )
+
+
+def sample_prior_recursive(
+    key: Key[Array, ''],
+    nonterminal: Bool[Array, ''],
+    node: int,
+    meta: SamplePriorMeta,
+    split_range: SamplePriorRange,
+    trees: SamplePriorTrees,
+) -> SamplePriorTrees:
+    keys = jaxext.split(key, 5)
+
+    # decide whether to try to grow the node if it is growable
+    node_depth: int = math.floor(math.log2(node))
+    assert 0 <= node_depth < meta.p_nonterminal.size
+    p_nonterminal = meta.p_nonterminal[node_depth]
+    try_nonterminal: Bool[Array, ''] = random.bernoulli(keys.pop(), p_nonterminal)
+
+    # sample a random decision rule
+    available: Bool[Array, ' p'] = split_range.lower + 1 < split_range.upper
+    allowed = jnp.any(available)
+    var: Int32[Array, ''] = randint_masked(keys.pop(), available)
+    split = random.randint(
+        keys.pop(), (), split_range.lower[var] + 1, split_range.upper[var]
+    )
+
+    # write the new node
+    nonterminal &= try_nonterminal & allowed
+    trees = replace(
+        trees,
+        var_tree=trees.var_tree.at[node].set(var),
+        split_tree=trees.split_tree.at[node].set(jnp.where(nonterminal, split, 0)),
+    )
+
+    # recurse into children nodes
+    if node < meta.heap_size // 4:
+        trees = sample_prior_recursive(
+            keys.pop(),
+            nonterminal,
+            2 * node,
+            meta,
+            replace(split_range, upper=split_range.upper.at[var].set(split)),
+            trees,
+        )
+        trees = sample_prior_recursive(
+            keys.pop(),
+            nonterminal,
+            2 * node + 1,
+            meta,
+            replace(split_range, lower=split_range.lower.at[var].set(split)),
+            trees,
+        )
+
+    return trees
+
+
+def sample_prior_onetree(
+    key: Key[Array, ''],
+    max_split: UInt[Array, ' p'],
+    p_nonterminal: Float32[Array, ' d-1'],
+    sigma_mu: Float32[Array, ''],
+) -> SamplePriorTrees:
+    meta = SamplePriorMeta.initial_value(p_nonterminal, sigma_mu)
+    split_range = SamplePriorRange.initial_value(max_split)
+    trees = SamplePriorTrees.initial_value(key, sigma_mu, meta.heap_size, max_split)
+    return sample_prior_recursive(key, jnp.bool_(True), 1, meta, split_range, trees)
+
+
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
+@functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
+def sample_prior_trace(
+    key: Key[Array, 'trace_length num_trees'],
+    max_split: UInt[Array, ' p'],
+    p_nonterminal: Float32[Array, ' d-1'],
+    sigma_mu: Float32[Array, ''],
+) -> SamplePriorTrees:
+    return sample_prior_onetree(key, max_split, p_nonterminal, sigma_mu)
+
+
+@functools.partial(jit, static_argnums=(1, 2))
+def sample_prior(
+    key: Key[Array, ''],
+    trace_length: int,
+    num_trees: int,
+    max_split: UInt[Array, ' p'],
+    p_nonterminal: Float32[Array, ' d-1'],
+    sigma_mu: Float32[Array, ''],
+) -> SamplePriorTrees:
+    keys = random.split(key, (trace_length, num_trees))
+    return sample_prior_trace(keys, max_split, p_nonterminal, sigma_mu)
