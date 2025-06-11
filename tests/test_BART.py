@@ -1,4 +1,4 @@
-# bartz/tests/test_interface.py
+# bartz/tests/test_BART.py
 #
 # Copyright (c) 2024-2025, Giacomo Petrillo
 #
@@ -22,7 +22,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Test the BART.gbart simplified user interface."""
+"""Test `bartz.BART`.
+
+This is the main suite of tests.
+"""
 
 import os
 import signal
