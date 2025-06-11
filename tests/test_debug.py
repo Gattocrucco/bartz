@@ -71,9 +71,9 @@ def test_format_tree():
     s = format_tree(tree)
     print(s)
     ref_s = """\
- 1 ┐(4: 15)
+ 1 ┐x4 < 15
  2 ├── 2.0
- 3 └──┐(2: 3)
+ 3 └──┐x2 < 3
  6    ├──╢6.0
  7    └──╢7.0"""
     assert s == ref_s

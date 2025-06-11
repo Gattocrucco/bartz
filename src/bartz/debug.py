@@ -23,7 +23,6 @@
 # SOFTWARE.
 
 import functools
-import math
 import re
 from dataclasses import dataclass, replace
 from inspect import signature
@@ -74,7 +73,7 @@ def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
             if is_leaf:
                 node_str = f'{tree.leaf_tree[index]:#.2g}'
             else:
-                node_str = f'({var}: {split})'
+                node_str = f'x{var} < {split}'
 
         if not is_leaf or (print_all and left_child < len(tree.leaf_tree)):
             link = down
@@ -484,18 +483,17 @@ class SamplePriorTrees(Module):
 
 def sample_prior_recursive(
     key: Key[Array, ''],
-    nonterminal: Bool[Array, ''],
-    node: int,
     meta: SamplePriorMeta,
     split_range: SamplePriorRange,
     trees: SamplePriorTrees,
+    nonterminal: bool | Bool[Array, ''] = True,
+    node: int | Int32[Array, ''] = 1,
+    depth: int = 0,
 ) -> SamplePriorTrees:
     keys = jaxext.split(key, 5)
 
     # decide whether to try to grow the node if it is growable
-    node_depth: int = math.floor(math.log2(node))
-    assert 0 <= node_depth < meta.p_nonterminal.size
-    p_nonterminal = meta.p_nonterminal[node_depth]
+    p_nonterminal = meta.p_nonterminal[depth]
     try_nonterminal: Bool[Array, ''] = random.bernoulli(keys.pop(), p_nonterminal)
 
     # sample a random decision rule
@@ -510,28 +508,30 @@ def sample_prior_recursive(
     nonterminal &= try_nonterminal & allowed
     trees = replace(
         trees,
-        var_tree=trees.var_tree.at[node].set(var),
+        var_tree=trees.var_tree.at[node].set(var.astype(trees.var_tree.dtype)),
         split_tree=trees.split_tree.at[node].set(jnp.where(nonterminal, split, 0)),
     )
 
     # recurse into children nodes
-    if node < meta.heap_size // 4:
-        trees = sample_prior_recursive(
-            keys.pop(),
-            nonterminal,
-            2 * node,
-            meta,
-            replace(split_range, upper=split_range.upper.at[var].set(split)),
-            trees,
-        )
-        trees = sample_prior_recursive(
-            keys.pop(),
-            nonterminal,
-            2 * node + 1,
-            meta,
-            replace(split_range, lower=split_range.lower.at[var].set(split)),
-            trees,
-        )
+    if depth + 1 < meta.p_nonterminal.size:
+        p = split_range.lower.size
+
+        def loop(trees, item):
+            right, key = item
+            return sample_prior_recursive(
+                key,
+                meta,
+                SamplePriorRange(
+                    lower=split_range.lower.at[jnp.where(right, var, p)].set(split),
+                    upper=split_range.upper.at[jnp.where(right, p, var)].set(split),
+                ),
+                trees,
+                nonterminal,
+                2 * node + right,
+                depth + 1,
+            ), None
+
+        trees, _ = lax.scan(loop, trees, (jnp.arange(2), keys.pop(2)))
 
     return trees
 
@@ -545,7 +545,7 @@ def sample_prior_onetree(
     meta = SamplePriorMeta.initial_value(p_nonterminal, sigma_mu)
     split_range = SamplePriorRange.initial_value(max_split)
     trees = SamplePriorTrees.initial_value(key, sigma_mu, meta.heap_size, max_split)
-    return sample_prior_recursive(key, jnp.bool_(True), 1, meta, split_range, trees)
+    return sample_prior_recursive(key, meta, split_range, trees)
 
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
