@@ -30,9 +30,10 @@ from math import ceil, log2
 
 import jax
 import numpy
-from equinox import Module, field
+from equinox import Module
 from jax import jit, lax, random
 from jax import numpy as jnp
+from jax.tree_util import tree_map
 from jaxtyping import Array, Bool, DTypeLike, Float, Float32, Int32, Key, UInt
 
 from bartz.mcmcloop import Trace, TreesTrace
@@ -431,31 +432,24 @@ def trees_BART_to_bartz(
     ), meta
 
 
-class SamplePriorMeta(Module):
-    heap_size: int = field(static=True)
-    p_nonterminal: Float32[Array, ' d-1']
-    sigma_mu: Float32[Array, '']
+class SamplePriorStack(Module):
+    nonterminal: Bool[Array, ' d-1']
+    lower: UInt[Array, 'd-1 p']
+    upper: UInt[Array, 'd-1 p']
+    var: UInt[Array, ' d-1']
+    split: UInt[Array, ' d-1']
 
     @classmethod
-    def initial_value(
-        cls, p_nonterminal: Float32[Array, ' d-1'], sigma_mu: Float32[Array, '']
-    ) -> 'SamplePriorMeta':
+    def initial(
+        cls, p_nonterminal: Float32[Array, ' d-1'], max_split: UInt[Array, ' p']
+    ) -> 'SamplePriorStack':
+        var_dtype = jaxext.minimal_unsigned_dtype(max_split.size - 1)
         return cls(
-            heap_size=2 ** (p_nonterminal.size + 1),
-            p_nonterminal=p_nonterminal,
-            sigma_mu=sigma_mu,
-        )
-
-
-class SamplePriorRange(Module):
-    lower: Int32[Array, ' p']
-    upper: Int32[Array, ' p']
-
-    @classmethod
-    def initial_value(cls, max_split: UInt[Array, ' p']) -> 'SamplePriorRange':
-        return cls(
-            lower=jnp.zeros(max_split.size, int),
-            upper=1 + max_split.astype(int),
+            nonterminal=jnp.ones(p_nonterminal.size, bool),
+            lower=jnp.zeros((p_nonterminal.size, max_split.size), max_split.dtype),
+            upper=jnp.broadcast_to(max_split, (p_nonterminal.size, max_split.size)),
+            var=jnp.zeros(p_nonterminal.size, var_dtype),
+            split=jnp.zeros(p_nonterminal.size, max_split.dtype),
         )
 
 
@@ -465,13 +459,14 @@ class SamplePriorTrees(Module):
     split_tree: UInt[Array, '* 2**(d-1)']
 
     @classmethod
-    def initial_value(
+    def initial(
         cls,
         key: Key[Array, ''],
         sigma_mu: Float32[Array, ''],
-        heap_size: int,
+        p_nonterminal: Float32[Array, ' d-1'],
         max_split: UInt[Array, ' p'],
     ) -> 'SamplePriorTrees':
+        heap_size = 2 ** (p_nonterminal.size + 1)
         return cls(
             leaf_tree=sigma_mu * random.normal(key, (heap_size,)),
             var_tree=jnp.zeros(
@@ -481,59 +476,55 @@ class SamplePriorTrees(Module):
         )
 
 
-def sample_prior_recursive(
-    key: Key[Array, ''],
-    meta: SamplePriorMeta,
-    split_range: SamplePriorRange,
-    trees: SamplePriorTrees,
-    nonterminal: bool | Bool[Array, ''] = True,
-    node: int | Int32[Array, ''] = 1,
-    depth: int = 0,
-) -> SamplePriorTrees:
-    keys = jaxext.split(key, 5)
+class SamplePriorCarry(Module):
+    key: Key[Array, '']
+    stack: SamplePriorStack
+    trees: SamplePriorTrees
 
-    # decide whether to try to grow the node if it is growable
-    p_nonterminal = meta.p_nonterminal[depth]
-    try_nonterminal: Bool[Array, ''] = random.bernoulli(keys.pop(), p_nonterminal)
+    @classmethod
+    def initial(
+        cls,
+        key: Key[Array, ''],
+        sigma_mu: Float32[Array, ''],
+        p_nonterminal: Float32[Array, ' d-1'],
+        max_split: UInt[Array, ' p'],
+    ) -> 'SamplePriorCarry':
+        keys = jaxext.split(key)
+        return cls(
+            keys.pop(),
+            SamplePriorStack.initial(p_nonterminal, max_split),
+            SamplePriorTrees.initial(keys.pop(), sigma_mu, p_nonterminal, max_split),
+        )
 
-    # sample a random decision rule
-    available: Bool[Array, ' p'] = split_range.lower + 1 < split_range.upper
-    allowed = jnp.any(available)
-    var: Int32[Array, ''] = randint_masked(keys.pop(), available)
-    split = random.randint(
-        keys.pop(), (), split_range.lower[var] + 1, split_range.upper[var]
-    )
 
-    # write the new node
-    nonterminal &= try_nonterminal & allowed
-    trees = replace(
-        trees,
-        var_tree=trees.var_tree.at[node].set(var.astype(trees.var_tree.dtype)),
-        split_tree=trees.split_tree.at[node].set(jnp.where(nonterminal, split, 0)),
-    )
+class SamplePriorX(Module):
+    node: Int32[Array, ' 2**(d-1)-1']
+    depth: Int32[Array, ' 2**(d-1)-1']
+    next_depth: Int32[Array, ' 2**(d-1)-1']
 
-    # recurse into children nodes
-    if depth + 1 < meta.p_nonterminal.size:
-        p = split_range.lower.size
+    @classmethod
+    def initial(cls, p_nonterminal: Float32[Array, ' d-1']) -> 'SamplePriorX':
+        seq = cls._sequence(p_nonterminal.size)
+        assert len(seq) == 2**p_nonterminal.size - 1
+        node = [node for node, depth in seq]
+        depth = [depth for node, depth in seq]
+        next_depth = depth[1:] + [p_nonterminal.size]
+        return cls(
+            node=jnp.array(node),
+            depth=jnp.array(depth),
+            next_depth=jnp.array(next_depth),
+        )
 
-        def loop(trees, item):
-            right, key = item
-            return sample_prior_recursive(
-                key,
-                meta,
-                SamplePriorRange(
-                    lower=split_range.lower.at[jnp.where(right, var, p)].set(split),
-                    upper=split_range.upper.at[jnp.where(right, p, var)].set(split),
-                ),
-                trees,
-                nonterminal,
-                2 * node + right,
-                depth + 1,
-            ), None
-
-        trees, _ = lax.scan(loop, trees, (jnp.arange(2), keys.pop(2)))
-
-    return trees
+    @classmethod
+    def _sequence(
+        cls, max_depth: int, depth: int = 0, node: int = 1
+    ) -> tuple[tuple[int, int], ...]:
+        if depth < max_depth:
+            out = ((node, depth),)
+            out += cls._sequence(max_depth, depth + 1, 2 * node)
+            out += cls._sequence(max_depth, depth + 1, 2 * node + 1)
+            return out
+        return ()
 
 
 def sample_prior_onetree(
@@ -542,21 +533,90 @@ def sample_prior_onetree(
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
-    meta = SamplePriorMeta.initial_value(p_nonterminal, sigma_mu)
-    split_range = SamplePriorRange.initial_value(max_split)
-    trees = SamplePriorTrees.initial_value(key, sigma_mu, meta.heap_size, max_split)
-    return sample_prior_recursive(key, meta, split_range, trees)
+    carry = SamplePriorCarry.initial(key, sigma_mu, p_nonterminal, max_split)
+    xs = SamplePriorX.initial(p_nonterminal)
+
+    def loop(carry: SamplePriorCarry, x: SamplePriorX):
+        keys = jaxext.split(carry.key, 4)
+
+        # get variables at current stack level
+        stack = carry.stack
+        nonterminal = stack.nonterminal[x.depth]
+        lower = stack.lower[x.depth, :]
+        upper = stack.upper[x.depth, :]
+
+        # sample a random decision rule
+        available: Bool[Array, ' p'] = lower < upper
+        allowed = jnp.any(available)
+        var = randint_masked(keys.pop(), available)
+        split = 1 + random.randint(keys.pop(), (), lower[var], upper[var])
+
+        # cast to shorter integer types
+        var = var.astype(carry.trees.var_tree.dtype)
+        split = split.astype(carry.trees.split_tree.dtype)
+
+        # decide whether to try to grow the node if it is growable
+        pnt = p_nonterminal[x.depth]
+        try_nonterminal: Bool[Array, ''] = random.bernoulli(keys.pop(), pnt)
+        nonterminal &= try_nonterminal & allowed
+
+        # update trees
+        trees = carry.trees
+        trees = replace(
+            trees,
+            var_tree=trees.var_tree.at[x.node].set(var),
+            split_tree=trees.split_tree.at[x.node].set(
+                jnp.where(nonterminal, split, 0)
+            ),
+        )
+
+        def write_push_stack() -> SamplePriorStack:
+            """Update the stack to go to the left child."""
+            return replace(
+                stack,
+                nonterminal=stack.nonterminal.at[x.next_depth].set(nonterminal),
+                lower=stack.lower.at[x.next_depth, :].set(lower),
+                upper=stack.upper.at[x.next_depth, :].set(upper.at[var].set(split - 1)),
+                var=stack.var.at[x.depth].set(var),
+                split=stack.split.at[x.depth].set(split),
+            )
+
+        def pop_push_stack() -> SamplePriorStack:
+            """Update the stack to go to the right sibling, possibly at lower depth."""
+            var = stack.var[x.next_depth - 1]
+            split = stack.split[x.next_depth - 1]
+            lower = stack.lower[x.next_depth - 1, :]
+            upper = stack.upper[x.next_depth - 1, :]
+            return replace(
+                stack,
+                lower=stack.lower.at[x.next_depth, :].set(lower.at[var].set(split)),
+                upper=stack.upper.at[x.next_depth, :].set(upper),
+            )
+
+        # update stack
+        stack = lax.cond(x.next_depth > x.depth, write_push_stack, pop_push_stack)
+
+        # update carry
+        carry = replace(
+            carry,
+            key=keys.pop(),
+            stack=stack,
+            trees=trees,
+        )
+        return carry, None
+
+    carry, _ = lax.scan(loop, carry, xs)
+    return carry.trees
 
 
 @functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
-@functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
-def sample_prior_trace(
-    key: Key[Array, 'trace_length num_trees'],
+def sample_prior_forest(
+    keys: Key[Array, ' num_trees'],
     max_split: UInt[Array, ' p'],
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
-    return sample_prior_onetree(key, max_split, p_nonterminal, sigma_mu)
+    return sample_prior_onetree(keys, max_split, p_nonterminal, sigma_mu)
 
 
 @functools.partial(jit, static_argnums=(1, 2))
@@ -568,5 +628,6 @@ def sample_prior(
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
-    keys = random.split(key, (trace_length, num_trees))
-    return sample_prior_trace(keys, max_split, p_nonterminal, sigma_mu)
+    keys = random.split(key, trace_length * num_trees)
+    trees = sample_prior_forest(keys, max_split, p_nonterminal, sigma_mu)
+    return tree_map(lambda x: x.reshape(trace_length, num_trees, -1), trees)
