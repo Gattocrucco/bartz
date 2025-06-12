@@ -45,7 +45,7 @@ import math
 from typing import Protocol
 
 import jax
-from jax import lax
+from jax import jit, lax
 from jax import numpy as jnp
 from jaxtyping import Array, Float32, Int32, Shaped, UInt
 
@@ -291,6 +291,7 @@ def is_used(split_tree):
     return internal_node | actual_leaf
 
 
+@jit
 def forest_fill(split_trees: UInt[Array, 'num_trees 2**(d-1)']) -> Float32[Array, '']:
     """
     Return the fraction of used nodes in a set of trees.

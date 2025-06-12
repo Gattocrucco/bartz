@@ -34,7 +34,6 @@ from jax import random
 from jax.lax import scan
 from jax.scipy.special import ndtr
 from jaxtyping import Array, Bool, Float32, Key, Scalar, Shaped
-from numpy import ndarray
 
 from ._autobatch import autobatch  # noqa: F401
 from .scipy.special import ndtri
@@ -51,25 +50,6 @@ def vmap_nodoc(fun, *args, **kw):
     fun = jax.vmap(fun, *args, **kw)
     fun.__doc__ = doc
     return fun
-
-
-def huge_value(x: Array | ndarray) -> int | float:
-    """
-    Return the maximum value that can be stored in `x`.
-
-    Parameters
-    ----------
-    x
-        A numerical numpy or jax array.
-
-    Returns
-    -------
-    The maximum value allowed by `x`'s type (+inf for floats).
-    """
-    if jnp.issubdtype(x.dtype, jnp.integer):
-        return jnp.iinfo(x.dtype).max
-    else:
-        return jnp.inf
 
 
 def minimal_unsigned_dtype(value):
@@ -142,13 +122,13 @@ def unique(
     x = jnp.sort(x)
 
     def loop(carry, x):
-        i_out, i_in, last, out = carry
+        i_out, last, out = carry
         i_out = jnp.where(x == last, i_out, i_out + 1)
         out = out.at[i_out].set(x)
-        return (i_out, i_in + 1, x, out), None
+        return (i_out, x, out), None
 
-    carry = 0, 0, x[0], jnp.full(size, fill_value, x.dtype)
-    (actual_length, _, _, out), _ = scan(loop, carry, x[:size])
+    carry = 0, x[0], jnp.full(size, fill_value, x.dtype)
+    (actual_length, _, out), _ = scan(loop, carry, x[:size])
     return out, actual_length + 1
 
 

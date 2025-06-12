@@ -30,12 +30,12 @@ from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Float32, Int32, Key
+from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 
 from bartz.jaxext.scipy.special import ndtri
 from bartz.jaxext.scipy.stats import invgamma
 
-from . import grove, mcmcloop, mcmcstep, prepcovars
+from . import mcmcloop, mcmcstep, prepcovars
 
 FloatLike = float | Float[Any, '']
 
@@ -59,27 +59,37 @@ class gbart:
     type
         The type of regression. 'wbart' for continuous regression, 'pbart' for
         binary regression with probit link.
-    usequants : bool, default False
+    xinfo
+        A matrix with the cutpoins to use to bin each predictor. If not
+        specified, it is generated automatically according to `usequants` and
+        `numcut`.
+
+        Each row shall contain a sorted list of cutpoints for a predictor. If
+        there are less cutpoints than the number of columns in the matrix,
+        fill the remaining cells with NaN.
+
+        `xinfo` shall be a matrix even if `x_train` is a dataframe.
+    usequants
         Whether to use predictors quantiles instead of a uniform grid to bin
-        predictors.
-    sigest : float, optional
+        predictors. Ignored if `xinfo` is specified.
+    sigest
         An estimate of the residual standard deviation on `y_train`, used to set
         `lamda`. If not specified, it is estimated by linear regression (with
         intercept, and without taking into account `w`). If `y_train` has less
         than two elements, it is set to 1. If n <= p, it is set to the standard
         deviation of `y_train`. Ignored if `lamda` is specified.
-    sigdf : int, default 3
+    sigdf
         The degrees of freedom of the scaled inverse-chisquared prior on the
         noise variance.
-    sigquant : float, default 0.9
+    sigquant
         The quantile of the prior on the noise variance that shall match
         `sigest` to set the scale of the prior. Ignored if `lamda` is specified.
-    k : float, default 2
+    k
         The inverse scale of the prior standard deviation on the latent mean
         function, relative to half the observed range of `y_train`. If `y_train`
         has less than two elements, `k` is ignored and the scale is set to 1.
-    power : float, default 2
-    base : float, default 0.95
+    power
+    base
         Parameters of the prior on tree node generation. The probability that a
         node at depth `d` (0-based) is non-terminal is ``base / (1 + d) **
         power``.
@@ -99,15 +109,15 @@ class gbart:
         `offset` is set to 0. With binary regression, if `y_train` is all
         `False` or `True`, it is set to ``Phi^-1(1/(n+1))`` or
         ``Phi^-1(n/(n+1))``, respectively.
-    w : array (n,), optional
+    w
         Coefficients that rescale the error standard deviation on each
         datapoint. Not specifying `w` is equivalent to setting it to 1 for all
         datapoints. Note: `w` is ignored in the automatic determination of
         `sigest`, so either the weights should be O(1), or `sigest` should be
         specified by the user.
-    ntree : int, default 200
+    ntree
         The number of trees used to represent the latent mean function.
-    numcut : int, default 255
+    numcut
         If `usequants` is `False`: the exact number of cutpoints used to bin the
         predictors, ranging between the minimum and maximum observed values
         (excluded).
@@ -120,14 +130,16 @@ class gbart:
 
         Before running the algorithm, the predictors are compressed to the
         smallest integer type that fits the bin indices, so `numcut` is best set
-        to the maximum value of an unsigned integer type.
-    ndpost : int, default 1000
+        to the maximum value of an unsigned integer type, like 255.
+
+        Ignored if `xinfo` is specified.
+    ndpost
         The number of MCMC samples to save, after burn-in.
-    nskip : int, default 100
+    nskip
         The number of initial MCMC samples to discard as burn-in.
-    keepevery : int, default 1
+    keepevery
         The thinning factor for the MCMC samples, after burn-in.
-    printevery : int or None, default 100
+    printevery
         The number of iterations (including thinned-away ones) between each log
         line. Set to `None` to disable logging.
 
@@ -138,12 +150,12 @@ class gbart:
         will not be saved.
     seed
         The seed for the random number generator.
-    maxdepth : int, default 6
+    maxdepth
         The maximum depth of the trees. This is 1-based, so with the default
         ``maxdepth=6``, the depths of the levels range from 0 to 5.
-    init_kw : dict
+    init_kw
         Additional arguments passed to `mcmcstep.init`.
-    run_mcmc_kw : dict
+    run_mcmc_kw
         Additional arguments passed to `mcmcloop.run_mcmc`.
 
     Attributes
@@ -191,6 +203,7 @@ class gbart:
 
     _mcmc_state: mcmcstep.State
     _main_trace: mcmcloop.MainTrace
+    _splits: Real[Array, 'p max_num_splits']
 
     def __init__(
         self,
@@ -199,27 +212,28 @@ class gbart:
         *,
         x_test=None,
         type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
-        usequants=False,
-        sigest=None,
-        sigdf=3,
-        sigquant=0.9,
-        k=2,
-        power=2,
-        base=0.95,
+        xinfo: Float[Array, 'p n'] | None = None,
+        usequants: bool = False,
+        sigest: FloatLike | None = None,
+        sigdf: int = 3,
+        sigquant: FloatLike = 0.9,
+        k: FloatLike = 2.0,
+        power: FloatLike = 2.0,
+        base: FloatLike = 0.95,
         lamda: FloatLike | None = None,
         tau_num: FloatLike | None = None,
         offset: FloatLike | None = None,
-        w=None,
-        ntree=200,
-        numcut=255,
-        ndpost=1000,
-        nskip=100,
-        keepevery=1,
-        printevery=100,
+        w: Float[Array, ' n'] | None = None,
+        ntree: int = 200,
+        numcut: int = 255,
+        ndpost: int = 1000,
+        nskip: int = 100,
+        keepevery: int = 1,
+        printevery: int | None = 100,
         seed: int | Key[Array, ''] = 0,
-        maxdepth=6,
-        init_kw=None,
-        run_mcmc_kw=None,
+        maxdepth: int = 6,
+        init_kw: dict | None = None,
+        run_mcmc_kw: dict | None = None,
     ):
         x_train, x_train_fmt = self._process_predictor_input(x_train)
         y_train, _ = self._process_response_input(y_train)
@@ -236,7 +250,7 @@ class gbart:
             x_train, y_train, sigest, sigdf, sigquant, lamda
         )
 
-        splits, max_split = self._determine_splits(x_train, usequants, numcut)
+        splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
         x_train = self._bin_predictors(x_train, splits)
 
         mcmc_state = self._setup_mcmc(
@@ -449,8 +463,18 @@ class gbart:
         return tau_num / (k * math.sqrt(ntree))
 
     @staticmethod
-    def _determine_splits(x_train, usequants, numcut):
-        if usequants:
+    def _determine_splits(
+        x_train: Real[Array, 'p n'],
+        usequants: bool,
+        numcut: int,
+        xinfo: Float[Array, 'p n'] | None,
+    ) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
+        if xinfo is not None:
+            if xinfo.ndim != 2 or xinfo.shape[0] != x_train.shape[0]:
+                msg = f'{xinfo.shape=} different from expected ({x_train.shape[0]}, *)'
+                raise ValueError(msg)
+            return prepcovars.parse_xinfo(xinfo)
+        elif usequants:
             return prepcovars.quantilized_splits_from_matrix(x_train, numcut + 1)
         else:
             return prepcovars.uniform_splits_from_matrix(x_train, numcut + 1)
@@ -537,90 +561,3 @@ class gbart:
 
     def _predict(self, x):
         return mcmcloop.evaluate_trace(self._main_trace, x)
-
-    def _show_tree(self, i_sample, i_tree, print_all=False):
-        from .debug import format_tree
-
-        tree = mcmcloop.TreesTrace(
-            leaf_tree=self._main_trace.leaf_tree,
-            var_tree=self._main_trace.var_tree,
-            split_tree=self._main_trace.split_tree,
-        )
-        tree = jax.tree.map(lambda x: x[i_sample, i_tree, :], tree)
-        s = format_tree(tree, print_all=print_all)
-        print(s)  # noqa: T201, this method is intended for debug
-
-    def _sigma_harmonic_mean(self, prior=False):
-        bart = self._mcmc_state
-        assert bart.sigma2_alpha is not None
-        assert bart.z is None
-        if prior:
-            alpha = bart.sigma2_alpha
-            beta = bart.sigma2_beta
-        else:
-            resid = bart.resid
-            alpha = bart.sigma2_alpha + resid.size / 2
-            norm2 = resid @ resid
-            beta = bart.sigma2_beta + norm2 / 2
-        sigma2 = beta / alpha
-        return jnp.sqrt(sigma2)
-
-    def _compare_resid(self):
-        bart = self._mcmc_state
-        resid1 = bart.resid
-
-        trees = grove.evaluate_forest(bart.X, bart.forest)
-
-        if bart.z is not None:
-            ref = bart.z
-        else:
-            ref = bart.y
-        resid2 = ref - (trees + bart.offset)
-
-        return resid1, resid2
-
-    def _avg_acc(self):
-        trace = self._main_trace
-
-        def acc(prefix):
-            acc = getattr(trace, f'{prefix}_acc_count')
-            prop = getattr(trace, f'{prefix}_prop_count')
-            return acc.sum() / prop.sum()
-
-        return acc('grow'), acc('prune')
-
-    def _avg_prop(self):
-        trace = self._main_trace
-
-        def prop(prefix):
-            return getattr(trace, f'{prefix}_prop_count').sum()
-
-        pgrow = prop('grow')
-        pprune = prop('prune')
-        total = pgrow + pprune
-        return pgrow / total, pprune / total
-
-    def _avg_move(self):
-        agrow, aprune = self._avg_acc()
-        pgrow, pprune = self._avg_prop()
-        return agrow * pgrow, aprune * pprune
-
-    def _depth_distr(self):
-        from . import debug
-
-        return debug.trace_depth_distr(self._main_trace.split_tree)
-
-    def _points_per_leaf_distr(self):
-        from . import debug
-
-        return debug.trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
-
-    def _check_trees(self):
-        from . import debug
-
-        return debug.check_trace(self._main_trace, self._mcmc_state.max_split)
-
-    def _tree_goes_bad(self):
-        bad = self._check_trees().astype(bool)
-        bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
-        return bad & ~bad_before

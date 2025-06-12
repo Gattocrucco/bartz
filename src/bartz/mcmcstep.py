@@ -96,7 +96,7 @@ class Forest(Module):
     leaf_tree: Float32[Array, 'num_trees 2**d']
     var_tree: UInt[Array, 'num_trees 2**(d-1)']
     split_tree: UInt[Array, 'num_trees 2**(d-1)']
-    p_nonterminal: Float32[Array, ' d']
+    p_nonterminal_padded: Float32[Array, ' d']
     p_propose_grow: Float32[Array, ' 2**(d-1)']
     leaf_indices: UInt[Array, 'num_trees n']
     min_points_per_leaf: Int32[Array, ''] | None
@@ -146,6 +146,8 @@ class State(Module):
 
     X: UInt[Array, 'p n']
     max_split: UInt[Array, ' p']
+    # maybe max_split belongs in the forest. maybe it should be declared
+    # in TreeHeaps, it makes sense to carry the bounds together with the trees.
     y: Float32[Array, ' n'] | Bool[Array, ' n']
     z: None | Float32[Array, ' n']
     offset: Float32[Array, '']
@@ -276,7 +278,7 @@ def init(
             grow_acc_count=jnp.zeros((), int),
             prune_prop_count=jnp.zeros((), int),
             prune_acc_count=jnp.zeros((), int),
-            p_nonterminal=p_nonterminal,
+            p_nonterminal_padded=p_nonterminal,
             p_propose_grow=p_nonterminal[grove.tree_depths(2 ** (max_depth - 1))],
             leaf_indices=jnp.ones(
                 (num_trees, y.size), minimal_unsigned_dtype(2**max_depth - 1)
@@ -490,14 +492,14 @@ def propose_moves(
         forest.split_tree,
         forest.affluence_trees,
         max_split,
-        forest.p_nonterminal,
+        forest.p_nonterminal_padded,
         forest.p_propose_grow,
     )
     prune_moves = propose_prune_moves(
         keys.pop(num_trees),
         forest.split_tree,
         forest.affluence_trees,
-        forest.p_nonterminal,
+        forest.p_nonterminal_padded,
         forest.p_propose_grow,
     )
 
@@ -541,9 +543,9 @@ class GrowMoves(Module):
     Parameters
     ----------
     allowed
-        Whether the move is allowed in the first place.
+        Whether the move is allowed for proposal.
     num_growable
-        The number of growable leaves.
+        The number of leaves that can be proposed for grow.
     node
         The index of the leaf to grow. ``2 ** d`` if there are no growable
         leaves.
@@ -560,7 +562,8 @@ class GrowMoves(Module):
     Notes
     -----
     `var`, `split` and `partial_ratio` are nonsensical if the move is not
-    allowed.
+    allowed. If the move is allowed but it would create a logically empty
+    subtree, then `split` is set to 0.
     """
 
     allowed: Bool[Array, ' num_trees']
@@ -579,7 +582,7 @@ def propose_grow_moves(
     split_tree: UInt[Array, 'num_trees 2**(d-1)'],
     affluence_tree: Bool[Array, 'num_trees 2**(d-1)'] | None,
     max_split: UInt[Array, ' p'],
-    p_nonterminal: Float32[Array, ' d'],
+    p_nonterminal_padded: Float32[Array, ' d'],
     p_propose_grow: Float32[Array, ' 2**(d-1)'],
 ) -> GrowMoves:
     """
@@ -600,8 +603,9 @@ def propose_grow_moves(
         Whether a leaf has enough points to be grown.
     max_split
         The maximum split index for each variable.
-    p_nonterminal
-        The probability of a nonterminal node at each depth.
+    p_nonterminal_padded
+        The probability of a nonterminal node at each depth, including the
+        maximum depth where it should be zero.
     p_propose_grow
         The unnormalized probability of choosing a leaf to grow.
 
@@ -617,10 +621,10 @@ def propose_grow_moves(
 
     The move is also not possible if the ancestors of the chosen leaf have
     exhausted the possible decision rules that lead to a non-empty selection.
-    This is marked by returning `var` set to `p` and `split` set to 0. But this
-    does not block the move from counting as "proposed", even though it is
-    predictably going to be rejected. This simplifies the MCMC and should not
-    reduce efficiency if not in unrealistic corner cases.
+    This is marked by returning `split` set to 0. But this does not block the
+    move from counting as "proposed", even though it is predictably going to be
+    rejected. This simplifies the MCMC and should not reduce efficiency if not
+    in unrealistic corner cases.
     """
     keys = split(key, 3)
 
@@ -634,7 +638,7 @@ def propose_grow_moves(
     split_idx = choose_split(keys.pop(), var_tree, split_tree, max_split, leaf_to_grow)
 
     ratio = compute_partial_ratio(
-        prob_choose, num_prunable, p_nonterminal, leaf_to_grow
+        prob_choose, num_prunable, p_nonterminal_padded, leaf_to_grow
     )
 
     return GrowMoves(
@@ -784,8 +788,9 @@ def choose_variable(
 
     Notes
     -----
-    The variable is chosen among the variables that have a non-empty range of
-    allowed splits. If no variable has a non-empty range, return `p`.
+    This function does not sample variables from in the ancestor decision rules
+    of the node which have an empty split range. However it samples from
+    variables not in ancestors that have an empty split range a priori.
     """
     var_to_ignore = fully_used_variables(var_tree, split_tree, max_split, leaf_index)
     return randint_exclude(key, max_split.size, var_to_ignore)
@@ -798,7 +803,7 @@ def fully_used_variables(
     leaf_index: Int32[Array, ''],
 ) -> UInt[Array, ' d-2']:
     """
-    Return a list of variables that have an empty split range at a given node.
+    Find variables in the ancestors of a node that have an empty split range.
 
     Parameters
     ----------
@@ -826,6 +831,8 @@ def fully_used_variables(
     l, r = split_range_vec(var_tree, split_tree, max_split, leaf_index, var_to_ignore)
     num_split = r - l
     return jnp.where(num_split == 0, var_to_ignore, max_split.size)
+    # the type of var_to_ignore is already sufficient to hold max_split.size,
+    # see ancestor_variables()
 
 
 def ancestor_variables(
@@ -866,7 +873,6 @@ def ancestor_variables(
         var = jnp.where(index, var, max_split.size)
         ancestor_vars = ancestor_vars.at[i].set(var)
         return (i - 1, index, ancestor_vars), None
-        # why am I filling it in reverse?
 
     (_, _, ancestor_vars), _ = lax.scan(loop, carry, None, ancestor_vars.size)
     return ancestor_vars
@@ -903,7 +909,7 @@ def split_range(
     initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(
         jnp.int32
     )
-    carry = 0, initial_r, node_index
+    carry = jnp.int32(0), initial_r, node_index
 
     def loop(carry, _):
         l, r, index = carry
@@ -980,12 +986,16 @@ def choose_split(
 
     Returns
     -------
-    The cutpoint. If ``var_tree[leaf_index]`` is out of bounds, return 0.
-    If `leaf_index` is out of bounds, the output won't make sense.
+    The cutpoint.
+
+    Notes
+    -----
+    If ``var_tree[leaf_index]`` is out of bounds, or if the available split
+    range on that variable is empty, return 0.
     """
     var = var_tree[leaf_index]
     l, r = split_range(var_tree, split_tree, max_split, leaf_index, var)
-    return random.randint(key, (), l, r)
+    return jnp.where(l < r, random.randint(key, (), l, r), 0)
 
 
 def compute_partial_ratio(

@@ -138,13 +138,16 @@ class Callback(Protocol):
 
         Returns
         -------
-        The callback may return `None`. Otherwise, return:
-
-        bart : dict
+        bart : State
             A possibly modified MCMC state. To avoid modifying the state,
             return the `bart` argument passed to the callback as-is.
         callback_state : CallbackState
             The new state to be passed on the next callback invocation.
+
+        Notes
+        -----
+        For convenience, the callback may return `None`, and the states won't
+        be updated.
         """
         ...
 
@@ -501,7 +504,7 @@ def _print_report(
             if prop_count:
                 return f'{acc_count / prop_count:.0%}'
             else:
-                return ' n/d'
+                return 'n/d'
 
         grow_prop = grow_prop_count / prop_total
         prune_prop = prune_prop_count / prop_total
@@ -574,7 +577,9 @@ def evaluate_trace(
 
 
 @partial(jax.jit, static_argnums=(0,))
-def compute_varcount(p: int, trace: Trace) -> Int32[Array, 'trace_length {p}']:
+def compute_varcount(
+    p: int, trace: grove.TreeHeaps
+) -> Int32[Array, 'trace_length {p}']:
     """
     Count how many times each predictor is used in each MCMC state.
 

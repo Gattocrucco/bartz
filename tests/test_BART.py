@@ -32,21 +32,30 @@ import signal
 import threading
 import time
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import jax
 import numpy
 import polars as pl
 import pytest
+from jax import debug_nans, random, vmap
 from jax import numpy as jnp
-from jax import random
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jaxtyping import Array, Float, Key, Real
+from jaxtyping import Array, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
-import bartz
-from bartz.debug import check_trace, trees_BART_to_bartz
+from bartz.debug import (
+    TraceWithOffset,
+    check_trace,
+    sample_prior,
+    trace_depth_distr,
+    tree_actual_depth,
+    trees_BART_to_bartz,
+)
+from bartz.debug import debug_gbart as gbart
+from bartz.grove import is_actual_leaf, tree_depths
 from bartz.jaxext import split
 from bartz.mcmcloop import compute_varcount, evaluate_trace
 
@@ -113,9 +122,9 @@ def kw(keys, request):
                 ndpost=100,
                 nskip=50,
                 printevery=50,
-                usequants=True,
-                numcut=255,
-                maxdepth=6,
+                usequants=False,
+                numcut=256,  # > 255 to use uint16 for X and split_trees
+                maxdepth=9,  # > 8 to use uint16 for leaf_indices
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
@@ -138,10 +147,11 @@ def kw(keys, request):
                 ndpost=100,
                 nskip=50,
                 printevery=None,
-                # with usequants=True, numcut would have no effect
-                usequants=False,
-                numcut=256,  # > 255 to use uint16 for X and split_trees
-                maxdepth=9,  # > 8 to use uint16 for leaf_indices
+                usequants=True,
+                # usequants=True with binary X to check the case in which the
+                # splits are less than the statically known maximum
+                numcut=255,
+                maxdepth=6,
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=16,
@@ -167,8 +177,8 @@ def kw(keys, request):
                 nskip=50,
                 printevery=50,
                 usequants=True,
-                numcut=255,
-                maxdepth=6,
+                numcut=10,
+                maxdepth=8,  # 8 to check if it changes type too soon
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
@@ -176,34 +186,26 @@ def kw(keys, request):
             )
 
 
-def test_bad_trees(kw):
-    """Check all trees produced by the MCMC respect the tree format."""
-    bart = bartz.BART.gbart(**kw)
-    bad = bart._check_trees()
-    bad_count = jnp.count_nonzero(bad)
-    assert bad_count == 0
-
-
 def test_sequential_guarantee(kw):
     """Check that the way iterations are saved does not influence the result."""
-    bart1 = bartz.BART.gbart(**kw)
+    bart1 = gbart(**kw)
 
     kw['seed'] = random.clone(kw['seed'])
 
     kw['nskip'] -= 1
     kw['ndpost'] += 1
-    bart2 = bartz.BART.gbart(**kw)
+    bart2 = gbart(**kw)
     assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
 
     kw['keepevery'] = 2
-    bart3 = bartz.BART.gbart(**kw)
+    bart3 = gbart(**kw)
     yhat_train = bart2.yhat_train[1::2]
     assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
 
 
 def test_output_shapes(kw):
     """Check the output shapes of all the attributes of BART.gbart."""
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
 
     ndpost = kw['ndpost']
     nskip = kw['nskip']
@@ -227,7 +229,7 @@ def test_output_shapes(kw):
 
 def test_predict(kw):
     """Check that the public BART.gbart.predict method works."""
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     yhat_train = bart.predict(kw['x_train'])
     assert_array_equal(bart.yhat_train, yhat_train)
 
@@ -237,7 +239,7 @@ def test_scale_shift(kw):
     if kw['y_train'].dtype == bool:
         pytest.skip('Cannot rescale binary responses.')
 
-    bart1 = bartz.BART.gbart(**kw)
+    bart1 = gbart(**kw)
 
     offset = 0.4703189
     scale = 0.5294714
@@ -245,7 +247,7 @@ def test_scale_shift(kw):
     # note: using the same seed does not guarantee stable error because the mcmc
     # makes discrete choices based on thresholds on floats, so numerical error
     # can be amplified.
-    bart2 = bartz.BART.gbart(**kw)
+    bart2 = gbart(**kw)
 
     assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-6)
     assert_allclose(
@@ -273,8 +275,8 @@ def test_scale_shift(kw):
 
 def test_min_points_per_leaf(kw):
     """Check that the limit of at least 5 datapoints per leaf is respected."""
-    bart = bartz.BART.gbart(**kw)
-    distr = bart._points_per_leaf_distr()
+    bart = gbart(**kw)
+    distr = bart.points_per_leaf_distr()
     distr_marg = distr.sum(axis=0)
     limit_inactive = kw['init_kw'].get('min_points_per_leaf', 5) is None
     assert jnp.all(distr_marg[:5] == 0) == (not limit_inactive)
@@ -284,8 +286,8 @@ def test_min_points_per_leaf(kw):
 def test_residuals_accuracy(kw):
     """Check that running residuals are close to the recomputed final residuals."""
     kw.update(ntree=200, ndpost=1000, nskip=0)
-    bart = bartz.BART.gbart(**kw)
-    accum_resid, actual_resid = bart._compare_resid()
+    bart = gbart(**kw)
+    accum_resid, actual_resid = bart.compare_resid()
     assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 
@@ -302,9 +304,16 @@ def set_num_datapoints(kw, n):
 
 def test_no_datapoints(kw):
     """Check automatic data scaling with 0 datapoints."""
+    # remove all datapoints
     kw = set_num_datapoints(kw, 0)
-    kw.update(usequants=True)  # because the uniform grid requires endpoints
-    bart = bartz.BART.gbart(**kw)
+
+    # set the split grid manually because automatic setting relies on datapoints
+    p, _ = kw['x_train'].shape
+    nsplits = 10
+    xinfo = jnp.broadcast_to(jnp.arange(nsplits, dtype=jnp.float32), (p, nsplits))
+    kw.update(xinfo=xinfo)
+
+    bart = gbart(**kw)
     ndpost = kw['ndpost']
     assert bart.yhat_train.shape == (ndpost, 0)
     assert bart.offset == 0
@@ -322,7 +331,7 @@ def test_no_datapoints(kw):
 def test_one_datapoint(kw):
     """Check automatic data scaling with 1 datapoint."""
     kw = set_num_datapoints(kw, 1)
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     if kw['y_train'].dtype == bool:
         tau_num = 3
         assert bart.sigest is None
@@ -334,14 +343,18 @@ def test_one_datapoint(kw):
     assert_allclose(
         bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
     )
+    if kw['usequants']:
+        assert jnp.all(bart._mcmc_state.max_split == 0)
 
 
 def test_two_datapoints(kw):
     """Check automatic data scaling with 2 datapoints."""
     kw = set_num_datapoints(kw, 2)
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     if kw['y_train'].dtype != bool:
         assert_allclose(bart.sigest, kw['y_train'].std(), rtol=1e-6)
+    if kw['usequants']:
+        assert jnp.all(bart._mcmc_state.max_split <= 1)
 
 
 def test_few_datapoints(kw):
@@ -352,11 +365,11 @@ def test_few_datapoints(kw):
     """
     kw.setdefault('init_kw', {}).update(min_points_per_leaf=5)
     kw = set_num_datapoints(kw, 9)  # < 2 * 5
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 
-def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: bartz.BART.gbart) -> dict:
+def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
     """Convert bartz keyword arguments to R BART keyword arguments."""
     kw_BART = dict(
         **kw,
@@ -393,7 +406,7 @@ def test_rbart(kw, keys):
     kw['init_kw'].update(min_points_per_leaf=5)
 
     # run bart with both packages
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
     rbart = BART.mc_gbart(**kw_BART)
 
@@ -403,7 +416,7 @@ def test_rbart(kw, keys):
     trees: str = rbart.treedraws['trees'].item()
     trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
 
-    varcount = compute_varcount(meta.p, trace)
+    varcount = compute_varcount(meta.numcut.size, trace)
     assert jnp.all(varcount == rbart.varcount)
 
     yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
@@ -413,7 +426,8 @@ def test_rbart(kw, keys):
     yhat_test = evaluate_trace(trace, Xt)
     assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
 
-    bad = check_trace(trace, bart._mcmc_state.max_split)
+    assert jnp.all(meta.numcut <= bart._mcmc_state.max_split)
+    bad = check_trace(trace, meta.numcut)
     num_bad = jnp.count_nonzero(bad)
     assert num_bad == 0
 
@@ -439,6 +453,201 @@ def test_rbart(kw, keys):
         assert rhat_varcount < 100  # TODO !!! # noqa: FIX002, will take a while
         # loose criterion as a patch
         assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.15)
+
+
+def test_xinfo():
+    """Simple check that the `xinfo` parameter works."""
+    with debug_nans(False):
+        xinfo = jnp.array(
+            [
+                [1.1, 2.3, jnp.nan],
+                [-50, 10, 20],
+                [jnp.nan, jnp.nan, jnp.nan],
+            ]
+        )
+    kw = dict(
+        x_train=jnp.empty((3, 0)),
+        y_train=jnp.empty(0),
+        ndpost=0,
+        nskip=0,
+        # these `usequants` and `numcut` values would lead to an error, so this
+        # checks they are ignored if `xinfo` is specified
+        usequants=True,
+        numcut=0,
+        xinfo=xinfo,
+    )
+    bart = gbart(**kw)
+
+    xinfo_wo_nan = jnp.where(jnp.isnan(xinfo), jnp.finfo(jnp.float32).max, xinfo)
+    assert_array_equal(bart._splits, xinfo_wo_nan)
+    assert_array_equal(bart._mcmc_state.max_split, [2, 3, 0])
+
+
+def test_xinfo_wrong_p():
+    """Check that `xinfo` must have the same number of rows as `X`."""
+    with debug_nans(False):
+        xinfo = jnp.array(
+            [
+                [1.1, 2.3, jnp.nan],
+                [-50, 10, 20],
+                [jnp.nan, jnp.nan, jnp.nan],
+            ]
+        )
+    kw = dict(
+        x_train=jnp.empty((5, 0)),
+        y_train=jnp.empty(0),
+        ndpost=0,
+        nskip=0,
+        xinfo=xinfo,
+    )
+    with pytest.raises(ValueError, match=r'xinfo\.shape'):
+        gbart(**kw)
+
+
+@pytest.mark.parametrize(
+    ('p', 'nsplits'),
+    [
+        # sure that trees do not grow beyond depth 2
+        pytest.param(1, 1, marks=pytest.mark.xfail),
+        (3, 2),  # likely to have no available decision rules on some nodes
+        (10, 1),  # always available decision rules, but never on the same variable
+        (10, 255),  # likely always available decision rules for all variables
+    ],
+)
+def test_prior(keys, p, nsplits):
+    """Check that the posterior without data is equivalent to the prior."""
+    # sample from posterior without data
+    xinfo = jnp.broadcast_to(jnp.arange(nsplits, dtype=jnp.float32), (p, nsplits))
+    # set the split grid manually because automatic setting relies on datapoints
+    kw = dict(
+        x_train=jnp.empty((p, 0)),
+        y_train=jnp.empty(0),
+        ntree=20,
+        ndpost=1000,
+        nskip=3000,
+        printevery=None,
+        xinfo=xinfo,
+        seed=keys.pop(),
+        init_kw=dict(min_points_per_leaf=None),  # because no data
+    )
+    bart = gbart(**kw)
+
+    # sample from prior
+    prior_trees = sample_prior(
+        keys.pop(),
+        kw['ndpost'],
+        kw['ntree'],
+        bart._mcmc_state.max_split,
+        bart._mcmc_state.forest.p_nonterminal_padded[:-1],
+        jnp.sqrt(bart._mcmc_state.forest.sigma_mu2),
+    )
+    prior_trace = TraceWithOffset.from_trees_trace(prior_trees, bart.offset)
+
+    # check prior samples
+    bad = check_trace(prior_trees, bart._mcmc_state.max_split)
+    bad_count = jnp.count_nonzero(bad)
+    assert bad_count == 0
+
+    # compare number of stub trees
+    nstub_mcmc = count_stub_trees(bart._main_trace.split_tree)
+    nstub_prior = count_stub_trees(prior_trace.split_tree)
+    rhat_nstub = multivariate_rhat(
+        jnp.stack([nstub_mcmc[:, None], nstub_prior[:, None]])
+    )
+    assert rhat_nstub < 1.001
+
+    if (p, nsplits) != (1, 1):
+        # all the following are equivalent to nstub in the 1-1 case
+
+        # compare number of "simple" trees
+        nsimple_mcmc = count_simple_trees(bart._main_trace.split_tree)
+        nsimple_prior = count_simple_trees(prior_trace.split_tree)
+        rhat_nsimple = multivariate_rhat(
+            jnp.stack([nsimple_mcmc[:, None], nsimple_prior[:, None]])
+        )
+        assert rhat_nsimple < 1.01
+
+        # compare varcount
+        varcount_prior = compute_varcount(bart._mcmc_state.max_split.size, prior_trace)
+        rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, varcount_prior]))
+        if p == 10:
+            # varcount is p-dimensional
+            assert rhat_varcount < 1.3
+        else:
+            assert rhat_varcount < 1.05
+
+        # compare number of nodes. since #leaves = 1 + #(internal nodes) in binary
+        # trees, I only check #(internal nodes) = sum(varcount).
+        sum_varcount_mcmc = bart.varcount.sum(axis=1)
+        sum_varcount_prior = varcount_prior.sum(axis=1)
+        rhat_sum_varcount = multivariate_rhat(
+            jnp.stack([sum_varcount_mcmc[:, None], sum_varcount_prior[:, None]])
+        )
+        assert rhat_sum_varcount < 1
+
+        # compare imbalance index
+        imb_mcmc = avg_imbalance_index(bart._main_trace.split_tree)
+        imb_prior = avg_imbalance_index(prior_trace.split_tree)
+        rhat_imb = multivariate_rhat(jnp.stack([imb_mcmc[:, None], imb_prior[:, None]]))
+        assert rhat_imb < 1.001
+
+        # compare average max tree depth
+        maxd_mcmc = avg_max_tree_depth(bart._main_trace.split_tree)
+        maxd_prior = avg_max_tree_depth(prior_trace.split_tree)
+        rhat_maxd = multivariate_rhat(
+            jnp.stack([maxd_mcmc[:, None], maxd_prior[:, None]])
+        )
+        assert rhat_maxd < 1
+
+        # compare max tree depth distribution
+        dd_mcmc = trace_depth_distr(bart._main_trace.split_tree)
+        dd_prior = trace_depth_distr(prior_trace.split_tree)
+        rhat_dd = multivariate_rhat(jnp.stack([dd_mcmc, dd_prior]))
+        assert rhat_dd < 1.05
+
+    # compare y
+    X = random.randint(keys.pop(), (p, 30), 0, nsplits + 1)
+    yhat_mcmc = evaluate_trace(bart._main_trace, X)
+    yhat_prior = evaluate_trace(prior_trace, X)
+    rhat_yhat = multivariate_rhat(jnp.stack([yhat_mcmc, yhat_prior]))
+    assert rhat_yhat < 1.05
+
+
+def count_stub_trees(
+    split_tree: UInt[Array, 'ndpost ntree 2**(d-1)'],
+) -> Int32[Array, ' ndpost']:
+    """Count the number of trees with only a root node."""
+    return (~split_tree.any(-1)).sum(-1)
+
+
+def count_simple_trees(
+    split_tree: UInt[Array, 'ndpost ntree 2**(d-1)'],
+) -> Int32[Array, ' ndpost']:
+    """Count the number of trees with 2 layers."""
+    return (split_tree.astype(bool).sum(-1) == 1).sum(-1)
+
+
+def avg_imbalance_index(
+    split_tree: UInt[Array, 'ndpost ntree 2**(d-1)'],
+) -> Float32[Array, ' ndpost']:
+    """Measure average tree imbalance in the forest.
+
+    The imbalance is measured as the standard deviation of the depth of the
+    leaves.
+    """
+    is_leaf = vmap(vmap(partial(is_actual_leaf, add_bottom_level=True)))(split_tree)
+    depths = tree_depths(is_leaf.shape[-1])
+    depths = jnp.broadcast_to(depths, is_leaf.shape)
+    index = jnp.std(depths, where=is_leaf, axis=2)
+    return index.mean(1)
+
+
+def avg_max_tree_depth(
+    split_tree: UInt[Array, 'ndpost ntree 2**(d-1)'],
+) -> Float32[Array, ' ndpost']:
+    """Measure average maximum tree depth in the forest."""
+    depth = vmap(vmap(tree_actual_depth))(split_tree)
+    return depth.mean(1)
 
 
 def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '']:
@@ -474,7 +683,7 @@ def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '
         centered = chain_samples - chain_mean
         return jnp.dot(centered.T, centered) / (n - 1)
 
-    within_chain_covs = jax.vmap(compute_chain_cov)(chains, chain_means)
+    within_chain_covs = vmap(compute_chain_cov)(chains, chain_means)
     W = jnp.mean(within_chain_covs, axis=0)
 
     overall_mean = jnp.mean(chain_means, axis=0)
@@ -512,9 +721,12 @@ def test_rhat(keys):
 
 def test_jit(kw):
     """Test that jitting around the whole interface works."""
-    kw.update(printevery=None)
     # set printevery to None to move all iterations to the inner loop and avoid
     # multiple compilation
+    kw.update(printevery=None)
+
+    # do not check trees because the assert breaks abstract tracing
+    kw.update(check_trees=False)
 
     X = kw.pop('x_train')
     y = kw.pop('y_train')
@@ -522,7 +734,7 @@ def test_jit(kw):
     key = kw.pop('seed')
 
     def task(X, y, w, key):
-        bart = bartz.BART.gbart(X, y, w=w, **kw, seed=key)
+        bart = gbart(X, y, w=w, **kw, seed=key)
         return bart._mcmc_state, bart.yhat_train
 
     task_compiled = jax.jit(task)
@@ -580,12 +792,12 @@ def test_interrupt(kw):
         kw['printevery'] = 50
     kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
-        call_with_timed_interrupt(3, bartz.BART.gbart, **kw)
+        call_with_timed_interrupt(3, gbart, **kw)
 
 
 def test_polars(kw):
     """Test passing data as DataFrame and Series."""
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     pred = bart.predict(kw['x_test'])
 
     kw.update(
@@ -595,7 +807,7 @@ def test_polars(kw):
         y_train=pl.Series(numpy.array(kw['y_train'])),
         w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
     )
-    bart2 = bartz.BART.gbart(**kw)
+    bart2 = gbart(**kw)
     pred2 = bart2.predict(kw['x_test'])
 
     assert_array_equal(bart.yhat_train, bart2.yhat_train)
@@ -610,7 +822,7 @@ def test_data_format_mismatch(kw):
         x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
         w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
     )
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
     with pytest.raises(ValueError, match='format mismatch'):
         bart.predict(kw['x_test'].to_numpy().T)
 
@@ -620,7 +832,7 @@ def test_automatic_integer_types(kw):
 
     Some integer variables change type automatically to be as small as possible.
     """
-    bart = bartz.BART.gbart(**kw)
+    bart = gbart(**kw)
 
     def select_type(cond):
         return jnp.uint8 if cond else jnp.uint16

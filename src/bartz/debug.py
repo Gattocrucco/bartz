@@ -22,24 +22,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import functools
-import re
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from functools import partial
 from inspect import signature
 from math import ceil, log2
+from re import fullmatch
 
-import jax
 import numpy
-from equinox import Module
-from jax import jit, lax, random
+from equinox import Module, field
+from jax import jit, lax, random, vmap
 from jax import numpy as jnp
 from jax.tree_util import tree_map
-from jaxtyping import Array, Bool, DTypeLike, Float, Float32, Int32, Key, UInt
-
-from bartz.mcmcloop import Trace, TreesTrace
-from bartz.mcmcstep import randint_masked
+from jaxtyping import Array, Bool, Float, Float32, Int32, Key, UInt
 
 from . import grove, jaxext
+from .BART import gbart
+from .mcmcloop import Trace, TreesTrace
+from .mcmcstep import randint_masked
 
 
 def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
@@ -104,6 +103,7 @@ def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
 
 
 def tree_actual_depth(split_tree):
+    # this could be done just with split_tree != 0
     is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True)
     depth = grove.tree_depths(is_leaf.size)
     depth = jnp.where(is_leaf, depth, 0)
@@ -112,16 +112,16 @@ def tree_actual_depth(split_tree):
 
 def forest_depth_distr(split_trees):
     depth = grove.tree_depth(split_trees) + 1
-    depths = jax.vmap(tree_actual_depth)(split_trees)
+    depths = vmap(tree_actual_depth)(split_trees)
     return jnp.bincount(depths, length=depth)
 
 
 def trace_depth_distr(split_trees_trace):
-    return jax.vmap(forest_depth_distr)(split_trees_trace)
+    return vmap(forest_depth_distr)(split_trees_trace)
 
 
 def points_per_leaf_distr(var_tree, split_tree, X):
-    traverse_tree = jax.vmap(grove.traverse_tree, in_axes=(1, None, None))
+    traverse_tree = vmap(grove.traverse_tree, in_axes=(1, None, None))
     indices = traverse_tree(X, var_tree, split_tree)
     count_tree = jnp.zeros(
         2 * split_tree.size, dtype=jaxext.minimal_unsigned_dtype(indices.size)
@@ -210,13 +210,30 @@ def check_rule_consistency(tree: grove.TreeHeaps, max_split) -> BoolLike:
     """Check that decision rules define proper subsets of ancestor rules."""
     if tree.var_tree.size < 4:
         return True
-    lower = jnp.full(max_split.size, jnp.iinfo(jnp.int32).min)
-    upper = jnp.full(max_split.size, jnp.iinfo(jnp.int32).max)
+
+    # initial boundaries of decision rules. use extreme integers instead of 0,
+    # max_split to avoid checking if there is something out of bounds.
+    small = jnp.iinfo(jnp.int32).min
+    large = jnp.iinfo(jnp.int32).max
+    lower = jnp.full(max_split.size, small, jnp.int32)
+    upper = jnp.full(max_split.size, large, jnp.int32)
+    # specify the type explicitly, otherwise they are weakly types and get
+    # implicitly converted to split.dtype (typically uint8) in the expressions
 
     def _check_recursive(node, lower, upper):
+        # read decision rule
         var = tree.var_tree[node]
         split = tree.split_tree[node]
-        bad = jnp.where(split, (split <= lower[var]) | (split >= upper[var]), False)
+
+        # get rule boundaries from ancestors. use fill value in case var is
+        # out of bounds, we don't want to check out of bounds in this function
+        lower_var = lower.at[var].get(mode='fill', fill_value=small)
+        upper_var = upper.at[var].get(mode='fill', fill_value=large)
+
+        # check rule is in bounds
+        bad = jnp.where(split, (split <= lower_var) | (split >= upper_var), False)
+
+        # recurse
         if node < tree.var_tree.size // 2:
             bad |= _check_recursive(
                 2 * node,
@@ -231,6 +248,34 @@ def check_rule_consistency(tree: grove.TreeHeaps, max_split) -> BoolLike:
         return bad
 
     return ~_check_recursive(1, lower, upper)
+
+
+@check
+def check_num_nodes(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
+    """Check that #leaves = 1 + #(internal nodes)."""
+    is_leaf = grove.is_actual_leaf(tree.split_tree, add_bottom_level=True)
+    num_leaves = jnp.count_nonzero(is_leaf)
+    num_internal = jnp.count_nonzero(tree.split_tree)
+    return num_leaves == num_internal + 1
+
+
+@check
+def check_var_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
+    """Check that variables are in [0, max_split.size)."""
+    decision_node = tree.split_tree.astype(bool)
+    in_bounds = (tree.var_tree >= 0) & (tree.var_tree < max_split.size)
+    return jnp.all(in_bounds | ~decision_node)
+
+
+@check
+def check_split_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
+    """Check that splits are in [0, max_split[var]]."""
+    max_split_var = (
+        max_split.astype(jnp.int32)
+        .at[tree.var_tree]
+        .get(mode='fill', fill_value=jnp.iinfo(jnp.int32).max)
+    )
+    return jnp.all((tree.split_tree >= 0) & (tree.split_tree <= max_split_var))
 
 
 def check_tree(tree: grove.TreeHeaps, max_split) -> Bool[Array, '']:
@@ -248,10 +293,11 @@ def describe_error(error):
     return [func.__name__ for i, func in enumerate(check_functions) if error & (1 << i)]
 
 
-check_forest = jax.vmap(check_tree, in_axes=(0, None))
+check_forest = vmap(check_tree, in_axes=(0, None))
 
 
-@functools.partial(jax.vmap, in_axes=(0, None))
+@jit
+@partial(vmap, in_axes=(0, None))
 def check_trace(trace: Trace, max_split: UInt[Array, ' p']):
     trees = TreesTrace.from_dataclass(trace)
     return check_forest(trees, max_split)
@@ -265,44 +311,34 @@ def get_next_line(s: str, i: int) -> tuple[str, int]:
     return s[i:i_new], i_new + 1
 
 
-@dataclass
-class BARTTraceMeta:
-    ndpost: int
-    ntree: int
-    p: int
-    numcut: int
-    max_heap_index: int
-    var_dtype: DTypeLike
-    split_dtype: DTypeLike
+class BARTTraceMeta(Module):
+    ndpost: int = field(static=True)
+    ntree: int = field(static=True)
+    numcut: UInt[Array, ' p']
+    heap_size: int = field(static=True)
 
 
 def scan_BART_trees(trees: str) -> BARTTraceMeta:
-    meta = BARTTraceMeta(
-        ndpost=0,
-        ntree=0,
-        p=0,
-        numcut=0,
-        max_heap_index=0,
-        var_dtype=numpy.uint32,
-        split_dtype=numpy.uint32,
-    )
-
     # parse first line
     line, i_char = get_next_line(trees, 0)
     i_line = 1
-    match = re.fullmatch(r'(\d+) (\d+) (\d+)', line)
+    match = fullmatch(r'(\d+) (\d+) (\d+)', line)
     if match is None:
         msg = f'Malformed header at {i_line=}'
         raise ValueError(msg)
-    meta.ndpost, meta.ntree, meta.p = map(int, match.groups())
+    ndpost, ntree, p = map(int, match.groups())
+
+    # initial values for maxima
+    max_heap_index = 0
+    numcut = numpy.zeros(p, int)
 
     # cycle over iterations and trees
-    for i_iter in range(meta.ndpost):
-        for i_tree in range(meta.ntree):
+    for i_iter in range(ndpost):
+        for i_tree in range(ntree):
             # parse first line of tree definition
             line, i_char = get_next_line(trees, i_char)
             i_line += 1
-            match = re.fullmatch(r'(\d+)', line)
+            match = fullmatch(r'(\d+)', line)
             if match is None:
                 msg = f'Malformed tree header at {i_iter=} {i_tree=} {i_line=}'
                 raise ValueError(msg)
@@ -313,37 +349,61 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
                 # parse node definition
                 line, i_char = get_next_line(trees, i_char)
                 i_line += 1
-                match = re.fullmatch(
+                match = fullmatch(
                     r'(\d+) (\d+) (\d+) (-?\d+(\.\d+)?(e(\+|-|)\d+)?)', line
                 )
                 if match is None:
                     msg = f'Malformed node definition at {i_iter=} {i_tree=} {i_node=} {i_line=}'
                     raise ValueError(msg)
                 i_heap = int(match.group(1))
+                var = int(match.group(2))
                 split = int(match.group(3))
 
                 # update maxima
-                meta.numcut = max(meta.numcut, split)
-                meta.max_heap_index = max(meta.max_heap_index, i_heap)
+                numcut[var] = max(numcut[var], split)
+                max_heap_index = max(max_heap_index, i_heap)
 
     assert i_char <= len(trees)
     if i_char < len(trees):
         msg = f'Leftover {len(trees) - i_char} characters in string'
         raise ValueError(msg)
 
-    # determine minimal integer types
-    meta.var_dtype = jaxext.minimal_unsigned_dtype(meta.p - 1)
-    meta.split_dtype = jaxext.minimal_unsigned_dtype(meta.numcut + 1)
-    # + 1 because BART is 0-based while bartz is 1-based
+    # determine minimal integer type for numcut
+    numcut += 1  # because BART is 0-based
+    split_dtype = jaxext.minimal_unsigned_dtype(numcut.max())
+    numcut = jnp.array(numcut.astype(split_dtype))
 
-    return meta
+    # determine minimum heap size to store the trees
+    heap_size = 2 ** ceil(log2(max_heap_index + 1))
+
+    return BARTTraceMeta(
+        ndpost=ndpost,
+        ntree=ntree,
+        numcut=numcut,
+        heap_size=heap_size,
+    )
 
 
-class BARTTrace(Module):
+class TraceWithOffset(Module):
+    """Implementation of `mcmcloop.Trace`."""
+
     leaf_tree: Float32[Array, 'ndpost ntree 2**d']
     var_tree: UInt[Array, 'ndpost ntree 2**(d-1)']
     split_tree: UInt[Array, 'ndpost ntree 2**(d-1)']
     offset: Float32[Array, ' ndpost']
+
+    @classmethod
+    def from_trees_trace(
+        cls, trees: grove.TreeHeaps, offset: Float32[Array, '']
+    ) -> 'TraceWithOffset':
+        """Create a `TraceWithOffset` from a `TreeHeaps`."""
+        ndpost, _, _ = trees.leaf_tree.shape
+        return cls(
+            leaf_tree=trees.leaf_tree,
+            var_tree=trees.var_tree,
+            split_tree=trees.split_tree,
+            offset=jnp.full(ndpost, offset),
+        )
 
 
 def trees_BART_to_bartz(
@@ -351,7 +411,7 @@ def trees_BART_to_bartz(
     *,
     min_maxdepth: int = 0,
     offset: float | Float[Array, ''] | None = None,
-) -> tuple[BARTTrace, BARTTraceMeta]:
+) -> tuple[TraceWithOffset, BARTTraceMeta]:
     """Convert trees from the R BART format to bartz format.
 
     Parameters
@@ -370,7 +430,7 @@ def trees_BART_to_bartz(
 
     Returns
     -------
-    trace : BARTTrace
+    trace : TraceWithOffset
         A representation of the trees compatible with the trace returned by
         `run_mcmc`.
     meta : BARTTraceMeta
@@ -383,14 +443,14 @@ def trees_BART_to_bartz(
     # skip first line
     _, i_char = get_next_line(trees, 0)
 
-    heap_size = 2 ** ceil(log2(meta.max_heap_index + 1))
-    heap_size = max(heap_size, 2**min_maxdepth)
+    heap_size = max(meta.heap_size, 2**min_maxdepth)
     leaf_trees = numpy.zeros((meta.ndpost, meta.ntree, heap_size), dtype=numpy.float32)
     var_trees = numpy.zeros(
-        (meta.ndpost, meta.ntree, heap_size // 2), dtype=meta.var_dtype
+        (meta.ndpost, meta.ntree, heap_size // 2),
+        dtype=jaxext.minimal_unsigned_dtype(meta.numcut.size - 1),
     )
     split_trees = numpy.zeros(
-        (meta.ndpost, meta.ntree, heap_size // 2), dtype=meta.split_dtype
+        (meta.ndpost, meta.ntree, heap_size // 2), dtype=meta.numcut.dtype
     )
 
     # cycle over iterations and trees
@@ -422,7 +482,7 @@ def trees_BART_to_bartz(
             is_internal[0] = False
             split_trees[i_iter, i_tree, ~is_internal] = 0
 
-    return BARTTrace(
+    return TraceWithOffset(
         leaf_tree=jnp.array(leaf_trees),
         var_tree=jnp.array(var_trees),
         split_tree=jnp.array(split_trees),
@@ -609,7 +669,7 @@ def sample_prior_onetree(
     return carry.trees
 
 
-@functools.partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
+@partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
 def sample_prior_forest(
     keys: Key[Array, ' num_trees'],
     max_split: UInt[Array, ' p'],
@@ -619,7 +679,7 @@ def sample_prior_forest(
     return sample_prior_onetree(keys, max_split, p_nonterminal, sigma_mu)
 
 
-@functools.partial(jit, static_argnums=(1, 2))
+@partial(jit, static_argnums=(1, 2))
 def sample_prior(
     key: Key[Array, ''],
     trace_length: int,
@@ -631,3 +691,95 @@ def sample_prior(
     keys = random.split(key, trace_length * num_trees)
     trees = sample_prior_forest(keys, max_split, p_nonterminal, sigma_mu)
     return tree_map(lambda x: x.reshape(trace_length, num_trees, -1), trees)
+
+
+class debug_gbart(gbart):
+    """A subclass of `gbart` that adds debugging functionality."""
+
+    def __init__(self, *args, check_trees: bool = True, **kw):
+        super().__init__(*args, **kw)
+        if check_trees:
+            bad = self.check_trees()
+            bad_count = jnp.count_nonzero(bad)
+            assert bad_count == 0
+
+    def show_tree(self, i_sample, i_tree, print_all=False):
+        from .debug import format_tree
+
+        tree = TreesTrace(
+            leaf_tree=self._main_trace.leaf_tree,
+            var_tree=self._main_trace.var_tree,
+            split_tree=self._main_trace.split_tree,
+        )
+        tree = tree_map(lambda x: x[i_sample, i_tree, :], tree)
+        s = format_tree(tree, print_all=print_all)
+        print(s)  # noqa: T201, this method is intended for debug
+
+    def sigma_harmonic_mean(self, prior=False):
+        bart = self._mcmc_state
+        assert bart.sigma2_alpha is not None
+        assert bart.z is None
+        if prior:
+            alpha = bart.sigma2_alpha
+            beta = bart.sigma2_beta
+        else:
+            resid = bart.resid
+            alpha = bart.sigma2_alpha + resid.size / 2
+            norm2 = resid @ resid
+            beta = bart.sigma2_beta + norm2 / 2
+        sigma2 = beta / alpha
+        return jnp.sqrt(sigma2)
+
+    def compare_resid(self):
+        bart = self._mcmc_state
+        resid1 = bart.resid
+
+        trees = grove.evaluate_forest(bart.X, bart.forest)
+
+        if bart.z is not None:
+            ref = bart.z
+        else:
+            ref = bart.y
+        resid2 = ref - (trees + bart.offset)
+
+        return resid1, resid2
+
+    def avg_acc(self):
+        trace = self._main_trace
+
+        def acc(prefix):
+            acc = getattr(trace, f'{prefix}_acc_count')
+            prop = getattr(trace, f'{prefix}_prop_count')
+            return acc.sum() / prop.sum()
+
+        return acc('grow'), acc('prune')
+
+    def avg_prop(self):
+        trace = self._main_trace
+
+        def prop(prefix):
+            return getattr(trace, f'{prefix}_prop_count').sum()
+
+        pgrow = prop('grow')
+        pprune = prop('prune')
+        total = pgrow + pprune
+        return pgrow / total, pprune / total
+
+    def avg_move(self):
+        agrow, aprune = self.avg_acc()
+        pgrow, pprune = self.avg_prop()
+        return agrow * pgrow, aprune * pprune
+
+    def depth_distr(self):
+        return trace_depth_distr(self._main_trace.split_tree)
+
+    def points_per_leaf_distr(self):
+        return trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
+
+    def check_trees(self):
+        return check_trace(self._main_trace, self._mcmc_state.max_split)
+
+    def tree_goes_bad(self):
+        bad = self.check_trees().astype(bool)
+        bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
+        return bad & ~bad_before

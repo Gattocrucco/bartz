@@ -28,34 +28,76 @@ import functools
 
 import jax
 from jax import numpy as jnp
+from jaxtyping import Array, Float, Real, UInt
 
 from . import jaxext
 
 
+def parse_xinfo(
+    xinfo: Float[Array, 'p m'],
+) -> tuple[Float[Array, 'p m'], UInt[Array, ' p']]:
+    """Parse pre-defined splits in the format of the R package BART.
+
+    Parameters
+    ----------
+    xinfo
+        A matrix with the cutpoins to use to bin each predictor. Each row shall
+        contain a sorted list of cutpoints for a predictor. If there are less
+        cutpoints than the number of columns in the matrix, fill the remaining
+        cells with NaN.
+
+        `xinfo` shall be a matrix even if `x_train` is a dataframe.
+
+    Returns
+    -------
+    splits : Float[Array, 'p m']
+        `xinfo` modified by replacing nan with a large value.
+    max_split : UInt[Array, 'p']
+        The number of non-nan elements in each row of `xinfo`.
+    """
+    is_not_nan = ~jnp.isnan(xinfo)
+    max_split = jnp.sum(is_not_nan, axis=1)
+    max_split = max_split.astype(jaxext.minimal_unsigned_dtype(xinfo.shape[1]))
+    huge = _huge_value(xinfo)
+    splits = jnp.where(is_not_nan, xinfo, huge)
+    return splits, max_split
+
+
 @functools.partial(jax.jit, static_argnums=(1,))
-def quantilized_splits_from_matrix(X, max_bins):
+def quantilized_splits_from_matrix(
+    X: Real[Array, 'p n'], max_bins: int
+) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
     """
     Determine bins that make the distribution of each predictor uniform.
 
     Parameters
     ----------
-    X : array (p, n)
+    X
         A matrix with `p` predictors and `n` observations.
-    max_bins : int
+    max_bins
         The maximum number of bins to produce.
 
     Returns
     -------
-    splits : array (p, m)
+    splits : Real[Array, 'p m']
         A matrix containing, for each predictor, the boundaries between bins.
         `m` is ``min(max_bins, n) - 1``, which is an upper bound on the number
         of splits. Each predictor may have a different number of splits; unused
         values at the end of each row are filled with the maximum value
         representable in the type of `X`.
-    max_split : array (p,)
+    max_split : UInt[Array, ' p']
         The number of actually used values in each row of `splits`.
+
+    Raises
+    ------
+    ValueError
+        If `X` has no columns or if `max_bins` is less than 1.
     """
     out_length = min(max_bins, X.shape[1]) - 1
+
+    if out_length < 0:
+        msg = f'{X.shape[1]=} and {max_bins=}, they should be both at least 1.'
+        raise ValueError(msg)
 
     @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
     def quantilize(X):
@@ -66,18 +108,25 @@ def quantilized_splits_from_matrix(X, max_bins):
 
 
 @functools.partial(jax.vmap, in_axes=(0, None))
-def _quantilized_splits_from_matrix(x, out_length):
-    huge = jaxext.huge_value(x)
+def _quantilized_splits_from_matrix(
+    x: Real[Array, 'p n'], out_length: int
+) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
+    # find the sorted unique values in x
+    huge = _huge_value(x)
     u, actual_length = jaxext.unique(x, size=x.size, fill_value=huge)
-    actual_length -= 1
+
+    # compute the midpoints between each unique value
     if jnp.issubdtype(x.dtype, jnp.integer):
         midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
-        indices = jnp.arange(
-            midpoints.size, dtype=jaxext.minimal_unsigned_dtype(midpoints.size - 1)
-        )
-        midpoints = jnp.where(indices < actual_length, midpoints, huge)
     else:
-        midpoints = (u[1:] + u[:-1]) / 2
+        midpoints = u[:-1] + (u[1:] - u[:-1]) / 2
+        # using x_i + (x_i+1 - x_i) / 2 instead of (x_i + x_i+1) / 2 is to
+        # avoid overflow
+    actual_length -= 1
+    if midpoints.size:
+        midpoints = midpoints.at[actual_length].set(huge)
+
+    # take a subset of the midpoints if there are more than the requested maximum
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]
     indices = jnp.around(indices).astype(
         jaxext.minimal_unsigned_dtype(midpoints.size - 1)
@@ -94,25 +143,46 @@ def _quantilized_splits_from_matrix(x, out_length):
     return splits, max_split
 
 
+def _huge_value(x: Array) -> int | float:
+    """
+    Return the maximum value that can be stored in `x`.
+
+    Parameters
+    ----------
+    x
+        A numerical numpy or jax array.
+
+    Returns
+    -------
+    The maximum value allowed by `x`'s type (finite for floats).
+    """
+    if jnp.issubdtype(x.dtype, jnp.integer):
+        return jnp.iinfo(x.dtype).max
+    else:
+        return float(jnp.finfo(x.dtype).max)
+
+
 @functools.partial(jax.jit, static_argnums=(1,))
-def uniform_splits_from_matrix(X, num_bins):
+def uniform_splits_from_matrix(
+    X: Real[Array, 'p n'], num_bins: int
+) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
     """
     Make an evenly spaced binning grid.
 
     Parameters
     ----------
-    X : array (p, n)
+    X
         A matrix with `p` predictors and `n` observations.
-    num_bins : int
+    num_bins
         The number of bins to produce.
 
     Returns
     -------
-    splits : array (p, num_bins - 1)
+    splits : Real[Array, 'p m']
         A matrix containing, for each predictor, the boundaries between bins.
         The excluded endpoints are the minimum and maximum value in each row of
         `X`.
-    max_split : array (p,)
+    max_split : UInt[Array, ' p']
         The number of cutpoints in each row of `splits`, i.e., ``num_bins - 1``.
     """
     low = jnp.min(X, axis=1)
@@ -124,7 +194,9 @@ def uniform_splits_from_matrix(X, num_bins):
 
 
 @functools.partial(jax.jit, static_argnames=('method',))
-def bin_predictors(X, splits, **kw):
+def bin_predictors(
+    X: Real[Array, 'p n'], splits: Real[Array, 'p m'], **kw
+) -> UInt[Array, 'p n']:
     """
     Bin the predictors according to the given splits.
 
@@ -132,21 +204,19 @@ def bin_predictors(X, splits, **kw):
 
     Parameters
     ----------
-    X : array (p, n)
+    X
         A matrix with `p` predictors and `n` observations.
-    splits : array (p, m)
+    splits
         A matrix containing, for each predictor, the boundaries between bins.
         `m` is the maximum number of splits; each row may have shorter
         actual length, marked by padding unused locations at the end of the
         row with the maximum value allowed by the type.
-    **kw : dict
+    **kw
         Additional arguments are passed to `jax.numpy.searchsorted`.
 
     Returns
     -------
-    X_binned : int array (p, n)
-        A matrix with `p` predictors and `n` observations, where each predictor
-        has been replaced by the index of the bin it falls into.
+    `X` but with each value replaced by the index of the bin it falls into.
     """
 
     @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
