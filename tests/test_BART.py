@@ -108,7 +108,7 @@ def gen_y(key, X, w, kind):
 def kw(keys, request):
     """Return a dictionary of keyword arguments for BART."""
     match request.param:
-        # continuous regression with close to default settings
+        # continuous regression with some settings that induce large types
         case 1:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
@@ -131,7 +131,7 @@ def kw(keys, request):
                 ),
             )
 
-        # continuous regression with weird settings
+        # continuous regression with binary X and high p
         case 2:
             p = 257  # > 256 to use uint16 for var_trees.
             X = gen_X(keys.pop(), p, 30, 'binary')
@@ -178,7 +178,7 @@ def kw(keys, request):
                 printevery=50,
                 usequants=True,
                 numcut=10,
-                maxdepth=8,  # 8 to check if it changes type too soon
+                maxdepth=8,  # 8 to check if leaf_indices changes type too soon
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
@@ -376,6 +376,8 @@ def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
         rm_const=False,
         mc_cores=1,
     )
+    # TODO change the bartz default to keepevery=10 if probit!  # noqa: FIX002
+    kw_BART['keepevery'] = kw_BART.get('keepevery', 1)
     kw_BART.pop('init_kw')
     kw_BART.pop('maxdepth', None)
     for arg in 'w', 'printevery':
@@ -444,13 +446,13 @@ def test_rbart(kw, keys):
         rhat_sigma = multivariate_rhat(
             jnp.stack([bart.sigma[:, None], rbart.sigma[:, None]])
         )
-        assert rhat_sigma < 1.05
+        assert rhat_sigma < 1.01
 
     if p < n:
         # skip if p is large because it would be difficult for the MCMC to get
         # stuff about predictors right
         rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, rbart.varcount]))
-        assert rhat_varcount < 100  # TODO !!! # noqa: FIX002, will take a while
+        assert rhat_varcount < 3  # TODO !!! # noqa: FIX002, will take a while
         # loose criterion as a patch
         assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.15)
 
