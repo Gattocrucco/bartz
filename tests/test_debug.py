@@ -149,7 +149,7 @@ class TestSamplePrior:
         batch_indices = jnp.ogrid[
             : trees.leaf_tree.shape[0], : trees.leaf_tree.shape[1]
         ]
-        leaves = trees.leaf_tree[*batch_indices, leaf_indices]
+        leaves = trees.leaf_tree[(*batch_indices, leaf_indices)]
         sum_of_trees = jnp.sum(leaves, axis=1)
 
         test = ks_1samp(sum_of_trees, stats.norm.cdf)

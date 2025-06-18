@@ -24,20 +24,53 @@
 
 """Implement a user interface that mimics the R BART package."""
 
-import functools
 import math
-from typing import Any, Literal
+from collections.abc import Sequence
+from functools import cached_property
+from typing import Any, Literal, Protocol
 
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
+from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, Shaped, UInt
+from numpy import ndarray
 
+from bartz import mcmcloop, mcmcstep, prepcovars
 from bartz.jaxext.scipy.special import ndtri
 from bartz.jaxext.scipy.stats import invgamma
 
-from . import mcmcloop, mcmcstep, prepcovars
-
 FloatLike = float | Float[Any, '']
+
+
+class DataFrame(Protocol):
+    """DataFrame duck-type for `gbart`.
+
+    Attributes
+    ----------
+    columns : Sequence[str]
+        The names of the columns.
+    """
+
+    columns: Sequence[str]
+
+    def to_numpy(self) -> ndarray:
+        """Convert the dataframe to a 2d numpy array with columns on the second axis."""
+        ...
+
+
+class Series(Protocol):
+    """Series duck-type for `gbart`.
+
+    Attributes
+    ----------
+    name : str | None
+        The name of the series.
+    """
+
+    name: str | None
+
+    def to_numpy(self) -> ndarray:
+        """Convert the series to a 1d numpy array."""
+        ...
 
 
 class gbart:
@@ -50,11 +83,11 @@ class gbart:
 
     Parameters
     ----------
-    x_train : array (p, n) or DataFrame
+    x_train
         The training predictors.
-    y_train : array (n,) or Series
+    y_train
         The training responses.
-    x_test : array (p, m) or DataFrame, optional
+    x_test
         The test predictors.
     type
         The type of regression. 'wbart' for continuous regression, 'pbart' for
@@ -72,6 +105,13 @@ class gbart:
     usequants
         Whether to use predictors quantiles instead of a uniform grid to bin
         predictors. Ignored if `xinfo` is specified.
+    rm_const
+        How to treat predictors with no associated decision rules (i.e., there
+        are no available cutpoints for that predictor). If `True` (default),
+        they are ignored. If `False`, an error is raised if there are any. If
+        `None`, no check is performed, and the output of the MCMC may not make
+        sense if there are predictors without cutpoints. The option `None` is
+        provided only to allow jax tracing.
     sigest
         An estimate of the residual standard deviation on `y_train`, used to set
         `lamda`. If not specified, it is estimated by linear regression (with
@@ -180,17 +220,16 @@ class gbart:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
       instead of per column.
-    - If `type` is not specified, it is determined solely based on the data type
-      of `y_train`, and not on whether it contains only two unique values.
     - If ``usequants=False``, R BART switches to quantiles anyway if there are
       less predictor values than the required number of bins, while bartz
       always follows the specification.
     - The error variance parameter is called `lamda` instead of `lambda`.
-    - `rm_const` is always `False`.
     - The default `numcut` is 255 instead of 100.
-    - A lot of functionality is missing (e.g., variable selection).
+    - Some functionality is missing (e.g., variable selection).
     - There are some additional attributes, and some missing.
     - The trees have a maximum depth.
+    - `rm_const` refers to predictors without decision rules instead of
+      predictors that are constant in `x_train`.
 
     """
 
@@ -207,15 +246,16 @@ class gbart:
 
     def __init__(
         self,
-        x_train,
-        y_train,
+        x_train: Real[Array, 'p n'] | DataFrame,
+        y_train: Bool[Array, ' n'] | Float32[Array, ' n'] | Series,
         *,
-        x_test=None,
+        x_test: Real[Array, 'p m'] | DataFrame | None = None,
         type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
         xinfo: Float[Array, 'p n'] | None = None,
         usequants: bool = False,
+        rm_const: bool | None = True,
         sigest: FloatLike | None = None,
-        sigdf: int = 3,
+        sigdf: FloatLike = 3.0,
         sigquant: FloatLike = 0.9,
         k: FloatLike = 2.0,
         power: FloatLike = 2.0,
@@ -242,7 +282,7 @@ class gbart:
             w, _ = self._process_response_input(w)
             self._check_same_length(x_train, w)
 
-        y_train = self._process_type_settings(y_train, type, w)
+        self._check_type_settings(y_train, type, w)
         # from here onwards, the type is determined by y_train.dtype == bool
         offset = self._process_offset_settings(y_train, offset)
         sigma_mu = self._process_leaf_sdev_settings(y_train, k, ntree, tau_num)
@@ -253,7 +293,7 @@ class gbart:
         splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
         x_train = self._bin_predictors(x_train, splits)
 
-        mcmc_state = self._setup_mcmc(
+        initial_state = self._setup_mcmc(
             x_train,
             y_train,
             offset,
@@ -267,9 +307,10 @@ class gbart:
             maxdepth,
             ntree,
             init_kw,
+            rm_const,
         )
         final_state, burnin_trace, main_trace = self._run_mcmc(
-            mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
+            initial_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
         )
 
         self.offset = final_state.offset  # from the state because of buffer donation
@@ -287,25 +328,25 @@ class gbart:
             self.yhat_test = yhat_test
             self.yhat_test_mean = yhat_test.mean(axis=0)
 
-    @functools.cached_property
+    @cached_property
     def yhat_train(self) -> Float32[Array, 'ndpost n']:
         """The conditional posterior mean at `x_train` for each MCMC iteration."""
         x_train = self._mcmc_state.X
         return self._predict(x_train)
 
-    @functools.cached_property
+    @cached_property
     def yhat_train_mean(self) -> Float32[Array, ' n']:
         """The marginal posterior mean at `x_train`."""
         return self.yhat_train.mean(axis=0)
 
-    @functools.cached_property
+    @cached_property
     def varcount(self) -> Int32[Array, 'ndpost p']:
         """Histogram of predictor usage for decision rules in the trees."""
         return mcmcloop.compute_varcount(
-            self._mcmc_state.max_split.size, self._main_trace
+            self._mcmc_state.forest.max_split.size, self._main_trace
         )
 
-    @functools.cached_property
+    @cached_property
     def varcount_mean(self) -> Float32[Array, ' p']:
         """Average of `varcount` across MCMC iterations."""
         return self.varcount.mean(axis=0)
@@ -348,7 +389,7 @@ class gbart:
         return x, fmt
 
     @staticmethod
-    def _process_response_input(y):
+    def _process_response_input(y) -> tuple[Shaped[Array, ' n'], Any]:
         if hasattr(y, 'to_numpy'):
             fmt = dict(kind='series', name=y.name)
             y = y.to_numpy()
@@ -401,7 +442,7 @@ class gbart:
             return sigest2 / invchi2rid, jnp.sqrt(sigest2)
 
     @staticmethod
-    def _process_type_settings(y_train, type, w):  # noqa: A002
+    def _check_type_settings(y_train, type, w):  # noqa: A002
         match type:
             case 'wbart':
                 if y_train.dtype != jnp.float32:
@@ -423,8 +464,6 @@ class gbart:
             case _:
                 msg = f'Invalid {type=}'
                 raise ValueError(msg)
-
-        return y_train
 
     @staticmethod
     def _process_offset_settings(
@@ -480,24 +519,25 @@ class gbart:
             return prepcovars.uniform_splits_from_matrix(x_train, numcut + 1)
 
     @staticmethod
-    def _bin_predictors(x, splits):
+    def _bin_predictors(x, splits) -> UInt[Array, 'p n']:
         return prepcovars.bin_predictors(x, splits)
 
     @staticmethod
     def _setup_mcmc(
-        x_train,
-        y_train,
-        offset,
-        w,
-        max_split,
-        lamda,
-        sigma_mu,
-        sigdf,
-        power,
-        base,
-        maxdepth,
-        ntree,
-        init_kw,
+        x_train: Real[Array, 'p n'],
+        y_train: Float32[Array, ' n'] | Bool[Array, ' n'],
+        offset: Float32[Array, ''],
+        w: Float[Array, ' n'] | None,
+        max_split: UInt[Array, ' p'],
+        lamda: Float32[Array, ''] | None,
+        sigma_mu: FloatLike,
+        sigdf: FloatLike,
+        power: FloatLike,
+        base: FloatLike,
+        maxdepth: int,
+        ntree: int,
+        init_kw: dict[str, Any] | None,
+        rm_const: bool | None,
     ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
@@ -521,10 +561,24 @@ class gbart:
             sigma_mu2=jnp.square(sigma_mu),
             sigma2_alpha=sigma2_alpha,
             sigma2_beta=sigma2_beta,
+            min_points_per_decision_node=10,
             min_points_per_leaf=5,
         )
+
+        if rm_const is None:
+            kw.update(filter_splitless_vars=False)
+        elif rm_const:
+            kw.update(filter_splitless_vars=True)
+        else:
+            n_empty = jnp.count_nonzero(max_split == 0)
+            if n_empty:
+                msg = f'There are {n_empty} predictors without decision rules'
+                raise ValueError(msg)
+            kw.update(filter_splitless_vars=False)
+
         if init_kw is not None:
             kw.update(init_kw)
+
         return mcmcstep.init(**kw)
 
     @staticmethod

@@ -33,10 +33,10 @@ from equinox import Module, field
 from jax import jit, lax, random, vmap
 from jax import numpy as jnp
 from jax.tree_util import tree_map
-from jaxtyping import Array, Bool, Float, Float32, Int32, Key, UInt
+from jaxtyping import Array, Bool, Float32, Int32, Key, UInt
 
 from . import grove, jaxext
-from .BART import gbart
+from .BART import FloatLike, gbart
 from .mcmcloop import Trace, TreesTrace
 from .mcmcstep import randint_masked
 
@@ -120,18 +120,54 @@ def trace_depth_distr(split_trees_trace):
     return vmap(forest_depth_distr)(split_trees_trace)
 
 
-def points_per_leaf_distr(var_tree, split_tree, X):
+def points_per_decision_node_distr(
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    X: UInt[Array, 'p n'],
+) -> Int32[Array, ' n+1']:
     traverse_tree = vmap(grove.traverse_tree, in_axes=(1, None, None))
     indices = traverse_tree(X, var_tree, split_tree)
-    count_tree = jnp.zeros(
-        2 * split_tree.size, dtype=jaxext.minimal_unsigned_dtype(indices.size)
-    )
-    count_tree = count_tree.at[indices].add(1)
-    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True).view(jnp.uint8)
-    return jnp.bincount(count_tree, is_leaf, length=X.shape[1] + 1)
+    indices >>= 1
+    count_tree = jnp.zeros(split_tree.size, int).at[indices].add(1).at[0].set(0)
+    is_leaves_parent = grove.is_leaves_parent(split_tree)
+    return jnp.zeros(X.shape[1] + 1, int).at[count_tree].add(is_leaves_parent)
 
 
-def forest_points_per_leaf_distr(trees: grove.TreeHeaps, X):
+def forest_points_per_decision_node_distr(
+    trees: grove.TreeHeaps, X
+) -> Int32[Array, ' n+1']:
+    distr = jnp.zeros(X.shape[1] + 1, int)
+
+    def loop(distr, heaps: tuple[Array, Array]):
+        return distr + points_per_decision_node_distr(*heaps, X), None
+
+    distr, _ = lax.scan(loop, distr, (trees.var_tree, trees.split_tree))
+    return distr
+
+
+def trace_points_per_decision_node_distr(
+    trace: grove.TreeHeaps, X
+) -> Int32[Array, 'trace_length n+1']:
+    def loop(_, trace):
+        return None, forest_points_per_decision_node_distr(trace, X)
+
+    _, distr = lax.scan(loop, None, trace)
+    return distr
+
+
+def points_per_leaf_distr(
+    var_tree: UInt[Array, ' 2**(d-1)'],
+    split_tree: UInt[Array, ' 2**(d-1)'],
+    X: UInt[Array, 'p n'],
+) -> Int32[Array, ' n+1']:
+    traverse_tree = vmap(grove.traverse_tree, in_axes=(1, None, None))
+    indices = traverse_tree(X, var_tree, split_tree)
+    count_tree = jnp.zeros(2 * split_tree.size, int).at[indices].add(1)
+    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True)
+    return jnp.zeros(X.shape[1] + 1, int).at[count_tree].add(is_leaf)
+
+
+def forest_points_per_leaf_distr(trees: grove.TreeHeaps, X) -> Int32[Array, ' n+1']:
     distr = jnp.zeros(X.shape[1] + 1, int)
 
     def loop(distr, heaps: tuple[Array, Array]):
@@ -141,7 +177,9 @@ def forest_points_per_leaf_distr(trees: grove.TreeHeaps, X):
     return distr
 
 
-def trace_points_per_leaf_distr(trace: grove.TreeHeaps, X):
+def trace_points_per_leaf_distr(
+    trace: grove.TreeHeaps, X
+) -> Int32[Array, 'trace_length n+1']:
     def loop(_, trace):
         return None, forest_points_per_leaf_distr(trace, X)
 
@@ -376,12 +414,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
     # determine minimum heap size to store the trees
     heap_size = 2 ** ceil(log2(max_heap_index + 1))
 
-    return BARTTraceMeta(
-        ndpost=ndpost,
-        ntree=ntree,
-        numcut=numcut,
-        heap_size=heap_size,
-    )
+    return BARTTraceMeta(ndpost=ndpost, ntree=ntree, numcut=numcut, heap_size=heap_size)
 
 
 class TraceWithOffset(Module):
@@ -407,10 +440,7 @@ class TraceWithOffset(Module):
 
 
 def trees_BART_to_bartz(
-    trees: str,
-    *,
-    min_maxdepth: int = 0,
-    offset: float | Float[Array, ''] | None = None,
+    trees: str, *, min_maxdepth: int = 0, offset: FloatLike | None = None
 ) -> tuple[TraceWithOffset, BARTTraceMeta]:
     """Convert trees from the R BART format to bartz format.
 
@@ -657,12 +687,7 @@ def sample_prior_onetree(
         stack = lax.cond(x.next_depth > x.depth, write_push_stack, pop_push_stack)
 
         # update carry
-        carry = replace(
-            carry,
-            key=keys.pop(),
-            stack=stack,
-            trees=trees,
-        )
+        carry = replace(carry, key=keys.pop(), stack=stack, trees=trees)
         return carry, None
 
     carry, _ = lax.scan(loop, carry, xs)
@@ -773,11 +798,16 @@ class debug_gbart(gbart):
     def depth_distr(self):
         return trace_depth_distr(self._main_trace.split_tree)
 
+    def points_per_decision_node_distr(self):
+        return trace_points_per_decision_node_distr(
+            self._main_trace, self._mcmc_state.X
+        )
+
     def points_per_leaf_distr(self):
         return trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
 
     def check_trees(self):
-        return check_trace(self._main_trace, self._mcmc_state.max_split)
+        return check_trace(self._main_trace, self._mcmc_state.forest.max_split)
 
     def tree_goes_bad(self):
         bad = self.check_trees().astype(bool)
