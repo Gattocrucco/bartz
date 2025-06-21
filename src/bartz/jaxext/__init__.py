@@ -35,8 +35,8 @@ from jax.lax import scan
 from jax.scipy.special import ndtr
 from jaxtyping import Array, Bool, Float32, Key, Scalar, Shaped
 
-from ._autobatch import autobatch  # noqa: F401
-from .scipy.special import ndtri
+from bartz.jaxext._autobatch import autobatch  # noqa: F401
+from bartz.jaxext.scipy.special import ndtri
 
 
 def vmap_nodoc(fun, *args, **kw):
@@ -61,34 +61,6 @@ def minimal_unsigned_dtype(value):
     if value < 2**32:
         return jnp.uint32
     return jnp.uint64
-
-
-def signed_to_unsigned(int_dtype):
-    """
-    Map a signed integer type to its unsigned counterpart.
-
-    Unsigned types are passed through.
-    """
-    assert jnp.issubdtype(int_dtype, jnp.integer)
-    if jnp.issubdtype(int_dtype, jnp.unsignedinteger):
-        return int_dtype
-    match int_dtype:
-        case jnp.int8:
-            return jnp.uint8
-        case jnp.int16:
-            return jnp.uint16
-        case jnp.int32:
-            return jnp.uint32
-        case jnp.int64:
-            return jnp.uint64
-        case _:
-            msg = f'unexpected integer type {int_dtype}'
-            raise TypeError(msg)
-
-
-def ensure_unsigned(x):
-    """If x has signed integer type, cast it to the unsigned dtype of the same size."""
-    return x.astype(signed_to_unsigned(x.dtype))
 
 
 @functools.partial(jax.jit, static_argnums=(1,))

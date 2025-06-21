@@ -23,10 +23,14 @@
 # SOFTWARE.
 
 from collections.abc import Callable
+from functools import wraps
+from re import fullmatch, match
 
 import numpy as np
 from rpy2 import robjects
-from rpy2.robjects import conversion, methods, numpy2ri
+from rpy2.robjects import BoolVector, conversion, numpy2ri
+from rpy2.robjects.help import Package
+from rpy2.robjects.methods import RS4
 
 # converter for pandas
 pandas_converter = conversion.Converter('pandas')
@@ -69,7 +73,18 @@ else:
 
     jax_converter.py2rpy.register(jax.Array, jax_to_r)
 
+# converter for numpy
 numpy_converter = numpy2ri.converter
+
+
+# converter for BoolVector (why isn't it in the numpy converter?)
+def bool_vector_to_python(x):
+    return np.array(x, bool)
+
+
+bool_vector_converter = conversion.Converter('bool_vector')
+bool_vector_converter.rpy2py.register(BoolVector, bool_vector_to_python)
+
 
 # converter for python dictionaries
 dict_converter = conversion.Converter('dict')
@@ -81,12 +96,15 @@ def dict_to_r(x):
 
 dict_converter.py2rpy.register(dict, dict_to_r)
 
+R_IDENTIFIER = r'(?:[a-zA-Z]|\.(?![0-9]))[a-zA-Z0-9._]*'
+
 
 class RObjectBase:
     """
     Base class for Python wrappers of R objects creators.
 
-    Subclasses should define the class attributes `_rfuncname` and `_methods`.
+    Subclasses should define the class attribute `_rfuncname`, and declare
+    stub methods decorated with `rmethod`.
 
     _rfuncname : str
         An R function in the format ``'<package>::<function>``. The function is
@@ -94,16 +112,6 @@ class RObjectBase:
         expected to return an R object. The attributes of the R object are
         converted to equivalent Python values and set as attributes of the
         Python object. The R object itself is assigned to the member `_robject`.
-
-    _methods : list[str] (optional)
-        List of R function names (without package) that take as first argument
-        the object returned by `_rfuncname`. They are wrapped as instance
-        methods of the subclass.
-
-    Initialization has additional arguments `timeout` and `retries` handled by
-    the wrapper. The R function is terminated if it takes more than `timeout` to
-    run. Re-execution is attempted at most `retries` times.
-
     """
 
     _converter = (
@@ -111,6 +119,7 @@ class RObjectBase:
         + pandas_converter
         + polars_converter
         + numpy_converter
+        + bool_vector_converter
         + jax_converter
         + dict_converter
     )
@@ -133,12 +142,19 @@ class RObjectBase:
         return {key: self._py2r(value) for key, value in kw.items()}
 
     _rfuncname: str = NotImplemented
-    _methods: tuple[str, ...] = ()
+
+    @property
+    def _library(self) -> str:
+        """Parse `_rfuncname` to get the library. Also checks `_rfuncname` is valid."""
+        pattern = rf'^({R_IDENTIFIER})::({R_IDENTIFIER})$'
+        m = match(pattern, self._rfuncname)
+        if m is None:
+            msg = f'Invalid _rfuncname: {self._rfuncname}.'
+            raise ValueError(msg)
+        return m.group(1)
 
     def __init__(self, *args, **kw):
-        library, _ = self._rfuncname.split('::')
-        robjects.r(f'loadNamespace("{library}")')
-        self._library = library
+        robjects.r(f'loadNamespace("{self._library}")')
         func = robjects.r(self._rfuncname)
         obj = func(*self._args2r(args), **self._kw2r(kw))
         self._robject = obj
@@ -147,30 +163,60 @@ class RObjectBase:
                 setattr(self, s.replace('.', '_'), self._r2py(v))
 
     def __init_subclass__(cls, **kw):
-        """Automatically modify subclasses."""
-
-        def implof(method: str) -> Callable:
-            def impl(self, *args, **kw):
-                if isinstance(self._robject, methods.RS4):
-                    func = robjects.r['$'](self._robject, method)
-                    out = func(*self._args2r(args), **self._kw2r(kw))
-                else:
-                    func = robjects.r(f'{self._library}::{method}')
-                    out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
-                return self._r2py(out)
-
-            return impl
-
-        # if the subclass lists method names, create automatically Python
-        # wrappers for those methods if they are not already defined
-        for method in cls._methods:
-            if not hasattr(cls, method):
-                setattr(cls, method, implof(method))
-
-        # set the docstring from R help
+        """Automatically add R documentation to subclasses."""
         library, name = cls._rfuncname.split('::')
-        package_help = robjects.help.Package(library)
-        page = package_help.fetch(name)
+        page = Package(library).fetch(name)
         if cls.__doc__ is None:
             cls.__doc__ = ''
         cls.__doc__ += 'R documentation:\n' + page.to_docstring()
+
+
+def rmethod(meth: Callable, *, rname: str | None = None) -> Callable:
+    """Automatically implement a method using the correspoding R method.
+
+    Parameters
+    ----------
+    meth
+        A method in a subclass of `RObjectBase`.
+    rname
+        The name of the method in R. If not specified, use the name of `meth`.
+
+    Returns
+    -------
+    methimpl
+        An implementation of the method that calls the R method. The original
+        implementation of meth is completely discarded.
+
+    Examples
+    --------
+    >>> class MyRObject(RObjectBase):
+    ...     _rfuncname = 'mypackage::myfunction'
+    ...     @partial(rmethod, rname='my.method')
+    ...     def my_method(self, arg1: int, arg2: str):
+    ...         ...
+    """
+    if rname is None:
+        rname = meth.__name__
+
+    # I can't automatically add a docstring to the method because the R class
+    # can be determined at runtime
+
+    @wraps(meth)
+    def impl(self, *args, **kw):
+        if isinstance(self._robject, RS4):
+            func = robjects.r['$'](self._robject, rname)
+            out = func(*self._args2r(args), **self._kw2r(kw))
+
+        else:
+            if not fullmatch(R_IDENTIFIER, rname):
+                msg = f'Invalid R method name: {rname}'
+                raise ValueError(msg)
+            rclass = self._robject.rclass[0]
+            func = robjects.r(
+                f'getS3method("{rname}", "{rclass}", envir = asNamespace("{self._library}"))'
+            )
+            out = func(self._robject, *self._args2r(args), **self._kw2r(kw))
+
+        return self._r2py(out)
+
+    return impl

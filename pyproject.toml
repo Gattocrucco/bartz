@@ -81,20 +81,15 @@ ci = [
 [tool.pytest.ini_options]
 cache_dir = "config/pytest_cache"
 testpaths = ["tests"]
-filterwarnings = [
-    'error:scatter inputs have incompatible types.*',
-]
 addopts = [
     "-r xXfE",
     "--pdbcls=IPython.terminal.debugger:TerminalPdb",
     "--durations=3",
     "--verbose",
+    "--import-mode=importlib",
 ]
 timeout = 64
 timeout_method = "thread"  # when jax hangs, signals do not work
-
-# I wanted to use `--import-mode=importlib`, but it breaks importing submodules,
-# in particular `from . import util`.
 
 [tool.coverage.run]
 branch = true
@@ -192,6 +187,7 @@ ignore = [
     "C408",  # Unnecessary `dict()` call (rewrite as a literal), it's too convenient for kwargs
     "D105",  # Missing docstring in magic method
     "F722",  # Syntax error in forward annotation. I ignore this because jaxtyping uses strings for shapes instead of for deferred annotations.
+    "PIE790",  # Unnecessary ... or pass. Ignored because sometimes I use ... as sentinel to tell the rest of ruff and pyright that an implementation is a stub.
     "PLR0913",  # Too many arguments in function definition. Maybe I should do something about this?
     "PLR2004",  # Magic value used in comparison, consider replacing `*` with a constant variable
     "RET505",  # Unnecessary `{branch}` after `return` statement. I ignore this because I like to keep branches for readability.
@@ -202,7 +198,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"{config/*,benchmarks/*,docs/*,src/bartz/debug.py,tests/rbartpackages/*,tests/__init__.py}" = [
+"{config/*,benchmarks/*,docs/*,tests/__init__.py}" = [
     "D100",  # Missing docstring in public module
     "D101",  # Missing docstring in public class
     "D102",  # Missing docstring in public method
@@ -223,7 +219,7 @@ ignore = [
     "TID253",  # `{module}` is banned at the module level
 ]
 "docs/conf.py" = [
-    "S607",  # Starting a process with a partial executable path. For a build script it makes more sense to use PATH.
+    "S607",  # Starting a process with a partial executable path. Ignored because for a build script it makes more sense to use PATH.
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -234,6 +230,7 @@ min-file-size = 1
 
 [tool.ruff.lint.flake8-tidy-imports]
 banned-module-level-imports = ["bartz.debug"]
+ban-relative-imports = "all"
 
 [tool.pydoclint]
 baseline = "config/pydoclint-baseline.txt"
@@ -249,6 +246,8 @@ treat-property-methods-as-class-attributes = true
 check-style-mismatch = true
 show-filenames-in-every-violation-message = true
 check-class-attributes = false
+# do not check class attributes because in dataclasses I document them as
+# init parameters because they are duplicated otherwise.
 
 [tool.uv]
 python-downloads = "never"

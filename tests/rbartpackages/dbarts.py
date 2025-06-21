@@ -22,9 +22,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Python wrapper of the R package `dbarts`."""
+
+# ruff: noqa: D101, D102
+
 from rpy2 import robjects
 
-from ._base import RObjectBase
+from tests.rbartpackages._base import RObjectBase, rmethod
 
 
 class bart(RObjectBase):
@@ -38,7 +42,6 @@ class bart(RObjectBase):
     """
 
     _rfuncname = 'dbarts::bart'
-    _methods = ('predict', 'extract', 'fitted')
     _split_probs = 'splitprobs'
 
     def __init__(self, *args, **kw):
@@ -51,6 +54,15 @@ class bart(RObjectBase):
             kw[self._split_probs] = split_probs
 
         super().__init__(*args, **kw)
+
+    @rmethod
+    def predict(self, *args, **kw): ...
+
+    @rmethod
+    def extract(self, *args, **kw): ...
+
+    @rmethod
+    def fitted(self, *args, **kw): ...
 
 
 class bart2(bart):
@@ -86,26 +98,60 @@ class rbart_vi(bart2):
 
 class dbarts(RObjectBase):
     _rfuncname = 'dbarts::dbarts'
-    _methods = (
-        'run',
-        'sampleTreesFromPrior',
-        'sampleNodeParametersFromPrior',
-        'copy',
-        'show',
-        'predict',
-        'setControl',
-        'setModel',
-        'setData',
-        'setResponse',
-        'setOffset',
-        'setSigma',
-        'setPredictor',
-        'setTestPredictor',
-        'setTestPredictorAndOffset',
-        'setTestOffset',
-        'printTrees',
-        'plotTree',
-    )
+
+    @rmethod
+    def run(self, *args, **kw): ...
+
+    @rmethod
+    def sampleTreesFromPrior(self, *args, **kw): ...
+
+    @rmethod
+    def sampleNodeParametersFromPrior(self, *args, **kw): ...
+
+    @rmethod
+    def copy(self, *args, **kw): ...
+
+    @rmethod
+    def show(self, *args, **kw): ...
+
+    @rmethod
+    def predict(self, *args, **kw): ...
+
+    @rmethod
+    def setControl(self, *args, **kw): ...
+
+    @rmethod
+    def setModel(self, *args, **kw): ...
+
+    @rmethod
+    def setData(self, *args, **kw): ...
+
+    @rmethod
+    def setResponse(self, *args, **kw): ...
+
+    @rmethod
+    def setOffset(self, *args, **kw): ...
+
+    @rmethod
+    def setSigma(self, *args, **kw): ...
+
+    @rmethod
+    def setPredictor(self, *args, **kw): ...
+
+    @rmethod
+    def setTestPredictor(self, *args, **kw): ...
+
+    @rmethod
+    def setTestPredictorAndOffset(self, *args, **kw): ...
+
+    @rmethod
+    def setTestOffset(self, *args, **kw): ...
+
+    @rmethod
+    def printTrees(self, *args, **kw): ...
+
+    @rmethod
+    def plotTree(self, *args, **kw): ...
 
 
 class dbartsControl(RObjectBase):

@@ -62,19 +62,7 @@ def manual_tree(
 def test_format_tree():
     """Check the output of `format_tree` on a single example."""
     tree = manual_tree(
-        [
-            [1.0],
-            [2.0, 3.0],
-            [4.0, 5.0, 6.0, 7.0],
-        ],
-        [
-            [4],
-            [1, 2],
-        ],
-        [
-            [15],
-            [0, 3],
-        ],
+        [[1.0], [2.0, 3.0], [4.0, 5.0, 6.0, 7.0]], [[4], [1, 2]], [[15], [0, 3]]
     )
     s = format_tree(tree)
     print(s)

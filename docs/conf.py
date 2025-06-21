@@ -126,7 +126,7 @@ extensions.append(f'sphinx.ext.{ext}')
 
 myst_enable_extensions = [
     # "amsmath",
-    'dollarmath',
+    'dollarmath'
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -172,13 +172,13 @@ default_role = 'py:obj'
 autoclass_content = 'both'  # concatenate the class and __init__ docstrings
 # default arguments are printed as in source instead of being evaluated
 autodoc_preserve_defaults = True
-autodoc_default_options = {
-    'member-order': 'bysource',
-}
+autodoc_default_options = {'member-order': 'bysource'}
 
 # autodoc-typehints
 typehints_use_rtype = False
 typehints_document_rtype = True
+always_use_bars_union = True
+typehints_defaults = 'comma'
 
 # napoleon
 napoleon_google_docstring = False

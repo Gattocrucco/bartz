@@ -24,7 +24,7 @@
 
 """Mockup of the :external:py:mod:`scipy.stats` module."""
 
-from .special import gammainccinv
+from bartz.jaxext.scipy.special import gammainccinv
 
 
 class invgamma:

@@ -22,9 +22,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Debugging utilities. The entry point is the class `debug_gbart`."""
+
+from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
-from inspect import signature
 from math import ceil, log2
 from re import fullmatch
 
@@ -33,15 +35,38 @@ from equinox import Module, field
 from jax import jit, lax, random, vmap
 from jax import numpy as jnp
 from jax.tree_util import tree_map
-from jaxtyping import Array, Bool, Float32, Int32, Key, UInt
+from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, UInt
 
-from . import grove, jaxext
-from .BART import FloatLike, gbart
-from .mcmcloop import Trace, TreesTrace
-from .mcmcstep import randint_masked
+from bartz.BART import FloatLike, gbart
+from bartz.grove import (
+    TreeHeaps,
+    evaluate_forest,
+    is_actual_leaf,
+    is_leaves_parent,
+    traverse_tree,
+    tree_depth,
+    tree_depths,
+)
+from bartz.jaxext import minimal_unsigned_dtype, vmap_nodoc
+from bartz.jaxext import split as split_key
+from bartz.mcmcloop import TreesTrace
+from bartz.mcmcstep import randint_masked
 
 
-def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
+def format_tree(tree: TreeHeaps, *, print_all: bool = False) -> str:
+    """Convert a tree to a human-readable string.
+
+    Parameters
+    ----------
+    tree
+        A single tree to format.
+    print_all
+        If `True`, also print the contents of unused node slots in the arrays.
+
+    Returns
+    -------
+    A string representation of the tree.
+    """
     tee = '├──'
     corner = '└──'
     join = '│  '
@@ -49,12 +74,20 @@ def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
     down = '┐'
     bottom = '╢'  # '┨' #
 
-    def traverse_tree(lines, index, depth, indent, first_indent, next_indent, unused):
+    def traverse_tree(
+        lines: list[str],
+        index: int,
+        depth: int,
+        indent: str,
+        first_indent: str,
+        next_indent: str,
+        unused: bool,
+    ):
         if index >= len(tree.leaf_tree):
             return
 
-        var = tree.var_tree.at[index].get(mode='fill', fill_value=0)
-        split = tree.split_tree.at[index].get(mode='fill', fill_value=0)
+        var: int = tree.var_tree.at[index].get(mode='fill', fill_value=0).item()
+        split: int = tree.split_tree.at[index].get(mode='fill', fill_value=0).item()
 
         is_leaf = split == 0
         left_child = 2 * index
@@ -102,22 +135,60 @@ def format_tree(tree: grove.TreeHeaps, *, print_all=False) -> str:
     return '\n'.join(lines)
 
 
-def tree_actual_depth(split_tree):
+def tree_actual_depth(split_tree: UInt[Array, ' 2**(d-1)']) -> Int32[Array, '']:
+    """Measure the depth of the tree.
+
+    Parameters
+    ----------
+    split_tree
+        The cutpoints of the decision rules.
+
+    Returns
+    -------
+    The depth of the deepest leaf in the tree. The root is at depth 0.
+    """
     # this could be done just with split_tree != 0
-    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True)
-    depth = grove.tree_depths(is_leaf.size)
+    is_leaf = is_actual_leaf(split_tree, add_bottom_level=True)
+    depth = tree_depths(is_leaf.size)
     depth = jnp.where(is_leaf, depth, 0)
     return jnp.max(depth)
 
 
-def forest_depth_distr(split_trees):
-    depth = grove.tree_depth(split_trees) + 1
-    depths = vmap(tree_actual_depth)(split_trees)
+def forest_depth_distr(
+    split_tree: UInt[Array, 'num_trees 2**(d-1)'],
+) -> Int32[Array, ' d']:
+    """Histogram the depths of a set of trees.
+
+    Parameters
+    ----------
+    split_tree
+        The cutpoints of the decision rules of the trees.
+
+    Returns
+    -------
+    An integer vector where the i-th element counts how many trees have depth i.
+    """
+    depth = tree_depth(split_tree) + 1
+    depths = vmap(tree_actual_depth)(split_tree)
     return jnp.bincount(depths, length=depth)
 
 
-def trace_depth_distr(split_trees_trace):
-    return vmap(forest_depth_distr)(split_trees_trace)
+@jit
+def trace_depth_distr(
+    split_tree: UInt[Array, 'trace_length num_trees 2**(d-1)'],
+) -> Int32[Array, 'trace_length d']:
+    """Histogram the depths of a sequence of sets of trees.
+
+    Parameters
+    ----------
+    split_tree
+        The cutpoints of the decision rules of the trees.
+
+    Returns
+    -------
+    A matrix where element (t,i) counts how many trees have depth i in set t.
+    """
+    return vmap(forest_depth_distr)(split_tree)
 
 
 def points_per_decision_node_distr(
@@ -125,17 +196,51 @@ def points_per_decision_node_distr(
     split_tree: UInt[Array, ' 2**(d-1)'],
     X: UInt[Array, 'p n'],
 ) -> Int32[Array, ' n+1']:
-    traverse_tree = vmap(grove.traverse_tree, in_axes=(1, None, None))
-    indices = traverse_tree(X, var_tree, split_tree)
+    """Histogram points-per-node counts.
+
+    Count how many parent-of-leaf nodes in a tree select each possible amount
+    of points.
+
+    Parameters
+    ----------
+    var_tree
+        The variables of the decision rules.
+    split_tree
+        The cutpoints of the decision rules.
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A vector where the i-th element counts how many next-to-leaf nodes have i points.
+    """
+    traverse_tree_X = vmap(traverse_tree, in_axes=(1, None, None))
+    indices = traverse_tree_X(X, var_tree, split_tree)
     indices >>= 1
     count_tree = jnp.zeros(split_tree.size, int).at[indices].add(1).at[0].set(0)
-    is_leaves_parent = grove.is_leaves_parent(split_tree)
-    return jnp.zeros(X.shape[1] + 1, int).at[count_tree].add(is_leaves_parent)
+    is_parent = is_leaves_parent(split_tree)
+    return jnp.zeros(X.shape[1] + 1, int).at[count_tree].add(is_parent)
 
 
 def forest_points_per_decision_node_distr(
-    trees: grove.TreeHeaps, X
+    trees: TreeHeaps, X: UInt[Array, 'p n']
 ) -> Int32[Array, ' n+1']:
+    """Histogram points-per-node counts for a set of trees.
+
+    Count how many parent-of-leaf nodes in a set of trees select each possible
+    amount of points.
+
+    Parameters
+    ----------
+    trees
+        The set of trees. The variables must have broadcast shape (num_trees,).
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A vector where the i-th element counts how many next-to-leaf nodes have i points.
+    """
     distr = jnp.zeros(X.shape[1] + 1, int)
 
     def loop(distr, heaps: tuple[Array, Array]):
@@ -145,9 +250,28 @@ def forest_points_per_decision_node_distr(
     return distr
 
 
+@jit
 def trace_points_per_decision_node_distr(
-    trace: grove.TreeHeaps, X
+    trace: TreeHeaps, X: UInt[Array, 'p n']
 ) -> Int32[Array, 'trace_length n+1']:
+    """Separately histogram points-per-node counts over a sequence of sets of trees.
+
+    For each set of trees, count how many parent-of-leaf nodes select each
+    possible amount of points.
+
+    Parameters
+    ----------
+    trace
+        The sequence of sets of trees. The variables must have broadcast shape
+        (trace_length, num_trees).
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A matrix where element (t,i) counts how many next-to-leaf nodes have i points in set t.
+    """
+
     def loop(_, trace):
         return None, forest_points_per_decision_node_distr(trace, X)
 
@@ -160,14 +284,48 @@ def points_per_leaf_distr(
     split_tree: UInt[Array, ' 2**(d-1)'],
     X: UInt[Array, 'p n'],
 ) -> Int32[Array, ' n+1']:
-    traverse_tree = vmap(grove.traverse_tree, in_axes=(1, None, None))
-    indices = traverse_tree(X, var_tree, split_tree)
+    """Histogram points-per-leaf counts in a tree.
+
+    Count how many leaves in a tree select each possible amount of points.
+
+    Parameters
+    ----------
+    var_tree
+        The variables of the decision rules.
+    split_tree
+        The cutpoints of the decision rules.
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A vector where the i-th element counts how many leaves have i points.
+    """
+    traverse_tree_X = vmap(traverse_tree, in_axes=(1, None, None))
+    indices = traverse_tree_X(X, var_tree, split_tree)
     count_tree = jnp.zeros(2 * split_tree.size, int).at[indices].add(1)
-    is_leaf = grove.is_actual_leaf(split_tree, add_bottom_level=True)
+    is_leaf = is_actual_leaf(split_tree, add_bottom_level=True)
     return jnp.zeros(X.shape[1] + 1, int).at[count_tree].add(is_leaf)
 
 
-def forest_points_per_leaf_distr(trees: grove.TreeHeaps, X) -> Int32[Array, ' n+1']:
+def forest_points_per_leaf_distr(
+    trees: TreeHeaps, X: UInt[Array, 'p n']
+) -> Int32[Array, ' n+1']:
+    """Histogram points-per-leaf counts over a set of trees.
+
+    Count how many leaves in a set of trees select each possible amount of points.
+
+    Parameters
+    ----------
+    trees
+        The set of trees. The variables must have broadcast shape (num_trees,).
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A vector where the i-th element counts how many leaves have i points.
+    """
     distr = jnp.zeros(X.shape[1] + 1, int)
 
     def loop(distr, heaps: tuple[Array, Array]):
@@ -177,9 +335,28 @@ def forest_points_per_leaf_distr(trees: grove.TreeHeaps, X) -> Int32[Array, ' n+
     return distr
 
 
+@jit
 def trace_points_per_leaf_distr(
-    trace: grove.TreeHeaps, X
+    trace: TreeHeaps, X: UInt[Array, 'p n']
 ) -> Int32[Array, 'trace_length n+1']:
+    """Separately histogram points-per-leaf counts over a sequence of sets of trees.
+
+    For each set of trees, count how many leaves select each possible amount of
+    points.
+
+    Parameters
+    ----------
+    trace
+        The sequence of sets of trees. The variables must have broadcast shape
+        (trace_length, num_trees).
+    X
+        The set of points to count.
+
+    Returns
+    -------
+    A matrix where element (t,i) counts how many leaves have i points in set t.
+    """
+
     def loop(_, trace):
         return None, forest_points_per_leaf_distr(trace, X)
 
@@ -190,22 +367,35 @@ def trace_points_per_leaf_distr(
 check_functions = []
 
 
-BoolLike = bool | Bool[Array, '']
+CheckFunc = Callable[[TreeHeaps, UInt[Array, ' p']], bool | Bool[Array, '']]
 
 
-def check(func):
-    """Check the signature and add the function to the list `check_functions`."""
-    sig = signature(func)
-    assert str(sig) == f'(tree: bartz.grove.TreeHeaps, max_split) -> {BoolLike}', str(
-        sig
-    )
+def check(func: CheckFunc) -> CheckFunc:
+    """Add a function to a list of functions used to check trees.
+
+    Use to decorate functions that check whether a tree is valid in some way.
+    These functions are invoked automatically by `check_tree`, `check_trace` and
+    `debug_gbart`.
+
+    Parameters
+    ----------
+    func
+        The function to add to the list. It must accept a `TreeHeaps` and a
+        `max_split` argument, and return a boolean scalar that indicates if the
+        tree is ok.
+
+    Returns
+    -------
+    The function unchanged.
+    """
     check_functions.append(func)
     return func
 
 
 @check
-def check_types(tree: grove.TreeHeaps, max_split) -> BoolLike:
-    expected_var_dtype = jaxext.minimal_unsigned_dtype(max_split.size - 1)
+def check_types(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> bool:
+    """Check that integer types are as small as possible and coherent."""
+    expected_var_dtype = minimal_unsigned_dtype(max_split.size - 1)
     expected_split_dtype = max_split.dtype
     return (
         tree.var_tree.dtype == expected_var_dtype
@@ -214,26 +404,29 @@ def check_types(tree: grove.TreeHeaps, max_split) -> BoolLike:
 
 
 @check
-def check_sizes(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
+def check_sizes(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> bool:  # noqa: ARG001
+    """Check that array sizes are coherent."""
     return tree.leaf_tree.size == 2 * tree.var_tree.size == 2 * tree.split_tree.size
 
 
 @check
-def check_unused_node(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
+def check_unused_node(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> Bool[Array, '']:  # noqa: ARG001
+    """Check that the unused node slot at index 0 is not dirty."""
     return (tree.var_tree[0] == 0) & (tree.split_tree[0] == 0)
 
 
 @check
-def check_leaf_values(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
+def check_leaf_values(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> Bool[Array, '']:  # noqa: ARG001
+    """Check that all leaf values are not inf of nan."""
     return jnp.all(jnp.isfinite(tree.leaf_tree))
 
 
 @check
-def check_stray_nodes(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
-    """Check if there is any node marked-non-leaf with a marked-leaf parent."""
+def check_stray_nodes(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> Bool[Array, '']:  # noqa: ARG001
+    """Check if there is any marked-non-leaf node with a marked-leaf parent."""
     index = jnp.arange(
         2 * tree.split_tree.size,
-        dtype=jaxext.minimal_unsigned_dtype(2 * tree.split_tree.size - 1),
+        dtype=minimal_unsigned_dtype(2 * tree.split_tree.size - 1),
     )
     parent_index = index >> 1
     is_not_leaf = tree.split_tree.at[index].get(mode='fill', fill_value=0) != 0
@@ -244,7 +437,9 @@ def check_stray_nodes(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: AR
 
 
 @check
-def check_rule_consistency(tree: grove.TreeHeaps, max_split) -> BoolLike:
+def check_rule_consistency(
+    tree: TreeHeaps, max_split: UInt[Array, ' p']
+) -> bool | Bool[Array, '']:
     """Check that decision rules define proper subsets of ancestor rules."""
     if tree.var_tree.size < 4:
         return True
@@ -289,16 +484,18 @@ def check_rule_consistency(tree: grove.TreeHeaps, max_split) -> BoolLike:
 
 
 @check
-def check_num_nodes(tree: grove.TreeHeaps, max_split) -> BoolLike:  # noqa: ARG001
+def check_num_nodes(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> Bool[Array, '']:  # noqa: ARG001
     """Check that #leaves = 1 + #(internal nodes)."""
-    is_leaf = grove.is_actual_leaf(tree.split_tree, add_bottom_level=True)
+    is_leaf = is_actual_leaf(tree.split_tree, add_bottom_level=True)
     num_leaves = jnp.count_nonzero(is_leaf)
     num_internal = jnp.count_nonzero(tree.split_tree)
     return num_leaves == num_internal + 1
 
 
 @check
-def check_var_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
+def check_var_in_bounds(
+    tree: TreeHeaps, max_split: UInt[Array, ' p']
+) -> Bool[Array, '']:
     """Check that variables are in [0, max_split.size)."""
     decision_node = tree.split_tree.astype(bool)
     in_bounds = (tree.var_tree >= 0) & (tree.var_tree < max_split.size)
@@ -306,7 +503,9 @@ def check_var_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
 
 
 @check
-def check_split_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
+def check_split_in_bounds(
+    tree: TreeHeaps, max_split: UInt[Array, ' p']
+) -> Bool[Array, '']:
     """Check that splits are in [0, max_split[var]]."""
     max_split_var = (
         max_split.astype(jnp.int32)
@@ -316,8 +515,23 @@ def check_split_in_bounds(tree: grove.TreeHeaps, max_split) -> BoolLike:
     return jnp.all((tree.split_tree >= 0) & (tree.split_tree <= max_split_var))
 
 
-def check_tree(tree: grove.TreeHeaps, max_split) -> Bool[Array, '']:
-    error_type = jaxext.minimal_unsigned_dtype(2 ** len(check_functions) - 1)
+def check_tree(tree: TreeHeaps, max_split: UInt[Array, ' p']) -> UInt[Array, '']:
+    """Check the validity of a tree.
+
+    Use `describe_error` to parse the error code returned by this function.
+
+    Parameters
+    ----------
+    tree
+        The tree to check.
+    max_split
+        The maximum split value for each variable.
+
+    Returns
+    -------
+    An integer where each bit indicates whether a check failed.
+    """
+    error_type = minimal_unsigned_dtype(2 ** len(check_functions) - 1)
     error = error_type(0)
     for i, func in enumerate(check_functions):
         ok = func(tree, max_split)
@@ -327,21 +541,49 @@ def check_tree(tree: grove.TreeHeaps, max_split) -> Bool[Array, '']:
     return error
 
 
-def describe_error(error):
+def describe_error(error: int | Integer[Array, '']) -> list[str]:
+    """Describe the error code returned by `check_tree`.
+
+    Parameters
+    ----------
+    error
+        The error code returned by `check_tree`.
+
+    Returns
+    -------
+    A list of the function names that implement the failed checks.
+    """
     return [func.__name__ for i, func in enumerate(check_functions) if error & (1 << i)]
 
 
-check_forest = vmap(check_tree, in_axes=(0, None))
-
-
 @jit
-@partial(vmap, in_axes=(0, None))
-def check_trace(trace: Trace, max_split: UInt[Array, ' p']):
+@partial(vmap_nodoc, in_axes=(0, None))
+def check_trace(
+    trace: TreeHeaps, max_split: UInt[Array, ' p']
+) -> UInt[Array, 'trace_length num_trees']:
+    """Check the validity of a sequence of sets of trees.
+
+    Use `describe_error` to parse the error codes returned by this function.
+
+    Parameters
+    ----------
+    trace
+        The sequence of sets of trees to check. The tree arrays must have
+        broadcast shape (trace_length, num_trees). This object can have
+        additional attributes beyond the tree arrays, they are ignored.
+    max_split
+        The maximum split value for each variable.
+
+    Returns
+    -------
+    A matrix of error codes for each tree.
+    """
     trees = TreesTrace.from_dataclass(trace)
+    check_forest = vmap(check_tree, in_axes=(0, None))
     return check_forest(trees, max_split)
 
 
-def get_next_line(s: str, i: int) -> tuple[str, int]:
+def _get_next_line(s: str, i: int) -> tuple[str, int]:
     """Get the next line from a string and the new index."""
     i_new = s.find('\n', i)
     if i_new == -1:
@@ -350,6 +592,20 @@ def get_next_line(s: str, i: int) -> tuple[str, int]:
 
 
 class BARTTraceMeta(Module):
+    """Metadata of R BART tree traces.
+
+    Parameters
+    ----------
+    ndpost
+        The number of posterior draws.
+    ntree
+        The number of trees in the model.
+    numcut
+        The maximum split value for each variable.
+    heap_size
+        The size of the heap required to store the trees.
+    """
+
     ndpost: int = field(static=True)
     ntree: int = field(static=True)
     numcut: UInt[Array, ' p']
@@ -357,8 +613,25 @@ class BARTTraceMeta(Module):
 
 
 def scan_BART_trees(trees: str) -> BARTTraceMeta:
+    """Scan an R BART tree trace checking for errors and parsing metadata.
+
+    Parameters
+    ----------
+    trees
+        The string representation of a trace of trees of the R BART package.
+        Can be accessed from ``mc_gbart(...).treedraws['trees']``.
+
+    Returns
+    -------
+    An object containing the metadata.
+
+    Raises
+    ------
+    ValueError
+        If the string is malformed or contains leftover characters.
+    """
     # parse first line
-    line, i_char = get_next_line(trees, 0)
+    line, i_char = _get_next_line(trees, 0)
     i_line = 1
     match = fullmatch(r'(\d+) (\d+) (\d+)', line)
     if match is None:
@@ -374,7 +647,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
     for i_iter in range(ndpost):
         for i_tree in range(ntree):
             # parse first line of tree definition
-            line, i_char = get_next_line(trees, i_char)
+            line, i_char = _get_next_line(trees, i_char)
             i_line += 1
             match = fullmatch(r'(\d+)', line)
             if match is None:
@@ -385,7 +658,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
             # cycle over nodes
             for i_node in range(num_nodes):
                 # parse node definition
-                line, i_char = get_next_line(trees, i_char)
+                line, i_char = _get_next_line(trees, i_char)
                 i_line += 1
                 match = fullmatch(
                     r'(\d+) (\d+) (\d+) (-?\d+(\.\d+)?(e(\+|-|)\d+)?)', line
@@ -408,7 +681,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
 
     # determine minimal integer type for numcut
     numcut += 1  # because BART is 0-based
-    split_dtype = jaxext.minimal_unsigned_dtype(numcut.max())
+    split_dtype = minimal_unsigned_dtype(numcut.max())
     numcut = jnp.array(numcut.astype(split_dtype))
 
     # determine minimum heap size to store the trees
@@ -418,7 +691,7 @@ def scan_BART_trees(trees: str) -> BARTTraceMeta:
 
 
 class TraceWithOffset(Module):
-    """Implementation of `mcmcloop.Trace`."""
+    """Implementation of `bartz.mcmcloop.Trace`."""
 
     leaf_tree: Float32[Array, 'ndpost ntree 2**d']
     var_tree: UInt[Array, 'ndpost ntree 2**(d-1)']
@@ -427,7 +700,7 @@ class TraceWithOffset(Module):
 
     @classmethod
     def from_trees_trace(
-        cls, trees: grove.TreeHeaps, offset: Float32[Array, '']
+        cls, trees: TreeHeaps, offset: Float32[Array, '']
     ) -> 'TraceWithOffset':
         """Create a `TraceWithOffset` from a `TreeHeaps`."""
         ndpost, _, _ = trees.leaf_tree.shape
@@ -442,7 +715,7 @@ class TraceWithOffset(Module):
 def trees_BART_to_bartz(
     trees: str, *, min_maxdepth: int = 0, offset: FloatLike | None = None
 ) -> tuple[TraceWithOffset, BARTTraceMeta]:
-    """Convert trees from the R BART format to bartz format.
+    """Convert trees from the R BART format to the bartz format.
 
     Parameters
     ----------
@@ -454,30 +727,31 @@ def trees_BART_to_bartz(
         observed depth in the input trees. Use this parameter to require at
         least this maximum depth in the output format.
     offset
-        The trace returned by `run_mcmc` contains an offset to be summed to the
-        sum of trees. To match that behavior, this function returns an offset
-        as well, zero by default. Set with this parameter otherwise.
+        The trace returned by `bartz.mcmcloop.run_mcmc` contains an offset to be
+        summed to the sum of trees. To match that behavior, this function
+        returns an offset as well, zero by default. Set with this parameter
+        otherwise.
 
     Returns
     -------
     trace : TraceWithOffset
         A representation of the trees compatible with the trace returned by
-        `run_mcmc`.
+        `bartz.mcmcloop.run_mcmc`.
     meta : BARTTraceMeta
-        The metadata of the trace, containing the number of iterations,
-        trees, and the maximum split value.
+        The metadata of the trace, containing the number of iterations, trees,
+        and the maximum split value.
     """
     # scan all the string checking for errors and determining sizes
     meta = scan_BART_trees(trees)
 
     # skip first line
-    _, i_char = get_next_line(trees, 0)
+    _, i_char = _get_next_line(trees, 0)
 
     heap_size = max(meta.heap_size, 2**min_maxdepth)
     leaf_trees = numpy.zeros((meta.ndpost, meta.ntree, heap_size), dtype=numpy.float32)
     var_trees = numpy.zeros(
         (meta.ndpost, meta.ntree, heap_size // 2),
-        dtype=jaxext.minimal_unsigned_dtype(meta.numcut.size - 1),
+        dtype=minimal_unsigned_dtype(meta.numcut.size - 1),
     )
     split_trees = numpy.zeros(
         (meta.ndpost, meta.ntree, heap_size // 2), dtype=meta.numcut.dtype
@@ -487,7 +761,7 @@ def trees_BART_to_bartz(
     for i_iter in range(meta.ndpost):
         for i_tree in range(meta.ntree):
             # parse first line of tree definition
-            line, i_char = get_next_line(trees, i_char)
+            line, i_char = _get_next_line(trees, i_char)
             num_nodes = int(line)
 
             is_internal = numpy.zeros(heap_size // 2, dtype=bool)
@@ -495,7 +769,7 @@ def trees_BART_to_bartz(
             # cycle over nodes
             for _ in range(num_nodes):
                 # parse node definition
-                line, i_char = get_next_line(trees, i_char)
+                line, i_char = _get_next_line(trees, i_char)
                 values = line.split()
                 i_heap = int(values[0])
                 var = int(values[1])
@@ -523,6 +797,24 @@ def trees_BART_to_bartz(
 
 
 class SamplePriorStack(Module):
+    """Represent the manually managed stack used in `sample_prior`.
+
+    Each level of the stack represents a recursion into a child node in a
+    binary tree of maximum depth `d`.
+
+    Parameters
+    ----------
+    nonterminal
+        Whether the node is valid or the recursion is into unused node slots.
+    lower
+    upper
+        The available cutpoints along ``var`` are in the integer range
+        ``[1 + lower[var], 1 + upper[var])``.
+    var
+    split
+        The variable and cutpoint of a decision node.
+    """
+
     nonterminal: Bool[Array, ' d-1']
     lower: UInt[Array, 'd-1 p']
     upper: UInt[Array, 'd-1 p']
@@ -533,7 +825,21 @@ class SamplePriorStack(Module):
     def initial(
         cls, p_nonterminal: Float32[Array, ' d-1'], max_split: UInt[Array, ' p']
     ) -> 'SamplePriorStack':
-        var_dtype = jaxext.minimal_unsigned_dtype(max_split.size - 1)
+        """Initialize the stack.
+
+        Parameters
+        ----------
+        p_nonterminal
+            The prior probability of a node being non-terminal conditional on
+            its ancestors and on having available decision rules, at each depth.
+        max_split
+            The number of cutpoints along each variable.
+
+        Returns
+        -------
+        A `SamplePriorStack` initialized to start the recursion.
+        """
+        var_dtype = minimal_unsigned_dtype(max_split.size - 1)
         return cls(
             nonterminal=jnp.ones(p_nonterminal.size, bool),
             lower=jnp.zeros((p_nonterminal.size, max_split.size), max_split.dtype),
@@ -544,6 +850,16 @@ class SamplePriorStack(Module):
 
 
 class SamplePriorTrees(Module):
+    """Object holding the trees generated by `sample_prior`.
+
+    Parameters
+    ----------
+    leaf_tree
+    var_tree
+    split_tree
+        The arrays representing the trees, see `bartz.grove`.
+    """
+
     leaf_tree: Float32[Array, '* 2**d']
     var_tree: UInt[Array, '* 2**(d-1)']
     split_tree: UInt[Array, '* 2**(d-1)']
@@ -556,17 +872,49 @@ class SamplePriorTrees(Module):
         p_nonterminal: Float32[Array, ' d-1'],
         max_split: UInt[Array, ' p'],
     ) -> 'SamplePriorTrees':
+        """Initialize the trees.
+
+        The leaves are already correct and do not need to be changed.
+
+        Parameters
+        ----------
+        key
+            A jax random key.
+        sigma_mu
+            The prior standard deviation of each leaf.
+        p_nonterminal
+            The prior probability of a node being non-terminal conditional on
+            its ancestors and on having available decision rules, at each depth.
+        max_split
+            The number of cutpoints along each variable.
+
+        Returns
+        -------
+        Trees initialized with random leaves and stub tree structures.
+        """
         heap_size = 2 ** (p_nonterminal.size + 1)
         return cls(
             leaf_tree=sigma_mu * random.normal(key, (heap_size,)),
             var_tree=jnp.zeros(
-                heap_size // 2, dtype=jaxext.minimal_unsigned_dtype(max_split.size - 1)
+                heap_size // 2, dtype=minimal_unsigned_dtype(max_split.size - 1)
             ),
             split_tree=jnp.zeros(heap_size // 2, dtype=max_split.dtype),
         )
 
 
 class SamplePriorCarry(Module):
+    """Object holding values carried along the recursion in `sample_prior`.
+
+    Parameters
+    ----------
+    key
+        A jax random key used to sample decision rules.
+    stack
+        The stack used to manage the recursion.
+    trees
+        The output arrays.
+    """
+
     key: Key[Array, '']
     stack: SamplePriorStack
     trees: SamplePriorTrees
@@ -579,7 +927,25 @@ class SamplePriorCarry(Module):
         p_nonterminal: Float32[Array, ' d-1'],
         max_split: UInt[Array, ' p'],
     ) -> 'SamplePriorCarry':
-        keys = jaxext.split(key)
+        """Initialize the carry object.
+
+        Parameters
+        ----------
+        key
+            A jax random key.
+        sigma_mu
+            The prior standard deviation of each leaf.
+        p_nonterminal
+            The prior probability of a node being non-terminal conditional on
+            its ancestors and on having available decision rules, at each depth.
+        max_split
+            The number of cutpoints along each variable.
+
+        Returns
+        -------
+        A `SamplePriorCarry` initialized to start the recursion.
+        """
+        keys = split_key(key)
         return cls(
             keys.pop(),
             SamplePriorStack.initial(p_nonterminal, max_split),
@@ -588,12 +954,40 @@ class SamplePriorCarry(Module):
 
 
 class SamplePriorX(Module):
+    """Object representing the recursion scan in `sample_prior`.
+
+    The sequence of nodes to visit is pre-computed recursively once, unrolling
+    the recursion schedule.
+
+    Parameters
+    ----------
+    node
+        The heap index of the node to visit.
+    depth
+        The depth of the node.
+    next_depth
+        The depth of the next node to visit, either the left child or the right
+        sibling of the node or of an ancestor.
+    """
+
     node: Int32[Array, ' 2**(d-1)-1']
     depth: Int32[Array, ' 2**(d-1)-1']
     next_depth: Int32[Array, ' 2**(d-1)-1']
 
     @classmethod
     def initial(cls, p_nonterminal: Float32[Array, ' d-1']) -> 'SamplePriorX':
+        """Initialize the sequence of nodes to visit.
+
+        Parameters
+        ----------
+        p_nonterminal
+            The prior probability of a node being non-terminal conditional on
+            its ancestors and on having available decision rules, at each depth.
+
+        Returns
+        -------
+        A `SamplePriorX` initialized with the sequence of nodes to visit.
+        """
         seq = cls._sequence(p_nonterminal.size)
         assert len(seq) == 2**p_nonterminal.size - 1
         node = [node for node, depth in seq]
@@ -609,6 +1003,7 @@ class SamplePriorX(Module):
     def _sequence(
         cls, max_depth: int, depth: int = 0, node: int = 1
     ) -> tuple[tuple[int, int], ...]:
+        """Recursively generate a sequence [(node, depth), ...]."""
         if depth < max_depth:
             out = ((node, depth),)
             out += cls._sequence(max_depth, depth + 1, 2 * node)
@@ -623,11 +1018,29 @@ def sample_prior_onetree(
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
+    """Sample a tree from the BART prior.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    max_split
+        The maximum split value for each variable.
+    p_nonterminal
+        The prior probability of a node being non-terminal conditional on
+        its ancestors and on having available decision rules, at each depth.
+    sigma_mu
+        The prior standard deviation of each leaf.
+
+    Returns
+    -------
+    An object containing a generated tree.
+    """
     carry = SamplePriorCarry.initial(key, sigma_mu, p_nonterminal, max_split)
     xs = SamplePriorX.initial(p_nonterminal)
 
     def loop(carry: SamplePriorCarry, x: SamplePriorX):
-        keys = jaxext.split(carry.key, 4)
+        keys = split_key(carry.key, 4)
 
         # get variables at current stack level
         stack = carry.stack
@@ -694,13 +1107,32 @@ def sample_prior_onetree(
     return carry.trees
 
 
-@partial(jaxext.vmap_nodoc, in_axes=(0, None, None, None))
+@partial(vmap_nodoc, in_axes=(0, None, None, None))
 def sample_prior_forest(
     keys: Key[Array, ' num_trees'],
     max_split: UInt[Array, ' p'],
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
+    """Sample a set of independent trees from the BART prior.
+
+    Parameters
+    ----------
+    keys
+        A sequence of jax random keys, one for each tree. This determined the
+        number of trees sampled.
+    max_split
+        The maximum split value for each variable.
+    p_nonterminal
+        The prior probability of a node being non-terminal conditional on
+        its ancestors and on having available decision rules, at each depth.
+    sigma_mu
+        The prior standard deviation of each leaf.
+
+    Returns
+    -------
+    An object containing the generated trees.
+    """
     return sample_prior_onetree(keys, max_split, p_nonterminal, sigma_mu)
 
 
@@ -713,13 +1145,47 @@ def sample_prior(
     p_nonterminal: Float32[Array, ' d-1'],
     sigma_mu: Float32[Array, ''],
 ) -> SamplePriorTrees:
+    """Sample independent trees from the BART prior.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    trace_length
+        The number of iterations.
+    num_trees
+        The number of trees for each iteration.
+    max_split
+        The number of cutpoints along each variable.
+    p_nonterminal
+        The prior probability of a node being non-terminal conditional on
+        its ancestors and on having available decision rules, at each depth.
+        This determines the maximum depth of the trees.
+    sigma_mu
+        The prior standard deviation of each leaf.
+
+    Returns
+    -------
+    An object containing the generated trees, with batch shape (trace_length, num_trees).
+    """
     keys = random.split(key, trace_length * num_trees)
     trees = sample_prior_forest(keys, max_split, p_nonterminal, sigma_mu)
     return tree_map(lambda x: x.reshape(trace_length, num_trees, -1), trees)
 
 
 class debug_gbart(gbart):
-    """A subclass of `gbart` that adds debugging functionality."""
+    """A subclass of `gbart` that adds debugging functionality.
+
+    Parameters
+    ----------
+    *args
+        Passed to `gbart`.
+    check_trees
+        If `True`, check all trees with `check_trace` after running the MCMC,
+        and assert that they are all valid. Set to `False` to allow jax tracing.
+    **kw
+        Passed to `gbart`.
+    """
 
     def __init__(self, *args, check_trees: bool = True, **kw):
         super().__init__(*args, **kw)
@@ -728,19 +1194,36 @@ class debug_gbart(gbart):
             bad_count = jnp.count_nonzero(bad)
             assert bad_count == 0
 
-    def show_tree(self, i_sample, i_tree, print_all=False):
-        from .debug import format_tree
+    def show_tree(self, i_sample: int, i_tree: int, print_all: bool = False):
+        """Print a single tree in human-readable format.
 
-        tree = TreesTrace(
-            leaf_tree=self._main_trace.leaf_tree,
-            var_tree=self._main_trace.var_tree,
-            split_tree=self._main_trace.split_tree,
-        )
+        Parameters
+        ----------
+        i_sample
+            The index of the posterior sample.
+        i_tree
+            The index of the tree in the sample.
+        print_all
+            If `True`, also print the content of unused node slots.
+        """
+        tree = TreesTrace.from_dataclass(self._main_trace)
         tree = tree_map(lambda x: x[i_sample, i_tree, :], tree)
         s = format_tree(tree, print_all=print_all)
         print(s)  # noqa: T201, this method is intended for debug
 
-    def sigma_harmonic_mean(self, prior=False):
+    def sigma_harmonic_mean(self, prior: bool = False) -> Float32[Array, '']:
+        """Return the harmonic mean of the error variance.
+
+        Parameters
+        ----------
+        prior
+            If `True`, use the prior distribution, otherwise use the full
+            conditional at the last MCMC iteration.
+
+        Returns
+        -------
+        The harmonic mean 1/E[1/sigma^2] in the selected distribution.
+        """
         bart = self._mcmc_state
         assert bart.sigma2_alpha is not None
         assert bart.z is None
@@ -755,11 +1238,20 @@ class debug_gbart(gbart):
         sigma2 = beta / alpha
         return jnp.sqrt(sigma2)
 
-    def compare_resid(self):
+    def compare_resid(self) -> tuple[Float32[Array, ' n'], Float32[Array, ' n']]:
+        """Re-compute residuals to compare them with the updated ones.
+
+        Returns
+        -------
+        resid1 : Float32[Array, 'n']
+            The final state of the residuals updated during the MCMC.
+        resid2 : Float32[Array, 'n']
+            The residuals computed from the final state of the trees.
+        """
         bart = self._mcmc_state
         resid1 = bart.resid
 
-        trees = grove.evaluate_forest(bart.X, bart.forest)
+        trees = evaluate_forest(bart.X, bart.forest)
 
         if bart.z is not None:
             ref = bart.z
@@ -769,7 +1261,16 @@ class debug_gbart(gbart):
 
         return resid1, resid2
 
-    def avg_acc(self):
+    def avg_acc(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+        """Compute the average acceptance rates of tree moves.
+
+        Returns
+        -------
+        acc_grow : Float32[Array, '']
+            The average acceptance rate of grow moves.
+        acc_prune : Float32[Array, '']
+            The average acceptance rate of prune moves.
+        """
         trace = self._main_trace
 
         def acc(prefix):
@@ -779,7 +1280,21 @@ class debug_gbart(gbart):
 
         return acc('grow'), acc('prune')
 
-    def avg_prop(self):
+    def avg_prop(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+        """Compute the average proposal rate of grow and prune moves.
+
+        Returns
+        -------
+        prop_grow : Float32[Array, '']
+            The fraction of times grow was proposed instead of prune.
+        prop_prune : Float32[Array, '']
+            The fraction of times prune was proposed instead of grow.
+
+        Notes
+        -----
+        This function does not take into account cases where no move was
+        proposed.
+        """
         trace = self._main_trace
 
         def prop(prefix):
@@ -790,26 +1305,60 @@ class debug_gbart(gbart):
         total = pgrow + pprune
         return pgrow / total, pprune / total
 
-    def avg_move(self):
+    def avg_move(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+        """Compute the move rate.
+
+        Returns
+        -------
+        rate_grow : Float32[Array, '']
+            The fraction of times a grow move was proposed and accepted.
+        rate_prune : Float32[Array, '']
+            The fraction of times a prune move was proposed and accepted.
+        """
         agrow, aprune = self.avg_acc()
         pgrow, pprune = self.avg_prop()
         return agrow * pgrow, aprune * pprune
 
-    def depth_distr(self):
+    def depth_distr(self) -> Float32[Array, 'trace_length d']:
+        """Histogram of tree depths for each state of the trees.
+
+        Returns
+        -------
+        A matrix where each row contains a histogram of tree depths.
+        """
         return trace_depth_distr(self._main_trace.split_tree)
 
-    def points_per_decision_node_distr(self):
+    def points_per_decision_node_distr(self) -> Float32[Array, 'trace_length n+1']:
+        """Histogram of number of points belonging to parent-of-leaf nodes.
+
+        Returns
+        -------
+        A matrix where each row contains a histogram of number of points.
+        """
         return trace_points_per_decision_node_distr(
             self._main_trace, self._mcmc_state.X
         )
 
-    def points_per_leaf_distr(self):
+    def points_per_leaf_distr(self) -> Float32[Array, 'trace_length n+1']:
+        """Histogram of number of points belonging to leaves.
+
+        Returns
+        -------
+        A matrix where each row contains a histogram of number of points.
+        """
         return trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
 
-    def check_trees(self):
+    def check_trees(self) -> UInt[Array, 'trace_length ntree']:
+        """Apply `check_trace` to all the tree draws."""
         return check_trace(self._main_trace, self._mcmc_state.forest.max_split)
 
-    def tree_goes_bad(self):
+    def tree_goes_bad(self) -> Bool[Array, 'trace_length ntree']:
+        """Find iterations where a tree becomes invalid.
+
+        Returns
+        -------
+        A where (i,j) is `True` if tree j is invalid at iteration i but not i-1.
+        """
         bad = self.check_trees().astype(bool)
         bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
         return bad & ~bad_before

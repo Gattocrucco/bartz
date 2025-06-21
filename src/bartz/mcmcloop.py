@@ -22,7 +22,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Functions that implement the full BART posterior MCMC loop."""
+"""Functions that implement the full BART posterior MCMC loop.
+
+The main entry point is `run_mcmc`.
+"""
 
 from collections.abc import Callable
 from dataclasses import fields
@@ -36,8 +39,8 @@ from jax import debug, lax, tree
 from jax import numpy as jnp
 from jaxtyping import Array, Float32, Int32, Key, PyTree, Real, Shaped, UInt
 
-from . import grove, jaxext, mcmcstep
-from .mcmcstep import State
+from bartz import grove, jaxext, mcmcstep
+from bartz.mcmcstep import State
 
 
 class BurninTrace(Module):
@@ -533,7 +536,7 @@ class Trace(grove.TreeHeaps, Protocol):
 
 
 class TreesTrace(Module):
-    """Implementation of `TreeHeaps` for an MCMC trace."""
+    """Implementation of `bartz.grove.TreeHeaps` for an MCMC trace."""
 
     leaf_tree: Float32[Array, 'trace_length num_trees 2**d']
     var_tree: UInt[Array, 'trace_length num_trees 2**(d-1)']
@@ -541,7 +544,7 @@ class TreesTrace(Module):
 
     @classmethod
     def from_dataclass(cls, obj: grove.TreeHeaps):
-        """Create a `TreesTrace` from any `TreeHeaps`."""
+        """Create a `TreesTrace` from any `bartz.grove.TreeHeaps`."""
         return cls(**{f.name: getattr(obj, f.name) for f in fields(cls)})
 
 

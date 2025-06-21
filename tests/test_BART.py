@@ -58,9 +58,8 @@ from bartz.debug import debug_gbart as gbart
 from bartz.grove import is_actual_leaf, tree_depth, tree_depths
 from bartz.jaxext import split
 from bartz.mcmcloop import compute_varcount, evaluate_trace
-
-from .rbartpackages import BART
-from .util import assert_close_matrices
+from tests.rbartpackages import BART
+from tests.util import assert_close_matrices
 
 
 def gen_X(key, p, n, kind):
@@ -433,11 +432,12 @@ def test_rbart(kw, keys):
     bart = gbart(**kw)
     kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
     rbart = BART.mc_gbart(**kw_BART)
+    # use mc_gbart instead of gbart because gbart does not use the seed
 
     # first cross-check the outputs of R BART alone
 
     # convert the trees to bartz format
-    trees: str = rbart.treedraws['trees'].item()
+    trees = rbart.treedraws['trees']
     trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
 
     varcount = compute_varcount(meta.numcut.size, trace)
@@ -466,7 +466,7 @@ def test_rbart(kw, keys):
 
     if kw['y_train'].dtype != bool:
         rhat_sigma = multivariate_rhat(
-            jnp.stack([bart.sigma[:, None], rbart.sigma[:, None]])
+            jnp.stack([bart.sigma[:, None], rbart.sigma[-rbart.ndpost :, None]])
         )
         assert rhat_sigma < 1.01
 
@@ -623,7 +623,7 @@ def test_prior(keys, p, nsplits):
         assert rhat_maxd < 1
 
         # compare max tree depth distribution
-        dd_mcmc = trace_depth_distr(bart._main_trace.split_tree)
+        dd_mcmc = bart.depth_distr()
         dd_prior = trace_depth_distr(prior_trace.split_tree)
         rhat_dd = multivariate_rhat(jnp.stack([dd_mcmc, dd_prior]))
         assert rhat_dd < 1.05

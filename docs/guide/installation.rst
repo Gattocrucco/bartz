@@ -25,7 +25,7 @@
 Installation
 ============
 
-Install and set up Python. There are various ways to do it; my favorite one is to use `micromamba <https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html>`_. Then:
+Install and set up Python. There are various ways to do it; my favorite one is to use `uv <https://docs.astral.sh/uv/>`_. Then:
 
 .. code-block:: sh
 

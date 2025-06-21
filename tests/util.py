@@ -63,10 +63,17 @@ def assert_close_matrices(
 
         So `actual` is compared to zero, and `desired` is only used as a
         reference to set the threshold.
+
+    Raises
+    ------
+    ValueError
+        If the two matrices have different shapes.
     """
     actual = np.asarray(actual)
     desired = np.asarray(desired)
-    assert actual.shape == desired.shape
+    if actual.shape != desired.shape:
+        msg = f'{actual.shape=} != {desired.shape=}'
+        raise ValueError(msg)
     if actual.size > 0:
         actual = np.atleast_1d(actual)
         desired = np.atleast_1d(desired)

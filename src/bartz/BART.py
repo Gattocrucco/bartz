@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Implement a user interface that mimics the R BART package."""
+"""Implement a class `gbart` that mimics the R BART package."""
 
 import math
 from collections.abc import Sequence
@@ -194,9 +194,9 @@ class gbart:
         The maximum depth of the trees. This is 1-based, so with the default
         ``maxdepth=6``, the depths of the levels range from 0 to 5.
     init_kw
-        Additional arguments passed to `mcmcstep.init`.
+        Additional arguments passed to `bartz.mcmcstep.init`.
     run_mcmc_kw
-        Additional arguments passed to `mcmcloop.run_mcmc`.
+        Additional arguments passed to `bartz.mcmcloop.run_mcmc`.
 
     Attributes
     ----------
@@ -224,7 +224,6 @@ class gbart:
       less predictor values than the required number of bins, while bartz
       always follows the specification.
     - The error variance parameter is called `lamda` instead of `lambda`.
-    - The default `numcut` is 255 instead of 100.
     - Some functionality is missing (e.g., variable selection).
     - There are some additional attributes, and some missing.
     - The trees have a maximum depth.
@@ -265,7 +264,7 @@ class gbart:
         offset: FloatLike | None = None,
         w: Float[Array, ' n'] | None = None,
         ntree: int = 200,
-        numcut: int = 255,
+        numcut: int = 100,
         ndpost: int = 1000,
         nskip: int = 100,
         keepevery: int = 1,
@@ -351,19 +350,20 @@ class gbart:
         """Average of `varcount` across MCMC iterations."""
         return self.varcount.mean(axis=0)
 
-    def predict(self, x_test):
+    def predict(
+        self, x_test: Real[Array, 'p m'] | DataFrame
+    ) -> Float32[Array, 'ndpost m']:
         """
         Compute the posterior mean at `x_test` for each MCMC iteration.
 
         Parameters
         ----------
-        x_test : array (p, m) or DataFrame
+        x_test
             The test predictors.
 
         Returns
         -------
-        yhat_test : array (ndpost, m)
-            The conditional posterior mean at `x_test` for each MCMC iteration.
+        The conditional posterior mean at `x_test` for each MCMC iteration.
 
         Raises
         ------

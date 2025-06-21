@@ -22,23 +22,21 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-.. currentmodule:: bartz
-
 Quickstart
 ==========
 
 Basics
 ------
 
-Import the `bartz` module and use the `BART.gbart` class:
+Import and use the `bartz.BART.gbart` class:
 
 .. code-block:: python
 
-    import bartz
-    bart = bartz.BART.gbart(X, y, ...)
+    from bartz.BART import gbart
+    bart = gbart(X, y, ...)
     y_pred = bart.predict(X_test)
 
-The interface hews to the R package `BART <https://cran.r-project.org/package=BART>`_, with a few differences explained in the documentation of `BART.gbart`.
+The interface hews to the R package `BART <https://cran.r-project.org/package=BART>`_, with a few differences explained in the documentation of `bartz.BART.gbart`.
 
 JAX
 ---
@@ -52,4 +50,4 @@ For advanced usage, refer to the `jax documentation <https://docs.jax.dev>`_.
 Advanced
 --------
 
-`bartz` exposes the various functions that implement the MCMC of BART. You can use those yourself to try to make your own variant of BART. See the rest of the documentation for reference; the main entry points `mcmcstep.init` and `mcmcloop.run_mcmc`. At the moment using the internals is the only way to change the device used by each step of the algorithm, which is useful to pre-process data on CPU and move to GPU only the state of the MCMC if the data preprocessing step does not fit in the GPU memory.
+`bartz` exposes the various functions that implement the MCMC of BART. You can use those yourself to try to make your own variant of BART. See the rest of the documentation for reference; the main entry points are `bartz.mcmcstep.init` and `bartz.mcmcloop.run_mcmc`. Using the internals is the only way to change the device used by each step of the algorithm, which is useful to pre-process data on CPU and move to GPU only the state of the MCMC if the data preprocessing step does not fit in the GPU memory.

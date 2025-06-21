@@ -49,14 +49,7 @@ class TestQuantilizer:
 
     def test_max_splits(self):
         """Check that the number of splits per predictor is counted correctly."""
-        x = jnp.array(
-            [
-                [1, 1, 1, 1],
-                [4, 4, 1, 1],
-                [2, 1, 3, 2],
-                [1, 4, 2, 3],
-            ]
-        )
+        x = jnp.array([[1, 1, 1, 1], [4, 4, 1, 1], [2, 1, 3, 2], [1, 4, 2, 3]])
         _, max_split = quantilized_splits_from_matrix(x, 100)
         assert_array_equal(max_split, jnp.arange(4))
 

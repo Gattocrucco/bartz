@@ -24,13 +24,13 @@
 
 """Functions to preprocess data."""
 
-import functools
+from functools import partial
 
-import jax
+from jax import jit, vmap
 from jax import numpy as jnp
-from jaxtyping import Array, Float, Real, UInt
+from jaxtyping import Array, Float, Integer, Real, UInt
 
-from . import jaxext
+from bartz.jaxext import autobatch, minimal_unsigned_dtype, unique
 
 
 def parse_xinfo(
@@ -57,13 +57,13 @@ def parse_xinfo(
     """
     is_not_nan = ~jnp.isnan(xinfo)
     max_split = jnp.sum(is_not_nan, axis=1)
-    max_split = max_split.astype(jaxext.minimal_unsigned_dtype(xinfo.shape[1]))
+    max_split = max_split.astype(minimal_unsigned_dtype(xinfo.shape[1]))
     huge = _huge_value(xinfo)
     splits = jnp.where(is_not_nan, xinfo, huge)
     return splits, max_split
 
 
-@functools.partial(jax.jit, static_argnums=(1,))
+@partial(jit, static_argnums=(1,))
 def quantilized_splits_from_matrix(
     X: Real[Array, 'p n'], max_bins: int
 ) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
@@ -99,7 +99,7 @@ def quantilized_splits_from_matrix(
         msg = f'{X.shape[1]=} and {max_bins=}, they should be both at least 1.'
         raise ValueError(msg)
 
-    @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
+    @partial(autobatch, max_io_nbytes=2**29)
     def quantilize(X):
         # wrap this function because autobatch needs traceable args
         return _quantilized_splits_from_matrix(X, out_length)
@@ -107,17 +107,17 @@ def quantilized_splits_from_matrix(
     return quantilize(X)
 
 
-@functools.partial(jax.vmap, in_axes=(0, None))
+@partial(vmap, in_axes=(0, None))
 def _quantilized_splits_from_matrix(
     x: Real[Array, 'p n'], out_length: int
 ) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
     # find the sorted unique values in x
     huge = _huge_value(x)
-    u, actual_length = jaxext.unique(x, size=x.size, fill_value=huge)
+    u, actual_length = unique(x, size=x.size, fill_value=huge)
 
     # compute the midpoints between each unique value
     if jnp.issubdtype(x.dtype, jnp.integer):
-        midpoints = u[:-1] + jaxext.ensure_unsigned(u[1:] - u[:-1]) // 2
+        midpoints = u[:-1] + _ensure_unsigned(u[1:] - u[:-1]) // 2
     else:
         midpoints = u[:-1] + (u[1:] - u[:-1]) / 2
         # using x_i + (x_i+1 - x_i) / 2 instead of (x_i + x_i+1) / 2 is to
@@ -128,9 +128,7 @@ def _quantilized_splits_from_matrix(
 
     # take a subset of the midpoints if there are more than the requested maximum
     indices = jnp.linspace(-1, actual_length, out_length + 2)[1:-1]
-    indices = jnp.around(indices).astype(
-        jaxext.minimal_unsigned_dtype(midpoints.size - 1)
-    )
+    indices = jnp.around(indices).astype(minimal_unsigned_dtype(midpoints.size - 1))
     # indices calculation with float rather than int to avoid potential
     # overflow with int32, and to round to nearest instead of rounding down
     decimated_midpoints = midpoints[indices]
@@ -139,7 +137,7 @@ def _quantilized_splits_from_matrix(
         actual_length > out_length, decimated_midpoints, truncated_midpoints
     )
     max_split = jnp.minimum(actual_length, out_length)
-    max_split = max_split.astype(jaxext.minimal_unsigned_dtype(out_length))
+    max_split = max_split.astype(minimal_unsigned_dtype(out_length))
     return splits, max_split
 
 
@@ -162,7 +160,35 @@ def _huge_value(x: Array) -> int | float:
         return float(jnp.finfo(x.dtype).max)
 
 
-@functools.partial(jax.jit, static_argnums=(1,))
+def _ensure_unsigned(x: Integer[Array, '*shape']) -> UInt[Array, '*shape']:
+    """If x has signed integer type, cast it to the unsigned dtype of the same size."""
+    return x.astype(_signed_to_unsigned(x.dtype))
+
+
+def _signed_to_unsigned(int_dtype: jnp.dtype) -> jnp.dtype:
+    """
+    Map a signed integer type to its unsigned counterpart.
+
+    Unsigned types are passed through.
+    """
+    assert jnp.issubdtype(int_dtype, jnp.integer)
+    if jnp.issubdtype(int_dtype, jnp.unsignedinteger):
+        return int_dtype
+    match int_dtype:
+        case jnp.int8:
+            return jnp.uint8
+        case jnp.int16:
+            return jnp.uint16
+        case jnp.int32:
+            return jnp.uint32
+        case jnp.int64:
+            return jnp.uint64
+        case _:
+            msg = f'unexpected integer type {int_dtype}'
+            raise TypeError(msg)
+
+
+@partial(jit, static_argnums=(1,))
 def uniform_splits_from_matrix(
     X: Real[Array, 'p n'], num_bins: int
 ) -> tuple[Real[Array, 'p m'], UInt[Array, ' p']]:
@@ -189,11 +215,11 @@ def uniform_splits_from_matrix(
     high = jnp.max(X, axis=1)
     splits = jnp.linspace(low, high, num_bins + 1, axis=1)[:, 1:-1]
     assert splits.shape == (X.shape[0], num_bins - 1)
-    max_split = jnp.full(*splits.shape, jaxext.minimal_unsigned_dtype(num_bins - 1))
+    max_split = jnp.full(*splits.shape, minimal_unsigned_dtype(num_bins - 1))
     return splits, max_split
 
 
-@functools.partial(jax.jit, static_argnames=('method',))
+@partial(jit, static_argnames=('method',))
 def bin_predictors(
     X: Real[Array, 'p n'], splits: Real[Array, 'p m'], **kw
 ) -> UInt[Array, 'p n']:
@@ -219,10 +245,10 @@ def bin_predictors(
     `X` but with each value replaced by the index of the bin it falls into.
     """
 
-    @functools.partial(jaxext.autobatch, max_io_nbytes=2**29)
-    @jax.vmap
+    @partial(autobatch, max_io_nbytes=2**29)
+    @vmap
     def bin_predictors(x, splits):
-        dtype = jaxext.minimal_unsigned_dtype(splits.size)
+        dtype = minimal_unsigned_dtype(splits.size)
         return jnp.searchsorted(splits, x, **kw).astype(dtype)
 
     return bin_predictors(X, splits)

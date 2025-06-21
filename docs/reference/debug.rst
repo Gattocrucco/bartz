@@ -1,6 +1,6 @@
-.. bartz/docs/reference/index.rst
+.. bartz/docs/reference/debug.rst
 ..
-.. Copyright (c) 2024-2025, Giacomo Petrillo
+.. Copyright (c) 2025, Giacomo Petrillo
 ..
 .. This file is part of bartz.
 ..
@@ -22,16 +22,8 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-Reference
-=========
+Debugging
+---------
 
-.. toctree::
-    :maxdepth: 1
-
-    interface.rst
-    grove.rst
-    mcmcstep.rst
-    mcmcloop.rst
-    prepcovars.rst
-    jaxext.rst
-    debug.rst
+.. automodule:: bartz.debug
+    :members:

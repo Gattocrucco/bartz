@@ -22,18 +22,30 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""Python wrapper of the R package bartMachine."""
+
+# ruff: noqa: D102
+
 from rpy2 import robjects
 
-from . import _base
+from tests.rbartpackages._base import RObjectBase, rmethod
 
 
-class bartMachine(_base.RObjectBase):
+class bartMachine(RObjectBase):  # noqa: D101, because the doc is pulled from R
     _rfuncname = 'bartMachine::bartMachine'
-    _methods = 'predict', 'get_posterior', 'get_sigsqs'
 
     def __init__(self, *args, num_cores=None, megabytes=5000, **kw):
         robjects.r(f'options(java.parameters = "-Xmx{megabytes:d}m")')
-        robjects.r('library(bartMachine)')
+        robjects.r('loadNamespace("bartMachine")')
         if num_cores is not None:
             robjects.r(f'bartMachine::set_bart_machine_num_cores({int(num_cores)})')
         super().__init__(*args, **kw)
+
+    @rmethod
+    def predict(self, *args, **kw): ...
+
+    @rmethod
+    def get_posterior(self, *args, **kw): ...
+
+    @rmethod
+    def get_sigsqs(self, *args, **kw): ...

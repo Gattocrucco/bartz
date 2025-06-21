@@ -38,7 +38,7 @@ The main entry points are:
 import math
 from dataclasses import replace
 from functools import cache, partial
-from typing import Any
+from typing import Any, Literal
 
 import jax
 from equinox import Module, field, tree_at
@@ -178,12 +178,12 @@ def init(
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
     error_scale: Float32[Any, ' n'] | None = None,
-    min_points_per_decision_node: int | None = None,
-    resid_batch_size: int | None | str = 'auto',
-    count_batch_size: int | None | str = 'auto',
+    min_points_per_decision_node: int | Integer[Any, ''] | None = None,
+    resid_batch_size: int | None | Literal['auto'] = 'auto',
+    count_batch_size: int | None | Literal['auto'] = 'auto',
     save_ratios: bool = False,
     filter_splitless_vars: bool = True,
-    min_points_per_leaf: int | None = None,
+    min_points_per_leaf: int | Integer[Any, ''] | None = None,
 ) -> State:
     """
     Make a BART posterior sampling MCMC initial state.
@@ -240,7 +240,8 @@ def init(
         account in the Metropolis-Hastings ratio because it would be expensive
         to compute. Grow moves that would violate this constraint are vetoed.
         This parameter is independent of `min_points_per_decision_node` and
-        there is no check that they are coherent.
+        there is no check that they are coherent. It makes sense to set
+        ``min_points_per_decision_node >= 2 * min_points_per_leaf``.
 
     Returns
     -------
@@ -611,12 +612,6 @@ class GrowMoves(Module):
     affluence_tree
         A partially updated `affluence_tree` that marks each new leaf that
         would be produced as `True` if it would have available decision rules.
-
-    Notes
-    -----
-    `var`, `split` and `partial_ratio` are nonsensical if the move is not
-    allowed. If the move is allowed but it would create a logically empty
-    subtree, then `split` is set to 0.
     """
 
     allowed: Bool[Array, ' num_trees']
@@ -675,7 +670,7 @@ def propose_grow_moves(
     The move is not proposed if each leaf is already at maximum depth, or has
     less datapoints than the requested threshold `min_points_per_decision_node`,
     or it does not have any available decision rules given its ancestors. This
-    is marked by setting `allowed`to `False` and `num_growable` to 0.
+    is marked by setting `allowed` to `False` and `num_growable` to 0.
     """
     keys = split(key, 3)
 
@@ -770,19 +765,25 @@ def growable_leaves(
     """
     Return a mask indicating the leaf nodes that can be proposed for growth.
 
-    The condition is that a leaf is not at the bottom level and has at least two
-    times the number of minimum points per leaf.
+    The condition is that a leaf is not at the bottom level, has available
+    decision rules given its ancestors, and has at least
+    `min_points_per_decision_node` points.
 
     Parameters
     ----------
     split_tree
         The splitting points of the tree.
     affluence_tree
-        Whether a leaf has enough points to be grown.
+        Marks leaves that can be grown.
 
     Returns
     -------
     The mask indicating the leaf nodes that can be proposed to grow.
+
+    Notes
+    -----
+    This function needs `split_tree` and not just `affluence_tree` because
+    `affluence_tree` can be "dirty", i.e., mark unused nodes as `True`.
     """
     return grove.is_actual_leaf(split_tree) & affluence_tree
 
@@ -961,7 +962,7 @@ def split_range(
 
     Returns
     -------
-    The range of allowed splits as [l, r). If `ref_var` is out of bounds, l=r=0.
+    The range of allowed splits as [l, r). If `ref_var` is out of bounds, l=r=1.
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
     initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(
@@ -1001,7 +1002,11 @@ def randint_exclude(
 
     Returns
     -------
-    A random integer `u` in the range ``[0, sup)`` such that ``u not in exclude``.
+    u : Int32[Array, '']
+        A random integer `u` in the range ``[0, sup)`` such that ``u not in
+        exclude``.
+    num_allowed : Int32[Array, '']
+        The number of integers in the range that were not excluded.
 
     Notes
     -----
@@ -1434,7 +1439,7 @@ def accept_moves_parallel_stage(
     key: Key[Array, ''], bart: State, moves: Moves
 ) -> ParallelStageOut:
     """
-    Pre-computes quantities used to accept moves, in parallel across trees.
+    Pre-compute quantities used to accept moves, in parallel across trees.
 
     Parameters
     ----------
@@ -1473,10 +1478,11 @@ def accept_moves_parallel_stage(
     # mark which leaves & potential leaves have enough points to be grown
     if bart.forest.min_points_per_decision_node is not None:
         count_half_trees = count_trees[:, : bart.forest.var_tree.shape[1]]
-        affluence_tree = moves.affluence_tree & (
-            count_half_trees >= bart.forest.min_points_per_decision_node
+        moves = replace(
+            moves,
+            affluence_tree=moves.affluence_tree
+            & (count_half_trees >= bart.forest.min_points_per_decision_node),
         )
-        moves = replace(moves, affluence_tree=affluence_tree)
 
     # copy updated affluence_tree to state
     bart = tree_at(lambda bart: bart.forest.affluence_tree, bart, moves.affluence_tree)
@@ -1787,7 +1793,9 @@ def complete_ratio(moves: Moves, p_nonterminal: Float32[Array, ' 2**d']) -> Move
     Parameters
     ----------
     moves
-        The proposed moves, see `propose_moves`.
+        The proposed moves. Must have already been updated to keep into account
+        the thresholds on the number of datapoints per node, this happens in
+        `accept_moves_parallel_stage`.
     p_nonterminal
         The a priori probability of each node being nonterminal conditional on
         its ancestors, including at the maximum depth where it should be zero.
@@ -1999,7 +2007,7 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
 
 class SeqStageInAllTrees(Module):
     """
-    The inputs to `accept_move_and_sample_leaves` that are the same for all trees.
+    The inputs to `accept_move_and_sample_leaves` that are shared by all trees.
 
     Parameters
     ----------
@@ -2010,8 +2018,6 @@ class SeqStageInAllTrees(Module):
     prec_scale
         The scale of the precision of the error on each datapoint. If None, it
         is assumed to be 1.
-    min_points_per_leaf
-        The minimum number of data points in a leaf node.
     save_ratios
         Whether to save the acceptance ratios.
     prelk
@@ -2038,9 +2044,6 @@ class SeqStageInPerTree(Module):
         The likelihood precision scale in each potential or actual leaf node.
     move
         The proposed move, see `propose_moves`.
-    move_counts
-        The counts of the number of points in the the nodes modified by the
-        moves.
     move_precs
         The likelihood precision scale in each node modified by the moves.
     leaf_indices
@@ -2093,8 +2096,9 @@ def accept_move_and_sample_leaves(
     to_prune : Bool[Array, '']
         Whether, to reflect the acceptance status of the move, the state should
         be updated by pruning the leaves involved in the move.
-    ratios : dict[str, Float32[Array, '']]
-        The acceptance ratios for the moves. Empty if not to be saved.
+    log_lk_ratio : Float32[Array, ''] | None
+        The logarithm of the likelihood ratio for the move. `None` if not to be
+        saved.
     """
     # sum residuals in each leaf, in tree proposed by grow move
     if at.prec_scale is None:
@@ -2108,17 +2112,12 @@ def accept_move_and_sample_leaves(
     # subtract starting tree from function
     resid_tree += pt.prec_tree * pt.leaf_tree
 
-    # get indices of move
-    node = pt.move.node
-    assert node.dtype == jnp.int32
-    left = pt.move.left
-    right = pt.move.right
-
     # sum residuals in parent node modified by move
-    resid_left = resid_tree[left]
-    resid_right = resid_tree[right]
+    resid_left = resid_tree[pt.move.left]
+    resid_right = resid_tree[pt.move.right]
     resid_total = resid_left + resid_right
-    resid_tree = resid_tree.at[node].set(resid_total)
+    assert pt.move.node.dtype == jnp.int32
+    resid_tree = resid_tree.at[pt.move.node].set(resid_total)
 
     # compute acceptance ratio
     log_lk_ratio = compute_likelihood_ratio(
@@ -2133,21 +2132,20 @@ def accept_move_and_sample_leaves(
     acc = pt.move.allowed & (pt.move.logu <= log_ratio)
 
     # compute leaves posterior and sample leaves
-    initial_leaf_tree = pt.leaf_tree
     mean_post = resid_tree * pt.prelf.mean_factor
     leaf_tree = mean_post + pt.prelf.centered_leaves
 
     # copy leaves around such that the leaf indices point to the correct leaf
     to_prune = acc ^ pt.move.grow
     leaf_tree = (
-        leaf_tree.at[jnp.where(to_prune, left, leaf_tree.size)]
-        .set(leaf_tree[node])
-        .at[jnp.where(to_prune, right, leaf_tree.size)]
-        .set(leaf_tree[node])
+        leaf_tree.at[jnp.where(to_prune, pt.move.left, leaf_tree.size)]
+        .set(leaf_tree[pt.move.node])
+        .at[jnp.where(to_prune, pt.move.right, leaf_tree.size)]
+        .set(leaf_tree[pt.move.node])
     )
 
     # replace old tree with new tree in function values
-    resid += (initial_leaf_tree - leaf_tree)[pt.leaf_indices]
+    resid += (pt.leaf_tree - leaf_tree)[pt.leaf_indices]
 
     return resid, leaf_tree, acc, to_prune, log_lk_ratio
 
