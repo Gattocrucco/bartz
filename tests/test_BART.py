@@ -175,6 +175,7 @@ def kw(keys, request):
                 ntree=20,
                 ndpost=100,
                 nskip=50,
+                keepevery=1,  # the default with binary would be 10
                 printevery=50,
                 usequants=True,
                 numcut=10,
@@ -188,6 +189,7 @@ def kw(keys, request):
 
 def test_sequential_guarantee(kw):
     """Check that the way iterations are saved does not influence the result."""
+    kw['keepevery'] = 1
     bart1 = gbart(**kw)
 
     kw['seed'] = random.clone(kw['seed'])
@@ -204,7 +206,7 @@ def test_sequential_guarantee(kw):
 
 
 def test_output_shapes(kw):
-    """Check the output shapes of all the attributes of BART.gbart."""
+    """Check the output shapes of all the array attributes of BART.gbart."""
     bart = gbart(**kw)
 
     ndpost = kw['ndpost']
@@ -212,19 +214,61 @@ def test_output_shapes(kw):
     p, n = kw['x_train'].shape
     _, m = kw['x_test'].shape
 
-    assert bart.yhat_train.shape == (ndpost, n)
-    assert bart.yhat_train_mean.shape == (n,)
-    assert bart.yhat_test.shape == (ndpost, m)
-    assert bart.yhat_test_mean.shape == (m,)
-    if kw['y_train'].dtype == bool:
-        assert bart.sigma is None
-        assert bart.first_sigma is None
-    else:
-        assert bart.sigma.shape == (ndpost,)
-        assert bart.first_sigma.shape == (nskip,)
+    binary = kw['y_train'].dtype == bool
+
     assert bart.offset.shape == ()
+    if binary:
+        assert bart.prob_test.shape == (ndpost, m)
+        assert bart.prob_test_mean.shape == (m,)
+        assert bart.prob_train.shape == (ndpost, n)
+        assert bart.prob_train_mean.shape == (n,)
+        assert bart.sigma is None
+        assert bart.sigma_mean is None
+    else:
+        assert bart.prob_test is None
+        assert bart.prob_test_mean is None
+        assert bart.prob_train is None
+        assert bart.prob_train_mean is None
+        assert bart.sigma.shape == (nskip + ndpost,)
+        assert bart.sigma_mean.shape == ()
     assert bart.varcount.shape == (ndpost, p)
     assert bart.varcount_mean.shape == (p,)
+    assert bart.yhat_test.shape == (ndpost, m)
+    if binary:
+        assert bart.yhat_test_mean is None
+    else:
+        assert bart.yhat_test_mean.shape == (m,)
+    assert bart.yhat_train.shape == (ndpost, n)
+    if binary:
+        assert bart.yhat_train_mean is None
+    else:
+        assert bart.yhat_train_mean.shape == (n,)
+
+
+def test_output_types(kw):
+    """Check the output types of all the attributes of BART.gbart."""
+    bart = gbart(**kw)
+
+    binary = kw['y_train'].dtype == bool
+
+    assert bart.offset.dtype == jnp.float32
+    assert isinstance(bart.ndpost, int)
+    if binary:
+        assert bart.prob_test.dtype == jnp.float32
+        assert bart.prob_test_mean.dtype == jnp.float32
+        assert bart.prob_train.dtype == jnp.float32
+        assert bart.prob_train_mean.dtype == jnp.float32
+    else:
+        assert bart.sigma.dtype == jnp.float32
+        assert bart.sigma_mean.dtype == jnp.float32
+    assert bart.varcount.dtype == jnp.int32
+    assert bart.varcount_mean.dtype == jnp.float32
+    assert bart.yhat_test.dtype == jnp.float32
+    if not binary:
+        assert bart.yhat_test_mean.dtype == jnp.float32
+    assert bart.yhat_train.dtype == jnp.float32
+    if not binary:
+        assert bart.yhat_train_mean.dtype == jnp.float32
 
 
 def test_predict(kw):
@@ -269,8 +313,14 @@ def test_scale_shift(kw):
     assert_close_matrices(
         bart1.yhat_train_mean, (bart2.yhat_train_mean - offset) / scale, rtol=1e-5
     )
+    assert_close_matrices(
+        bart1.yhat_test, (bart2.yhat_test - offset) / scale, rtol=1e-5
+    )
+    assert_close_matrices(
+        bart1.yhat_test_mean, (bart2.yhat_test_mean - offset) / scale, rtol=1e-5
+    )
     assert_close_matrices(bart1.sigma, bart2.sigma / scale, rtol=1e-5)
-    assert_close_matrices(bart1.first_sigma, bart2.first_sigma / scale, rtol=1e-6)
+    assert_allclose(bart1.sigma_mean, bart2.sigma_mean / scale, rtol=1e-6)
 
 
 def test_min_points_per_decision_node(kw):
@@ -401,8 +451,6 @@ def test_few_datapoints(kw):
 def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
     """Convert bartz keyword arguments to R BART keyword arguments."""
     kw_BART = dict(**kw, rm_const=False, mc_cores=1)
-    # TODO change the bartz default to keepevery=10 if probit!  # noqa: FIX002
-    kw_BART['keepevery'] = kw_BART.get('keepevery', 1)
     kw_BART.pop('init_kw')
     kw_BART.pop('maxdepth', None)
     for arg in 'w', 'printevery':
@@ -424,7 +472,7 @@ def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
 def test_rbart(kw, keys):
     """Check bartz.BART gives the same results as R package BART."""
     p, n = kw['x_train'].shape
-    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000)
+    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1)
     # R BART can't change the min_points_per_leaf per leaf setting
     kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
 
@@ -440,36 +488,80 @@ def test_rbart(kw, keys):
     trees = rbart.treedraws['trees']
     trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
 
-    varcount = compute_varcount(meta.numcut.size, trace)
-    assert jnp.all(varcount == rbart.varcount)
-
-    yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
-    assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
-
-    Xt = bart._bin_predictors(kw['x_test'], bart._splits)
-    yhat_test = evaluate_trace(trace, Xt)
-    assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
-
+    # check the trees are valid
     assert jnp.all(meta.numcut <= bart._mcmc_state.forest.max_split)
     bad = check_trace(trace, meta.numcut)
     num_bad = jnp.count_nonzero(bad)
     assert num_bad == 0
 
-    # compare results
+    # check varcount
+    varcount = compute_varcount(meta.numcut.size, trace)
+    assert jnp.all(varcount == rbart.varcount)
 
+    # chech yhat_train
+    yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
+    assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
+
+    # check yhat_test
+    Xt = bart._bin_predictors(kw['x_test'], bart._splits)
+    yhat_test = evaluate_trace(trace, Xt)
+    assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
+
+    if kw['y_train'].dtype == bool:
+        # check prob_train
+        prob_train = ndtr(yhat_train)
+        assert_close_matrices(prob_train, rbart.prob_train, rtol=1e-7)
+
+        # check prob_test
+        prob_test = ndtr(yhat_test)
+        assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
+
+    # compare results of bartz and BART
+
+    # check offset
     assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
     # I would check sigest as well, but it's not in the R object despite what
     # the documentation says
 
+    # check yhat_train
     rhat_yhat_train = multivariate_rhat(jnp.stack([bart.yhat_train, rbart.yhat_train]))
     assert rhat_yhat_train < 1.2
 
-    if kw['y_train'].dtype != bool:
+    # check yhat_test
+    rhat_yhat_test = multivariate_rhat(jnp.stack([bart.yhat_test, rbart.yhat_test]))
+    assert rhat_yhat_test < 1.2
+
+    if kw['y_train'].dtype == bool:  # binary regression
+        # check prob_train
+        rhat_prob_train = multivariate_rhat(
+            jnp.stack([bart.prob_train, rbart.prob_train])
+        )
+        assert rhat_prob_train < 1.1
+
+        # check prob_test
+        rhat_prob_test = multivariate_rhat(jnp.stack([bart.prob_test, rbart.prob_test]))
+        assert rhat_prob_test < 1.1
+
+    else:  # continuous regression
+        # check yhat_train_mean
+        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.1)
+
+        # check yhat_test_mean
+        assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.3)
+        # 0.1 for [1], 0.3 for [2]
+
+        # check sigma
         rhat_sigma = multivariate_rhat(
-            jnp.stack([bart.sigma[:, None], rbart.sigma[-rbart.ndpost :, None]])
+            jnp.stack(
+                [bart.sigma[-bart.ndpost :, None], rbart.sigma[-rbart.ndpost :, None]]
+            )
         )
         assert rhat_sigma < 1.01
 
+        # check sigma_mean
+        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.01)
+
+    # check varcount
     if p < n:
         # skip if p is large because it would be difficult for the MCMC to get
         # stuff about predictors right

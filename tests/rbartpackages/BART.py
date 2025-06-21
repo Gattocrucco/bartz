@@ -70,7 +70,7 @@ class mc_gbart(RObjectBase):
     varcount_mean: Float64[ndarray, ' p']
     varprob: Float64[ndarray, 'ndpost p']
     varprob_mean: Float64[ndarray, ' p']
-    yhat_test: Float64[ndarray, 'ndpost m']
+    yhat_test: Float64[ndarray, 'ndpost m'] | None = None
     yhat_test_mean: Float64[ndarray, ' m'] | None = None
     yhat_train: Float64[ndarray, 'ndpost n']
     yhat_train_mean: Float64[ndarray, ' n'] | None = None

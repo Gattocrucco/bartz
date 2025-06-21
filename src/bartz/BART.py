@@ -31,6 +31,7 @@ from typing import Any, Literal, Protocol
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.special import ndtr
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, Shaped, UInt
 from numpy import ndarray
 
@@ -156,7 +157,8 @@ class gbart:
         `sigest`, so either the weights should be O(1), or `sigest` should be
         specified by the user.
     ntree
-        The number of trees used to represent the latent mean function.
+        The number of trees used to represent the latent mean function. By
+        default 200 for continuous regression and 50 for binary regression.
     numcut
         If `usequants` is `False`: the exact number of cutpoints used to bin the
         predictors, ranging between the minimum and maximum observed values
@@ -178,7 +180,8 @@ class gbart:
     nskip
         The number of initial MCMC samples to discard as burn-in.
     keepevery
-        The thinning factor for the MCMC samples, after burn-in.
+        The thinning factor for the MCMC samples, after burn-in. By default, 1
+        for continuous regression and 10 for binary regression.
     printevery
         The number of iterations (including thinned-away ones) between each log
         line. Set to `None` to disable logging.
@@ -200,18 +203,14 @@ class gbart:
 
     Attributes
     ----------
-    yhat_test : Float32[Array, 'ndpost m'] | None
-        The conditional posterior mean at `x_test` for each MCMC iteration.
-    yhat_test_mean : Float32[Array, 'm'] | None
-        The marginal posterior mean at `x_test`.
-    sigma : Float32[Array, 'ndpost'] | None
-        The standard deviation of the error.
-    first_sigma : Float32[Array, 'nskip'] | None
-        The standard deviation of the error in the burn-in phase.
     offset : Float32[Array, '']
         The prior mean of the latent mean function.
     sigest : Float32[Array, ''] | None
         The estimated standard deviation of the error used to set `lamda`.
+    sigma : Float32[Array, 'nskip+ndpost'] | None
+        The standard deviation of the error, including burn-in samples.
+    yhat_test : Float32[Array, 'ndpost m'] | None
+        The conditional posterior mean at `x_test` for each MCMC iteration.
 
     Notes
     -----
@@ -232,16 +231,16 @@ class gbart:
 
     """
 
-    yhat_test: Float32[Array, 'ndpost m'] | None = None
-    yhat_test_mean: Float32[Array, ' m'] | None = None
-    sigma: Float32[Array, ' ndpost'] | None
-    first_sigma: Float32[Array, ' nskip'] | None
+    ndpost: int
     offset: Float32[Array, '']
-    sigest: Float32[Array, ''] | None
+    sigma: Float32[Array, ' nskip+ndpost'] | None = None
+    sigest: Float32[Array, ''] | None = None
+    yhat_test: Float32[Array, 'ndpost m'] | None = None
 
-    _mcmc_state: mcmcstep.State
     _main_trace: mcmcloop.MainTrace
+    _mcmc_state: mcmcstep.State
     _splits: Real[Array, 'p max_num_splits']
+    _x_train_fmt: Any
 
     def __init__(
         self,
@@ -263,17 +262,18 @@ class gbart:
         tau_num: FloatLike | None = None,
         offset: FloatLike | None = None,
         w: Float[Array, ' n'] | None = None,
-        ntree: int = 200,
+        ntree: int | None = None,
         numcut: int = 100,
         ndpost: int = 1000,
         nskip: int = 100,
-        keepevery: int = 1,
+        keepevery: int | None = None,
         printevery: int | None = 100,
         seed: int | Key[Array, ''] = 0,
         maxdepth: int = 6,
         init_kw: dict | None = None,
         run_mcmc_kw: dict | None = None,
     ):
+        # check data and put it in the right format
         x_train, x_train_fmt = self._process_predictor_input(x_train)
         y_train, _ = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
@@ -281,17 +281,28 @@ class gbart:
             w, _ = self._process_response_input(w)
             self._check_same_length(x_train, w)
 
+        # check data types are correct for continuous/binary regression
         self._check_type_settings(y_train, type, w)
         # from here onwards, the type is determined by y_train.dtype == bool
+
+        # set defaults that depend on type of regression
+        if ntree is None:
+            ntree = 50 if y_train.dtype == bool else 200
+        if keepevery is None:
+            keepevery = 10 if y_train.dtype == bool else 1
+
+        # process "standardization" settings
         offset = self._process_offset_settings(y_train, offset)
         sigma_mu = self._process_leaf_sdev_settings(y_train, k, ntree, tau_num)
         lamda, sigest = self._process_error_variance_settings(
             x_train, y_train, sigest, sigdf, sigquant, lamda
         )
 
+        # determine splits
         splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
         x_train = self._bin_predictors(x_train, splits)
 
+        # setup and run mcmc
         initial_state = self._setup_mcmc(
             x_train,
             y_train,
@@ -312,31 +323,61 @@ class gbart:
             initial_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
         )
 
+        # set public attributes
         self.offset = final_state.offset  # from the state because of buffer donation
+        self.ndpost = ndpost
         self.sigest = sigest
-        self.sigma = self._extract_sigma(main_trace)
-        self.first_sigma = self._extract_sigma(burnin_trace)
+        self.sigma = self._extract_sigma(burnin_trace, main_trace)
 
-        self._x_train_fmt = x_train_fmt
-        self._splits = splits
+        # set private attributes
         self._main_trace = main_trace
         self._mcmc_state = final_state
+        self._splits = splits
+        self._x_train_fmt = x_train_fmt
 
+        # predict at test points
         if x_test is not None:
-            yhat_test = self.predict(x_test)
-            self.yhat_test = yhat_test
-            self.yhat_test_mean = yhat_test.mean(axis=0)
+            self.yhat_test = self.predict(x_test)
 
     @cached_property
-    def yhat_train(self) -> Float32[Array, 'ndpost n']:
-        """The conditional posterior mean at `x_train` for each MCMC iteration."""
-        x_train = self._mcmc_state.X
-        return self._predict(x_train)
+    def prob_test(self) -> Float32[Array, 'ndpost m'] | None:
+        """The posterior probability of y being True at `x_test` for each MCMC iteration."""
+        if self.yhat_test is None or self._mcmc_state.y.dtype != bool:
+            return None
+        else:
+            return ndtr(self.yhat_test)
 
     @cached_property
-    def yhat_train_mean(self) -> Float32[Array, ' n']:
-        """The marginal posterior mean at `x_train`."""
-        return self.yhat_train.mean(axis=0)
+    def prob_test_mean(self) -> Float32[Array, ' m'] | None:
+        """The marginal posterior probability of y being True at `x_test`."""
+        if self.prob_test is None:
+            return None
+        else:
+            return self.prob_test.mean(axis=0)
+
+    @cached_property
+    def prob_train(self) -> Float32[Array, 'ndpost n'] | None:
+        """The posterior probability of y being True at `x_train` for each MCMC iteration."""
+        if self._mcmc_state.y.dtype == bool:
+            return ndtr(self.yhat_train)
+        else:
+            return None
+
+    @cached_property
+    def prob_train_mean(self) -> Float32[Array, ' n'] | None:
+        """The marginal posterior probability of y being True at `x_train`."""
+        if self.prob_train is None:
+            return None
+        else:
+            return self.prob_train.mean(axis=0)
+
+    @cached_property
+    def sigma_mean(self) -> Float32[Array, ''] | None:
+        """The mean of `sigma`, only over the post-burnin samples."""
+        if self.sigma is None:
+            return None
+        else:
+            return self.sigma[len(self.sigma) - self.ndpost :].mean(axis=0)
 
     @cached_property
     def varcount(self) -> Int32[Array, 'ndpost p']:
@@ -349,6 +390,36 @@ class gbart:
     def varcount_mean(self) -> Float32[Array, ' p']:
         """Average of `varcount` across MCMC iterations."""
         return self.varcount.mean(axis=0)
+
+    @cached_property
+    def yhat_test_mean(self) -> Float32[Array, ' m'] | None:
+        """The marginal posterior mean at `x_test`.
+
+        Not defined with binary regression because it's error-prone, typically
+        the right thing to consider would be `prob_test_mean`.
+        """
+        if self.yhat_test is None or self._mcmc_state.y.dtype == bool:
+            return None
+        else:
+            return self.yhat_test.mean(axis=0)
+
+    @cached_property
+    def yhat_train(self) -> Float32[Array, 'ndpost n']:
+        """The conditional posterior mean at `x_train` for each MCMC iteration."""
+        x_train = self._mcmc_state.X
+        return self._predict(x_train)
+
+    @cached_property
+    def yhat_train_mean(self) -> Float32[Array, ' n'] | None:
+        """The marginal posterior mean at `x_train`.
+
+        Not defined with binary regression because it's error-prone, typically
+        the right thing to consider would be `prob_train_mean`.
+        """
+        if self._mcmc_state.y.dtype == bool:
+            return None
+        else:
+            return self.yhat_train.mean(axis=0)
 
     def predict(
         self, x_test: Real[Array, 'p m'] | DataFrame
@@ -378,7 +449,7 @@ class gbart:
         return self._predict(x_test)
 
     @staticmethod
-    def _process_predictor_input(x):
+    def _process_predictor_input(x) -> tuple[Shaped[Array, 'p n'], Any]:
         if hasattr(x, 'columns'):
             fmt = dict(kind='dataframe', columns=x.columns)
             x = x.to_numpy().T
@@ -606,12 +677,13 @@ class gbart:
 
     @staticmethod
     def _extract_sigma(
-        trace: mcmcloop.MainTrace,
+        burnin_trace: mcmcloop.BurninTrace, main_trace: mcmcloop.MainTrace
     ) -> Float32[Array, ' trace_length'] | None:
-        if trace.sigma2 is None:
+        if burnin_trace.sigma2 is None:
             return None
         else:
-            return jnp.sqrt(trace.sigma2)
+            assert main_trace.sigma2 is not None
+            return jnp.sqrt(jnp.concatenate([burnin_trace.sigma2, main_trace.sigma2]))
 
     def _predict(self, x):
         return mcmcloop.evaluate_trace(self._main_trace, x)
