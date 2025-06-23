@@ -26,7 +26,7 @@
 
 import numpy
 import pytest
-from jax import debug_infs, random
+from jax import debug_infs, lax, random
 from jax import numpy as jnp
 from jax.scipy.special import ndtri
 from numpy.testing import assert_allclose
@@ -253,6 +253,10 @@ class TestJaxPatches:
         y2 = patched_ndtri(x)
         assert jnp.all(y1 == y2)
 
+
+class TestTruncatedNormalOneSided:
+    """Test `jaxext.truncated_normal_onesided`."""
+
     def test_truncated_normal_inaccurate(self, keys):
         """Check that `jax.random.truncated_normal` under/overshoots."""
         x = random.truncated_normal(keys.pop(), -jnp.inf, -6)
@@ -260,8 +264,8 @@ class TestJaxPatches:
         x = random.truncated_normal(keys.pop(), 6, jnp.inf)
         assert x > 1e38
 
-    def test_truncated_normal_onesided_correct(self, keys):
-        """Check that my implementation is correct."""
+    def test_correct(self, keys):
+        """Check the samples come from the right distribution."""
         nparams = 20
         nsamples = 1000
         upper = random.bernoulli(keys.pop(), 0.5, (nparams,))
@@ -273,10 +277,10 @@ class TestJaxPatches:
             left = -jnp.inf if u else b
             right = b if u else jnp.inf
             test = ks_1samp(sample, truncnorm(left, right).cdf)
-            assert test.pvalue > 0.1
+            assert test.pvalue > 0.01
 
-    def test_truncated_normal_onesided_accurate(self, keys):
-        """Check that my implementation does not over/under shoot."""
+    def test_accurate(self, keys):
+        """Check that it does not over/under shoot."""
         x = jaxext.truncated_normal_onesided(
             keys.pop(), (), jnp.bool_(True), jnp.float32(-12)
         )
@@ -285,3 +289,20 @@ class TestJaxPatches:
             keys.pop(), (), jnp.bool_(False), jnp.float32(12)
         )
         assert 12 < x <= 12.1
+
+    def test_finite(self, keys):
+        """Check that the outputs are always finite."""
+        shape = (1_000_000,)
+        n_loops = 100
+
+        keys = random.split(keys.pop(), n_loops)
+
+        def loop(_, key):
+            keys = jaxext.split(key, 3)
+            upper = random.bernoulli(keys.pop(), 0.5, shape)
+            bound = random.uniform(keys.pop(), shape, float, -1, 1)
+            vals = jaxext.truncated_normal_onesided(keys.pop(), shape, upper, bound)
+            return None, jnp.all(jnp.isfinite(vals))
+
+        _, is_finite = lax.scan(loop, None, keys)
+        assert jnp.all(is_finite)

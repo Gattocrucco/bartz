@@ -172,17 +172,17 @@ def truncated_normal_onesided(
     Parameters
     ----------
     key
-        JAX random key
+        JAX random key.
     shape
-        Shape of output array, broadcasted with other inputs
+        Shape of output array, broadcasted with other inputs.
     upper
-        True for (-∞, bound), False for (bound, ∞)
+        True for (-∞, bound], False for [bound, ∞).
     bound
-        The truncation boundary
+        The truncation boundary.
 
     Returns
     -------
-    Array of samples from the truncated normal distribution
+    Array of samples from the truncated normal distribution.
     """
     # Pseudocode:
     # | if upper:
@@ -206,8 +206,8 @@ def truncated_normal_onesided(
     scale = jnp.where(upper, ndtr_bound, ndtr_neg_bound)
     shift = jnp.where(upper, ndtr_neg_bound, ndtr_bound)
     u = random.uniform(key, shape)
-    left_u = scale * u  # ~ uniform in [0, ndtr(±bound))
-    right_u = shift + scale * (1 - u)  # ~ uniform in (ndtr(∓bound), 1]
+    left_u = scale * (1 - u)  # ~ uniform in (0, ndtr(±bound)]
+    right_u = shift + scale * u  # ~ uniform in [ndtr(∓bound), 1)
     truncated_u = jnp.where(upper ^ bound_pos, left_u, right_u)
     truncated_norm = ndtri(truncated_u)
     return jnp.where(bound_pos, -truncated_norm, truncated_norm)
