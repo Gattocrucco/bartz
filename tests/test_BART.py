@@ -909,7 +909,6 @@ def call_with_timed_interrupt(
 
 
 @pytest.mark.timeout(6)
-@pytest.mark.flaky
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     if kw['printevery'] is None:

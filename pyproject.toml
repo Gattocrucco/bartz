@@ -67,7 +67,6 @@ only-local = [
 ci = [
     "asv>=0.6.4",
     "coverage>=7.8.0",
-    "flaky>=3.8.1",
     "myst-parser>=4.0.1",
     "numpydoc>=1.8.0",
     "packaging>=25.0",
