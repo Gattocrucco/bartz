@@ -24,8 +24,9 @@
 
 """Wrapper for the R package BART."""
 
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
+import numpy as np
 from jaxtyping import AbstractDtype, Bool, Float64, Int32
 from numpy import ndarray
 
@@ -45,6 +46,16 @@ class String(AbstractDtype):
     dtypes = r'<U\d+'
 
 
+class ProcTime(NamedTuple):
+    """Python representation of the output of R's `proc.time`."""
+
+    user_self: float
+    sys_self: float
+    elapsed: float
+    user_child: float
+    sys_child: float
+
+
 class mc_gbart(RObjectBase):
     """Using the `x_test` argument may create problems, try not passing it."""
 
@@ -57,8 +68,8 @@ class mc_gbart(RObjectBase):
     prob_test_mean: None | Float64[ndarray, ' m'] = None
     prob_train: None | Float64[ndarray, 'ndpost/mc_cores n'] = None
     prob_train_mean: None | Float64[ndarray, ' n'] = None
-    proc_time: Float64[ndarray, '5']  # what's this?
-    rm_const: Int32[ndarray, ' <=p']  # what's this? it seems to always be an arange
+    proc_time: ProcTime
+    rm_const: Int32[ndarray, '<=p']
     sigma: (
         Float64[ndarray, ' nskip+ndpost']
         | Float64[ndarray, 'nskip+ndpost/mc_cores mc_cores']
@@ -81,6 +92,17 @@ class mc_gbart(RObjectBase):
         # fix up attributes
         self.ndpost = self.ndpost.astype(int).item()
         self.offset = self.offset.item()
+        self.proc_time = ProcTime(*map(float, self.proc_time))
+        if np.all(self.rm_const < 0):
+            _, p = self.varcount.shape
+            rm_const = np.ones(p, bool)
+            rm_const[-self.rm_const - 1] = False
+            self.rm_const = np.arange(p, dtype=np.int32)[rm_const]
+        elif np.all(self.rm_const > 0):
+            self.rm_const -= 1
+        else:
+            msg = 'failed to parse rm.const because indices change sign'
+            raise ValueError(msg)
         if self.sigma_mean is not None:
             self.sigma_mean = self.sigma_mean.item()
         self.treedraws = {
