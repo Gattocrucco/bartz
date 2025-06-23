@@ -662,14 +662,11 @@ class gbart:
         else:
             key = jax.random.key(seed)
 
-        kw = dict(
-            n_burn=nskip,
-            n_skip=keepevery,
-            inner_loop_length=printevery,
-            allow_overflow=True,
-        )
+        kw = dict(n_burn=nskip, n_skip=keepevery, inner_loop_length=printevery)
         if printevery is not None:
-            kw.update(mcmcloop.make_print_callbacks())
+            kw.update(
+                mcmcloop.make_print_callback(None if printevery == 1 else 1, printevery)
+            )
         if run_mcmc_kw is not None:
             kw.update(run_mcmc_kw)
 
