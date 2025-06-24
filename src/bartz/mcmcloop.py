@@ -327,27 +327,34 @@ def _run_mcmc_inner_loop(
                 bart, callback_state = rt
                 carry = replace(carry, bart=bart, callback_state=callback_state)
 
-        def save_to_burnin_trace(trace: PyTree) -> PyTree:
-            return pytree_at_set(trace, carry.i_total, burnin_extractor(carry.bart))
+        def save_to_burnin_trace(
+            burnin_trace: PyTree, main_trace: PyTree
+        ) -> tuple[PyTree, PyTree]:
+            return pytree_at_set(
+                burnin_trace, carry.i_total, burnin_extractor(carry.bart)
+            ), main_trace
 
-        def save_to_main_trace(trace: PyTree) -> PyTree:
+        def save_to_main_trace(
+            burnin_trace: PyTree, main_trace: PyTree
+        ) -> tuple[PyTree, PyTree]:
             idx = (carry.i_total - n_burn) // n_skip
-            return pytree_at_set(trace, idx, main_extractor(carry.bart))
+            return burnin_trace, pytree_at_set(
+                main_trace, idx, main_extractor(carry.bart)
+            )
 
-        def save_noop(trace: PyTree) -> PyTree:
-            return trace
-
-        carry = replace(
-            carry,
-            burnin_trace=lax.cond(
-                burnin, save_to_burnin_trace, save_noop, carry.burnin_trace
-            ),
-            main_trace=lax.cond(
-                burnin, save_noop, save_to_main_trace, carry.main_trace
-            ),
+        burnin_trace, main_trace = lax.cond(
+            burnin,
+            save_to_burnin_trace,
+            save_to_main_trace,
+            carry.burnin_trace,
+            carry.main_trace,
         )
-
-        return replace(carry, i_total=carry.i_total + 1)
+        return replace(
+            carry,
+            i_total=carry.i_total + 1,
+            burnin_trace=burnin_trace,
+            main_trace=main_trace,
+        )
 
     def loop_noop(carry: _Carry) -> _Carry:
         """Loop body to run if i_total >= n_iters; it does nothing."""
