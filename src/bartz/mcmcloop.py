@@ -251,7 +251,12 @@ def run_mcmc(
     n_iters = n_burn + n_skip * n_save
     if inner_loop_length is None:
         inner_loop_length = n_iters
-    n_outer = n_iters // inner_loop_length + bool(n_iters % inner_loop_length)
+    if inner_loop_length:
+        n_outer = n_iters // inner_loop_length + bool(n_iters % inner_loop_length)
+    else:
+        n_outer = 1
+        # setting to 0 would make for a clean noop, but it's useful to keep the
+        # same code path for benchmarking and testing
 
     carry = _Carry(bart, jnp.int32(0), key, burnin_trace, main_trace, callback_state)
     for i_outer in range(n_outer):

@@ -24,9 +24,13 @@
 
 """Test `bartz.mcmcloop`."""
 
+from functools import partial
+
 from equinox import filter_jit
 from jax import numpy as jnp
 from jax import vmap
+from jax.tree import map_with_path
+from jax.tree_util import tree_map
 from jaxtyping import Array, Float32, UInt8
 from numpy.testing import assert_array_equal
 
@@ -71,14 +75,32 @@ def init(p: int, n: int, ntree: int, **kwargs):
     )
 
 
-def test_run_mcmc_final_state_overflow(keys):
-    """Check that the final state is the one in the trace even if there's overflow."""
-    initial_state = init(10, 100, 20)
-    final_state, _, main_trace = mcmcloop.run_mcmc(
-        keys.pop(), initial_state, 10, inner_loop_length=9
-    )
+class TestRunMcmc:
+    """Test `mcmcloop.run_mcmc`."""
 
-    assert_array_equal(final_state.forest.leaf_tree, main_trace.leaf_tree[-1])
-    assert_array_equal(final_state.forest.var_tree, main_trace.var_tree[-1])
-    assert_array_equal(final_state.forest.split_tree, main_trace.split_tree[-1])
-    assert_array_equal(final_state.sigma2, main_trace.sigma2[-1])
+    def test_final_state_overflow(self, keys):
+        """Check that the final state is the one in the trace even if there's overflow."""
+        initial_state = init(10, 100, 20)
+        final_state, _, main_trace = mcmcloop.run_mcmc(
+            keys.pop(), initial_state, 10, inner_loop_length=9
+        )
+
+        assert_array_equal(final_state.forest.leaf_tree, main_trace.leaf_tree[-1])
+        assert_array_equal(final_state.forest.var_tree, main_trace.var_tree[-1])
+        assert_array_equal(final_state.forest.split_tree, main_trace.split_tree[-1])
+        assert_array_equal(final_state.sigma2, main_trace.sigma2[-1])
+
+    def test_zero_iterations(self, keys):
+        """Check there's no error if the loop does not run."""
+        initial_state = init(10, 100, 20)
+        final_state, burnin_trace, main_trace = mcmcloop.run_mcmc(
+            keys.pop(), initial_state, 0, n_burn=0
+        )
+
+        tree_map(partial(assert_array_equal, strict=True), initial_state, final_state)
+
+        def assert_empty_trace(path, x):  # noqa: ARG001, for debugging
+            assert x.shape[0] == 0
+
+        map_with_path(assert_empty_trace, burnin_trace)
+        map_with_path(assert_empty_trace, main_trace)
