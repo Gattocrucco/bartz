@@ -2346,6 +2346,8 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
     beta = bart.sigma2_beta + norm2 / 2
 
     sample = random.gamma(key, alpha)
+    # random.gamma seems to be slow at compiling, maybe cdf inversion would
+    # be better, but it's not implemented in jax
     return replace(bart, sigma2=beta / sample)
 
 

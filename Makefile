@@ -186,6 +186,10 @@ benchmark-server: benchmark-site
 benchmark-current: check-committed
 	$(UV_RUN) asv run --show-stderr main^! $(ARGS)
 
+.PHONY: benchmark-quick
+benchmark-quick:
+	$(UV_RUN) asv run --python=same --quick --dry-run --show-stderr $(ARGS)
+
 .PHONY: python
 python:
 	$(UV_RUN) python $(ARGS)

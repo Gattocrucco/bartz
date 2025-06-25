@@ -190,6 +190,7 @@ ignore = [
     "PLR0913",  # Too many arguments in function definition. Maybe I should do something about this?
     "PLR2004",  # Magic value used in comparison, consider replacing `*` with a constant variable
     "RET505",  # Unnecessary `{branch}` after `return` statement. I ignore this because I like to keep branches for readability.
+    "RET506",  # Unnecessary `else` after `raise` statement. I ignore this because I like to keep branches for readability.
     "S101",  # Use of `assert` detected. Too annoying.
     "S603",  # `subprocess` call: check for execution of untrusted input. Too many false positives.
     "SIM108",  # SIM108 Use ternary operator `*` instead of `if`-`else`-block, I find blocks more readable
@@ -197,18 +198,16 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"{config/*,benchmarks/*,docs/*,tests/__init__.py}" = [
+"{config/*,docs/*}" = [
     "D100",  # Missing docstring in public module
     "D101",  # Missing docstring in public class
     "D102",  # Missing docstring in public method
     "D103",  # Missing docstring in public function
     "D104",  # Missing docstring in public package
+    "INP001",  # File * is part of an implicit namespace package. Add an `__init__.py`.
 ]
 "src/bartz/_version.py" = [
     "CPY001",  # Missing copyright notice at top of file
-]
-"{config/*,docs/*}" = [
-    "INP001",  # File * is part of an implicit namespace package. Add an `__init__.py`.
 ]
 "{config/*,docs/*,tests/*}" = [
     "T201",  # `print` found

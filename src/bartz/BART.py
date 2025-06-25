@@ -31,6 +31,7 @@ from typing import Any, Literal, Protocol
 
 import jax
 import jax.numpy as jnp
+from equinox import Module, field
 from jax.scipy.special import ndtr
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, Shaped, UInt
 from numpy import ndarray
@@ -74,7 +75,7 @@ class Series(Protocol):
         ...
 
 
-class gbart:
+class gbart(Module):
     """
     Nonparametric regression with Bayesian Additive Regression Trees (BART).
 
@@ -231,16 +232,16 @@ class gbart:
 
     """
 
-    ndpost: int
+    _main_trace: mcmcloop.MainTrace
+    _mcmc_state: mcmcstep.State
+    _splits: Real[Array, 'p max_num_splits']
+    _x_train_fmt: Any = field(static=True)
+
+    ndpost: int = field(static=True)
     offset: Float32[Array, '']
     sigma: Float32[Array, ' nskip+ndpost'] | None = None
     sigest: Float32[Array, ''] | None = None
     yhat_test: Float32[Array, 'ndpost m'] | None = None
-
-    _main_trace: mcmcloop.MainTrace
-    _mcmc_state: mcmcstep.State
-    _splits: Real[Array, 'p max_num_splits']
-    _x_train_fmt: Any
 
     def __init__(
         self,
