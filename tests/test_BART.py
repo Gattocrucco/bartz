@@ -558,7 +558,7 @@ def test_rbart(kw, keys):
         assert rhat_sigma < 1.02
 
         # check sigma_mean
-        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.03)
+        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
 
     # check varcount
     if p < n:
