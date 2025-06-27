@@ -1,17 +1,102 @@
 {
-    "benchmarks.TimeCompilation.time_run_mcmc_compile": {
-        "code": "class TimeCompilation:\n    def time_run_mcmc_compile(self):\n        @functools.partial(\n            jax.jit, static_argnames=('n_save', 'n_burn', 'n_skip', 'callback')\n        )\n        def f(**kw):\n            return bartz.mcmcloop.run_mcmc(**kw)\n    \n        f.lower(**self.kw).compile()\n\n    def setup(self):\n        key = random.key(202504251557)\n        keys = list(random.split(key, 3))\n    \n        # generate simulated data\n        p = 2\n        n = 30\n        sigma = 0.1\n        T = 2\n        X = random.uniform(keys.pop(), (p, n), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (n,))\n    \n        # dry run the interface to generate an initial bart state conveniently\n        if inspect.ismodule(bartz.BART):\n            gbart = bartz.BART.gbart\n        else:\n            gbart = bartz.BART  # pre v0.2.0\n        bart = gbart(X, y, ndpost=0, nskip=0)\n        self.kw = dict(\n            key=keys.pop(),\n            bart=bart._mcmc_state,\n            n_save=1,\n            n_burn=1,\n            n_skip=1,\n            callback=bartz.mcmcloop.make_simple_print_callback(100),\n        )",
-        "min_run_count": 2,
-        "name": "benchmarks.TimeCompilation.time_run_mcmc_compile",
-        "number": 0,
+    "rmse.EvalGbart.track_rmse": {
+        "code": "class EvalGbart:\n    def track_rmse(self) -> float:\n        \"\"\"Return the RMSE for predictions on a test set.\"\"\"\n        key = random.key(2025_06_26_21_02)\n        data = make_data(key, 100, 1000, 20)\n        with redirect_stdout(StringIO()):\n            bart = gbart(\n                data.X_train,\n                data.y_train,\n                x_test=data.X_test,\n                nskip=1000,\n                ndpost=1000,\n                seed=key,\n            )\n        return jnp.sqrt(jnp.mean(jnp.square(bart.yhat_test_mean - data.mu_test))).item()",
+        "name": "rmse.EvalGbart.track_rmse",
         "param_names": [],
         "params": [],
+        "timeout": 30.0,
+        "type": "track",
+        "unit": "latent_sdev",
+        "version": "afd40ad3255f218a76e6833332dc91afa0d19ac0f6daf1b7b9c75664c4586d28"
+    },
+    "speed.TimeGbart.time_gbart": {
+        "code": "class TimeGbart:\n    def time_gbart(self, *_):\n        \"\"\"Time instantiating the class.\"\"\"\n        with redirect_stdout(StringIO()):\n            bart = gbart(**self.kw)\n            block_until_ready((bart._mcmc_state, bart._main_trace))\n\n    def setup(self, niters: int, cache: Cache):\n        \"\"\"Prepare the arguments and run once to warm-up.\"\"\"\n        key = random.key(2025_06_24_14_55)\n        keys = list(random.split(key, 3))\n    \n        # generate simulated data\n        sigma = 0.1\n        T = 2\n        X = random.uniform(keys.pop(), (P, N), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (N,))\n    \n        # arguments\n        self.kw = dict(\n            x_train=X, y_train=y, nskip=niters // 2, ndpost=niters // 2, seed=keys.pop()\n        )\n    \n        # decide how much to cold-start\n        match cache:\n            case 'cold':\n                clear_caches()\n            case 'warm':\n                self.time_gbart()",
+        "min_run_count": 2,
+        "name": "speed.TimeGbart.time_gbart",
+        "number": 1,
+        "param_names": [
+            "niters",
+            "cache"
+        ],
+        "params": [
+            [
+                "0",
+                "10"
+            ],
+            [
+                "'cold'",
+                "'warm'"
+            ]
+        ],
         "repeat": 0,
         "rounds": 2,
         "sample_time": 0.01,
+        "timeout": 30.0,
         "type": "time",
         "unit": "seconds",
-        "version": "178126330ad47b49b4f47bbadf1c6279c736bd62f9b0afc9bafe70661aac85cc",
+        "version": "1fe5943941f41dee62eb4fb1c3edc876b9b67f248bf23df9a206f775040e3b18",
+        "warmup_time": 0.0
+    },
+    "speed.TimeRunMcmc.time_run_mcmc": {
+        "code": "class TimeRunMcmc:\n    @skip_for_params(list(product(['compile'], [0], params[2])))\n    def time_run_mcmc(self, mode: Mode, *_):\n        \"\"\"Time running or compiling the function.\"\"\"\n        match mode:\n            case 'compile':\n                # re-wrap and jit the function in the benchmark case because otherwise\n                # the compiled function gets cached even if I call `compile` explicitly\n                @partial(\n                    jit, static_argnames=('n_save', 'n_skip', 'n_burn', 'callback')\n                )\n                def f(**kw):\n                    return run_mcmc(**kw)\n    \n                f.lower(**self.kw).compile()\n    \n            case 'run':\n                block_until_ready(run_mcmc(**self.kw))\n\n    def setup(self, mode: Mode, niters: int, cache: Cache):\n        \"\"\"Prepare the arguments, compile the function, and run to warm-up.\"\"\"\n        self.kw = dict(\n            key=random.key(2025_04_25_15_57),\n            bart=simple_init(P, N, NTREE),\n            n_save=niters // 2,\n            n_burn=niters // 2,\n            n_skip=1,\n            callback=lambda **_: None,\n        )\n    \n        # adapt arguments for old versions\n        sig = signature(run_mcmc)\n        if 'callback' not in sig.parameters:\n            self.kw.pop('callback')\n    \n        # catch bug and skip if found\n        try:\n            array_kw = {k: v for k, v in self.kw.items() if isinstance(v, jnp.ndarray)}\n            nonarray_kw = {\n                k: v for k, v in self.kw.items() if not isinstance(v, jnp.ndarray)\n            }\n            partial_run_mcmc = partial(run_mcmc, **nonarray_kw)\n            eval_shape(partial_run_mcmc, **array_kw)\n        except ZeroDivisionError:\n            if niters:\n                raise\n            else:\n                msg = 'skipping due to division by zero bug with zero iterations'\n                raise NotImplementedError(msg) from None\n    \n        # decide how much to cold-start\n        match cache:\n            case 'cold':\n                clear_caches()\n            case 'warm':\n                # prepare copies of the args because of buffer donation\n                key = jnp.copy(self.kw['key'])\n                bart = tree_map(jnp.copy, self.kw['bart'])\n                self.time_run_mcmc(mode)\n                # put copies in place of donated buffers\n                self.kw.update(key=key, bart=bart)",
+        "min_run_count": 2,
+        "name": "speed.TimeRunMcmc.time_run_mcmc",
+        "number": 1,
+        "param_names": [
+            "mode",
+            "niters",
+            "cache"
+        ],
+        "params": [
+            [
+                "'compile'",
+                "'run'"
+            ],
+            [
+                "0",
+                "10"
+            ],
+            [
+                "'cold'",
+                "'warm'"
+            ]
+        ],
+        "repeat": 0,
+        "rounds": 2,
+        "sample_time": 0.01,
+        "timeout": 30.0,
+        "type": "time",
+        "unit": "seconds",
+        "version": "38ac9d8c1419fab7715c0dd625229b7a900c5dece4f6bc91a8ab8074e9c9281c",
+        "warmup_time": 0.0
+    },
+    "speed.TimeStep.time_step": {
+        "code": "class TimeStep:\n    def time_step(self, mode: Mode, _):\n        \"\"\"Time running compiling `step` or running it a few times.\"\"\"\n        match mode:\n            case 'compile':\n    \n                @jit\n                def f(**kw):\n                    return step(**kw)\n    \n                f.lower(**self.kw).compile()\n    \n            case 'run':\n                block_until_ready(self.func(**self.kw))\n\n    def setup(self, mode: Mode, kind: Kind):\n        \"\"\"Create an initial MCMC state and random seed, compile & warm-up.\"\"\"\n        self.kw = dict(\n            key=random.key(2025_06_24_12_07), bart=simple_init(P, N, NTREE, kind)\n        )\n    \n        self.func = jit(step).lower(**self.kw).compile()\n        if mode == 'run':\n            block_until_ready(self.func(**self.kw))",
+        "min_run_count": 2,
+        "name": "speed.TimeStep.time_step",
+        "number": 0,
+        "param_names": [
+            "mode",
+            "kind"
+        ],
+        "params": [
+            [
+                "'compile'",
+                "'run'"
+            ],
+            [
+                "'plain'",
+                "'binary'",
+                "'weights'"
+            ]
+        ],
+        "repeat": 0,
+        "rounds": 2,
+        "sample_time": 0.01,
+        "timeout": 30.0,
+        "type": "time",
+        "unit": "seconds",
+        "version": "6c60eb9eae85261d3007278e6e3b6894e44af7d7a3474d5841209e7ad17d6e97",
         "warmup_time": -1
     },
     "version": 2
