@@ -251,6 +251,13 @@ def init(
     ------
     ValueError
         If `y` is boolean and arguments unused in binary regression are set.
+
+    Notes
+    -----
+    In decision nodes, the values in ``X[i, :]`` are compared to a cutpoint out
+    of the range ``[1, 2, ..., max_split[i]]``. A point belongs to the left
+    child iff ``X[i, j] < cutpoint``. Thus it makes sense for ``X[i, :]`` to be
+    integers in the range ``[0, 1, ..., max_split[i]]``.
     """
     p_nonterminal = jnp.asarray(p_nonterminal)
     p_nonterminal = jnp.pad(p_nonterminal, (0, 1))

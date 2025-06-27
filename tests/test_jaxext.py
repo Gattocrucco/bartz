@@ -239,6 +239,7 @@ class TestJaxPatches:
         x1 = invgamma.ppf(p, alpha)
         assert_allclose(x1, x0)
 
+    @pytest.mark.xfail(reason='Fixed in jax 0.6.2.')
     def test_ndtri_bugged(self, keys):
         """Check that `jax.scipy.special.ndtri` triggers `jax.debug_infs`."""
         x = random.uniform(keys.pop(), (100,), float, 0.01, 0.99)
