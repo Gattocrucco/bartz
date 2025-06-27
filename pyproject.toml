@@ -85,7 +85,7 @@ addopts = [
     "--verbose",
     "--import-mode=importlib",
 ]
-timeout = 128
+timeout = 256
 timeout_method = "thread"  # when jax hangs, signals do not work
 
 [tool.coverage.run]

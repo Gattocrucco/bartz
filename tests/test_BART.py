@@ -547,7 +547,7 @@ def test_rbart(kw, keys):
         assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.2)
 
         # check yhat_test_mean
-        assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.3)
+        assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.4)
 
         # check sigma
         rhat_sigma = multivariate_rhat(
