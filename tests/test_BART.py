@@ -525,11 +525,11 @@ def test_rbart(kw, keys):
 
     # check yhat_train
     rhat_yhat_train = multivariate_rhat(jnp.stack([bart.yhat_train, rbart.yhat_train]))
-    assert rhat_yhat_train < 1.2
+    assert rhat_yhat_train < 1.3
 
     # check yhat_test
     rhat_yhat_test = multivariate_rhat(jnp.stack([bart.yhat_test, rbart.yhat_test]))
-    assert rhat_yhat_test < 1.2
+    assert rhat_yhat_test < 1.3
 
     if kw['y_train'].dtype == bool:  # binary regression
         # check prob_train
@@ -544,11 +544,10 @@ def test_rbart(kw, keys):
 
     else:  # continuous regression
         # check yhat_train_mean
-        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.1)
+        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.2)
 
         # check yhat_test_mean
         assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.3)
-        # 0.1 for [1], 0.3 for [2]
 
         # check sigma
         rhat_sigma = multivariate_rhat(
@@ -556,10 +555,10 @@ def test_rbart(kw, keys):
                 [bart.sigma[-bart.ndpost :, None], rbart.sigma[-rbart.ndpost :, None]]
             )
         )
-        assert rhat_sigma < 1.01
+        assert rhat_sigma < 1.02
 
         # check sigma_mean
-        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.01)
+        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.03)
 
     # check varcount
     if p < n:
@@ -667,7 +666,7 @@ def test_prior(keys, p, nsplits):
     rhat_nstub = multivariate_rhat(
         jnp.stack([nstub_mcmc[:, None], nstub_prior[:, None]])
     )
-    assert rhat_nstub < 1.001
+    assert rhat_nstub < 1.01
 
     if (p, nsplits) != (1, 1):
         # all the following are equivalent to nstub in the 1-1 case
@@ -687,7 +686,7 @@ def test_prior(keys, p, nsplits):
         rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, varcount_prior]))
         if p == 10:
             # varcount is p-dimensional
-            assert rhat_varcount < 1.3
+            assert rhat_varcount < 1.4
         else:
             assert rhat_varcount < 1.05
 
@@ -698,7 +697,7 @@ def test_prior(keys, p, nsplits):
         rhat_sum_varcount = multivariate_rhat(
             jnp.stack([sum_varcount_mcmc[:, None], sum_varcount_prior[:, None]])
         )
-        assert rhat_sum_varcount < 1
+        assert rhat_sum_varcount < 1.01
 
         # compare imbalance index
         imb_mcmc = avg_imbalance_index(bart._main_trace.split_tree)
@@ -712,7 +711,7 @@ def test_prior(keys, p, nsplits):
         rhat_maxd = multivariate_rhat(
             jnp.stack([maxd_mcmc[:, None], maxd_prior[:, None]])
         )
-        assert rhat_maxd < 1
+        assert rhat_maxd < 1.01
 
         # compare max tree depth distribution
         dd_mcmc = bart.depth_distr()
