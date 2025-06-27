@@ -26,7 +26,7 @@
 
 import numpy
 import pytest
-from jax import debug_infs, lax, random
+from jax import debug_infs, jit, random
 from jax import numpy as jnp
 from jax.scipy.special import ndtri
 from numpy.testing import assert_allclose
@@ -292,17 +292,20 @@ class TestTruncatedNormalOneSided:
 
     def test_finite(self, keys):
         """Check that the outputs are always finite."""
+        # shape and n_loops combined shall be enough that all possible
+        # float32 values in [0, 1) are drawn by random.uniform
         shape = (1_000_000,)
         n_loops = 100
 
         keys = random.split(keys.pop(), n_loops)
 
-        def loop(_, key):
+        @jit
+        def loop_body(key):
             keys = jaxext.split(key, 3)
             upper = random.bernoulli(keys.pop(), 0.5, shape)
             bound = random.uniform(keys.pop(), shape, float, -1, 1)
-            vals = jaxext.truncated_normal_onesided(keys.pop(), shape, upper, bound)
-            return None, jnp.all(jnp.isfinite(vals))
+            return jaxext.truncated_normal_onesided(keys.pop(), shape, upper, bound)
 
-        _, is_finite = lax.scan(loop, None, keys)
-        assert jnp.all(is_finite)
+        for key in keys:
+            vals = loop_body(key)
+            assert jnp.all(jnp.isfinite(vals))
