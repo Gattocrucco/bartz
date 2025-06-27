@@ -114,7 +114,7 @@ src/bartz/_version.py: pyproject.toml
 
 .PHONY: tests
 tests:
-	$(UV_RUN) coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
+	$(UV_RUN) python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
 
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
@@ -170,25 +170,29 @@ upload-test: check-committed
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
 	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
+
+ASV = $(UV_RUN) python -m asv
+
 .PHONY: benchmark-tags
 benchmark-tags:
-	git tag | $(UV_RUN) asv run --skip-existing --show-stderr HASHFILE:- $(ARGS)
+	git tag | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
 .PHONY: benchmark-site
 benchmark-site:
-	$(UV_RUN) asv publish $(ARGS)
+	$(ASV) publish $(ARGS)
 
 .PHONY: benchmark-server
 benchmark-server: benchmark-site
-	$(UV_RUN) asv preview $(ARGS)
+	$(ASV) preview $(ARGS)
 
 .PHONY: benchmark-current
 benchmark-current: check-committed
-	$(UV_RUN) asv run --show-stderr main^! $(ARGS)
+	$(ASV) run --show-stderr main^! $(ARGS)
 
 .PHONY: benchmark-quick
 benchmark-quick:
-	$(UV_RUN) asv run --python=same --quick --dry-run --show-stderr $(ARGS)
+	$(ASV) run --python=same --quick --dry-run --show-stderr $(ARGS)
+
 
 .PHONY: python
 python:
