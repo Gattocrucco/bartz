@@ -68,7 +68,6 @@ ci = [
     "asv>=0.6.4",
     "coverage>=7.8.0",
     "myst-parser>=4.0.1",
-    "numpydoc>=1.8.0",
     "packaging>=25.0",
     "polars[pandas,pyarrow]>=1.29.0",
     "pytest>=8.3.5",
