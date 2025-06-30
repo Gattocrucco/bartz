@@ -37,18 +37,8 @@ import numpy
 from equinox import Module
 from jax import debug, lax, tree
 from jax import numpy as jnp
-from jaxtyping import (
-    Array,
-    Bool,
-    Float32,
-    Int32,
-    Integer,
-    Key,
-    PyTree,
-    Real,
-    Shaped,
-    UInt,
-)
+from jax.nn import softmax
+from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
 
 from bartz import grove, jaxext, mcmcstep
 from bartz.mcmcstep import State
@@ -82,19 +72,28 @@ class BurninTrace(Module):
 class MainTrace(BurninTrace):
     """MCMC trace with trees and diagnostic values."""
 
-    leaf_tree: Real[Array, '*trace_length 2**d']
-    var_tree: Real[Array, '*trace_length 2**(d-1)']
-    split_tree: Real[Array, '*trace_length 2**(d-1)']
+    leaf_tree: Float32[Array, '*trace_length 2**d']
+    var_tree: UInt[Array, '*trace_length 2**(d-1)']
+    split_tree: UInt[Array, '*trace_length 2**(d-1)']
     offset: Float32[Array, '*trace_length']
+    varprob: Float32[Array, '*trace_length p'] | None
 
     @classmethod
     def from_state(cls, state: State) -> 'MainTrace':
         """Create a single-item main trace from a MCMC state."""
+        # compute varprob
+        log_s = state.forest.log_s
+        if log_s is None:
+            varprob = None
+        else:
+            varprob = softmax(log_s, where=state.forest.max_split)
+
         return cls(
             leaf_tree=state.forest.leaf_tree,
             var_tree=state.forest.var_tree,
             split_tree=state.forest.split_tree,
             offset=state.offset,
+            varprob=varprob,
             **vars(BurninTrace.from_state(state)),
         )
 
@@ -184,6 +183,7 @@ def run_mcmc(
     callback_state: CallbackState = None,
     burnin_extractor: Callable[[State], PyTree] = BurninTrace.from_state,
     main_extractor: Callable[[State], PyTree] = MainTrace.from_state,
+    sparse_on_at: int | None = None,
 ) -> tuple[State, PyTree[Shaped[Array, 'n_burn *']], PyTree[Shaped[Array, 'n_save *']]]:
     """
     Run the MCMC for the BART posterior.
@@ -225,6 +225,9 @@ def run_mcmc(
         Functions that extract the variables to be saved respectively only in
         the main trace and in both traces, given the MCMC state as argument.
         Must return a pytree, and must be vmappable.
+    sparse_on_at
+        If specified, variable selection is activated starting from this
+        iteration.
 
     Returns
     -------
@@ -271,6 +274,7 @@ def run_mcmc(
             n_skip,
             i_outer,
             n_iters,
+            sparse_on_at,
         )
 
     return carry.bart, carry.burnin_trace, carry.main_trace
@@ -284,7 +288,8 @@ def _compute_i_skip(
     return jnp.where(
         burnin,
         i_total + 1,
-        (i_total + 1) % n_skip + jnp.where(i_total + 1 < n_skip, n_burn, 0),
+        (i_total - n_burn + 1) % n_skip
+        + jnp.where(i_total - n_burn + 1 < n_skip, n_burn, 0),
     )
 
 
@@ -300,15 +305,29 @@ def _run_mcmc_inner_loop(
     n_skip: Int32[Array, ''],
     i_outer: Int32[Array, ''],
     n_iters: Int32[Array, ''],
+    sparse_on_at: Int32[Array, ''] | None,
 ):
     def loop_impl(carry: _Carry) -> _Carry:
         """Loop body to run if i_total < n_iters."""
-        keys = jaxext.split(carry.key)
+        # split random key
+        keys = jaxext.split(carry.key, 3)
         carry = replace(carry, key=keys.pop())
+
+        # update state
         carry = replace(carry, bart=mcmcstep.step(keys.pop(), carry.bart))
+        if sparse_on_at is not None:
+            carry = replace(
+                carry,
+                bart=lax.cond(
+                    carry.i_total < sparse_on_at,
+                    lambda: bart,
+                    lambda: mcmcstep.step_s(keys.pop(), carry.bart),
+                ),
+            )
 
         burnin = carry.i_total < n_burn
 
+        # invoke callback
         if callback is not None:
             i_skip = _compute_i_skip(carry.i_total, n_burn, n_skip)
             rt = callback(
@@ -327,27 +346,20 @@ def _run_mcmc_inner_loop(
                 bart, callback_state = rt
                 carry = replace(carry, bart=bart, callback_state=callback_state)
 
-        def save_to_burnin_trace(
-            burnin_trace: PyTree, main_trace: PyTree
-        ) -> tuple[PyTree, PyTree]:
+        def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
             return pytree_at_set(
-                burnin_trace, carry.i_total, burnin_extractor(carry.bart)
-            ), main_trace
+                carry.burnin_trace, carry.i_total, burnin_extractor(carry.bart)
+            ), carry.main_trace
 
-        def save_to_main_trace(
-            burnin_trace: PyTree, main_trace: PyTree
-        ) -> tuple[PyTree, PyTree]:
+        def save_to_main_trace() -> tuple[PyTree, PyTree]:
             idx = (carry.i_total - n_burn) // n_skip
-            return burnin_trace, pytree_at_set(
-                main_trace, idx, main_extractor(carry.bart)
+            return carry.burnin_trace, pytree_at_set(
+                carry.main_trace, idx, main_extractor(carry.bart)
             )
 
+        # save state to trace
         burnin_trace, main_trace = lax.cond(
-            burnin,
-            save_to_burnin_trace,
-            save_to_main_trace,
-            carry.burnin_trace,
-            carry.main_trace,
+            burnin, save_to_burnin_trace, save_to_main_trace
         )
         return replace(
             carry,

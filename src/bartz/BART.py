@@ -33,7 +33,18 @@ import jax
 import jax.numpy as jnp
 from equinox import Module, field
 from jax.scipy.special import ndtr
-from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, Shaped, UInt
+from jaxtyping import (
+    Array,
+    Bool,
+    Float,
+    Float32,
+    Int32,
+    Integer,
+    Key,
+    Real,
+    Shaped,
+    UInt,
+)
 from numpy import ndarray
 
 from bartz import mcmcloop, mcmcstep, prepcovars
@@ -76,8 +87,8 @@ class Series(Protocol):
 
 
 class gbart(Module):
-    """
-    Nonparametric regression with Bayesian Additive Regression Trees (BART).
+    R"""
+    Nonparametric regression with Bayesian Additive Regression Trees (BART) [2]_.
 
     Regress `y_train` on `x_train` with a latent mean function represented as
     a sum of decision trees. The inference is carried out by sampling the
@@ -94,6 +105,32 @@ class gbart(Module):
     type
         The type of regression. 'wbart' for continuous regression, 'pbart' for
         binary regression with probit link.
+    sparse
+        Whether to activate variable selection on the predictors as done in
+        [1]_.
+    theta
+    a
+    b
+    rho
+        Hyperparameters of the sparsity prior.
+
+        The prior distribution on the choice of predictor for each decision rule
+        is
+
+        .. math::
+            (s_1, \ldots, s_p) \sim
+            \operatorname{Dirichlet}(\mathtt{theta}/p, \ldots, \mathtt{theta}/p).
+
+        If `theta` is not specified, it's a priori distributed according to
+
+        .. math::
+            \frac{\mathtt{theta}}{\mathtt{theta} + \mathtt{rho}} \sim
+            \operatorname{Beta}(\mathtt{a}, \mathtt{b}).
+
+        If not specified, `rho` is set to the number of predictors p. To tune
+        the prior, consider setting a lower `rho` to prefer more sparsity.
+        If setting `theta` directly, it should be in the ballpark of p or lower
+        as well.
     xinfo
         A matrix with the cutpoins to use to bin each predictor. If not
         specified, it is generated automatically according to `usequants` and
@@ -223,13 +260,23 @@ class gbart(Module):
     - If ``usequants=False``, R BART switches to quantiles anyway if there are
       less predictor values than the required number of bins, while bartz
       always follows the specification.
+    - Some functionality is missing.
     - The error variance parameter is called `lamda` instead of `lambda`.
-    - Some functionality is missing (e.g., variable selection).
     - There are some additional attributes, and some missing.
     - The trees have a maximum depth.
     - `rm_const` refers to predictors without decision rules instead of
       predictors that are constant in `x_train`.
+    - If `rm_const=True` and some variables are dropped, the predictors
+      matrix/dataframe passed to `predict` should still include them.
 
+    References
+    ----------
+    .. [1] Linero, Antonio R. (2018). “Bayesian Regression Trees for
+       High-Dimensional Prediction and Variable Selection”. In: Journal of the
+       American Statistical Association 113.522, pp. 626-636.
+    .. [2] Hugh A. Chipman, Edward I. George, Robert E. McCulloch "BART:
+       Bayesian additive regression trees," The Annals of Applied Statistics,
+       Ann. Appl. Stat. 4(1), 266-298, (March 2010).
     """
 
     _main_trace: mcmcloop.MainTrace
@@ -250,6 +297,11 @@ class gbart(Module):
         *,
         x_test: Real[Array, 'p m'] | DataFrame | None = None,
         type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
+        sparse: bool = False,
+        theta: FloatLike | None = None,
+        a: FloatLike = 0.5,  # noqa: ARG002
+        b: FloatLike = 1.0,  # noqa: ARG002
+        rho: FloatLike | None = None,  # noqa: ARG002
         xinfo: Float[Array, 'p n'] | None = None,
         usequants: bool = False,
         rm_const: bool | None = True,
@@ -276,10 +328,10 @@ class gbart(Module):
     ):
         # check data and put it in the right format
         x_train, x_train_fmt = self._process_predictor_input(x_train)
-        y_train, _ = self._process_response_input(y_train)
+        y_train = self._process_response_input(y_train)
         self._check_same_length(x_train, y_train)
         if w is not None:
-            w, _ = self._process_response_input(w)
+            w = self._process_response_input(w)
             self._check_same_length(x_train, w)
 
         # check data types are correct for continuous/binary regression
@@ -291,6 +343,9 @@ class gbart(Module):
             ntree = 50 if y_train.dtype == bool else 200
         if keepevery is None:
             keepevery = 10 if y_train.dtype == bool else 1
+
+        # process sparsity settings
+        log_s = self._process_sparsity_settings(sparse, theta, x_train)
 
         # process "standardization" settings
         offset = self._process_offset_settings(y_train, offset)
@@ -319,9 +374,18 @@ class gbart(Module):
             ntree,
             init_kw,
             rm_const,
+            log_s,
+            theta,
         )
         final_state, burnin_trace, main_trace = self._run_mcmc(
-            initial_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw
+            initial_state,
+            ndpost,
+            nskip,
+            keepevery,
+            printevery,
+            seed,
+            run_mcmc_kw,
+            sparse,
         )
 
         # set public attributes
@@ -393,6 +457,23 @@ class gbart(Module):
         return self.varcount.mean(axis=0)
 
     @cached_property
+    def varprob(self) -> Float32[Array, 'ndpost p']:
+        """Posterior samples of the probability of choosing each predictor for a decision rule."""
+        varprob = self._main_trace.varprob
+        if varprob is None:
+            max_split = self._mcmc_state.forest.max_split
+            p = max_split.size
+            peff = jnp.count_nonzero(max_split)
+            varprob = jnp.where(max_split, 1 / peff, 0)
+            varprob = jnp.broadcast_to(varprob, (self.ndpost, p))
+        return varprob
+
+    @cached_property
+    def varprob_mean(self) -> Float32[Array, ' p']:
+        """The marginal posterior probability of each predictor being chosen for a decision rule."""
+        return self.varprob.mean(axis=0)
+
+    @cached_property
     def yhat_test_mean(self) -> Float32[Array, ' m'] | None:
         """The marginal posterior mean at `x_test`.
 
@@ -461,15 +542,12 @@ class gbart(Module):
         return x, fmt
 
     @staticmethod
-    def _process_response_input(y) -> tuple[Shaped[Array, ' n'], Any]:
+    def _process_response_input(y) -> Shaped[Array, ' n']:
         if hasattr(y, 'to_numpy'):
-            fmt = dict(kind='series', name=y.name)
             y = y.to_numpy()
-        else:
-            fmt = dict(kind='array')
         y = jnp.asarray(y)
         assert y.ndim == 1
-        return y, fmt
+        return y
 
     @staticmethod
     def _check_same_length(x1, x2):
@@ -536,6 +614,18 @@ class gbart(Module):
             case _:
                 msg = f'Invalid {type=}'
                 raise ValueError(msg)
+
+    @staticmethod
+    def _process_sparsity_settings(
+        sparse: bool, theta: FloatLike | None, x_train: Real[Array, 'p n']
+    ) -> Float32[Array, ' p'] | None:
+        if not sparse:
+            return None
+        elif theta is None:
+            raise NotImplementedError
+        else:
+            p, _ = x_train.shape
+            return jnp.zeros(p)
 
     @staticmethod
     def _process_offset_settings(
@@ -610,6 +700,8 @@ class gbart(Module):
         ntree: int,
         init_kw: dict[str, Any] | None,
         rm_const: bool | None,
+        log_s: Float32[Array, ' p'] | None = None,
+        theta: FloatLike | None = None,
     ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
@@ -635,6 +727,8 @@ class gbart(Module):
             sigma2_beta=sigma2_beta,
             min_points_per_decision_node=10,
             min_points_per_leaf=5,
+            log_s=log_s,
+            theta=theta,
         )
 
         if rm_const is None:
@@ -654,7 +748,17 @@ class gbart(Module):
         return mcmcstep.init(**kw)
 
     @staticmethod
-    def _run_mcmc(mcmc_state, ndpost, nskip, keepevery, printevery, seed, run_mcmc_kw):
+    def _run_mcmc(
+        mcmc_state: mcmcstep.State,
+        ndpost: int,
+        nskip: int,
+        keepevery: int,
+        printevery: int | None,
+        seed: int | Integer[Array, ''] | Key[Array, ''],
+        run_mcmc_kw: dict | None,
+        sparse: bool,
+    ):
+        # prepare random generator seed
         if isinstance(seed, jax.Array) and jnp.issubdtype(
             seed.dtype, jax.dtypes.prng_key
         ):
@@ -663,11 +767,14 @@ class gbart(Module):
         else:
             key = jax.random.key(seed)
 
+        # prepare arguments
         kw = dict(n_burn=nskip, n_skip=keepevery, inner_loop_length=printevery)
         if printevery is not None:
             kw.update(
                 mcmcloop.make_print_callback(None if printevery == 1 else 1, printevery)
             )
+        if sparse:
+            kw.update(sparse_on_at=nskip // 2)
         if run_mcmc_kw is not None:
             kw.update(run_mcmc_kw)
 

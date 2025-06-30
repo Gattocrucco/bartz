@@ -98,6 +98,13 @@ class Forest(Module):
         The number of grow/prune moves accepted during one full MCMC cycle.
     sigma_mu2
         The prior variance of a leaf, conditional on the tree structure.
+    log_s
+        The logarithm of the prior probability for choosing a variable to split
+        along in a decision rule, conditional on the ancestors. Not normalized.
+        If `None`, use a uniform distribution.
+    theta
+        The concentration parameter for the Dirichlet prior on the variable
+        distribution `s`. Required only to update `s`.
     """
 
     leaf_tree: Float32[Array, 'num_trees 2**d']
@@ -120,6 +127,8 @@ class Forest(Module):
     grow_acc_count: Int32[Array, '']
     prune_acc_count: Int32[Array, '']
     sigma_mu2: Float32[Array, '']
+    log_s: Float32[Array, ' p'] | None
+    theta: Float32[Array, ''] | None
 
 
 class State(Module):
@@ -184,6 +193,8 @@ def init(
     save_ratios: bool = False,
     filter_splitless_vars: bool = True,
     min_points_per_leaf: int | Integer[Any, ''] | None = None,
+    log_s: Float32[Any, ' p'] | None = None,
+    theta: float | Float32[Any, ''] | None = None,
 ) -> State:
     """
     Make a BART posterior sampling MCMC initial state.
@@ -242,6 +253,13 @@ def init(
         This parameter is independent of `min_points_per_decision_node` and
         there is no check that they are coherent. It makes sense to set
         ``min_points_per_decision_node >= 2 * min_points_per_leaf``.
+    log_s
+        The logarithm of the prior probability for choosing a variable to split
+        along in a decision rule, conditional on the ancestors. Not normalized.
+        If not specified, use a uniform distribution.
+    theta
+        The concentration parameter for the Dirichlet prior on `s`. Required
+        only to update `log_s`.
 
     Returns
     -------
@@ -348,6 +366,8 @@ def init(
             log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
             log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
             sigma_mu2=jnp.asarray(sigma_mu2),
+            log_s=None if log_s is None else jnp.asarray(log_s),
+            theta=None if theta is None else jnp.asarray(theta),
         ),
     )
 
@@ -549,6 +569,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
         forest.blocked_vars,
         forest.p_nonterminal,
         forest.p_propose_grow,
+        forest.log_s,
     )
     prune_moves = propose_prune_moves(
         keys.pop(num_trees),
@@ -631,7 +652,7 @@ class GrowMoves(Module):
     affluence_tree: Bool[Array, 'num_trees 2**(d-1)']
 
 
-@partial(vmap_nodoc, in_axes=(0, 0, 0, 0, None, None, None, None))
+@partial(vmap_nodoc, in_axes=(0, 0, 0, 0, None, None, None, None, None))
 def propose_grow_moves(
     key: Key[Array, ' num_trees'],
     var_tree: UInt[Array, 'num_trees 2**(d-1)'],
@@ -641,6 +662,7 @@ def propose_grow_moves(
     blocked_vars: Int32[Array, ' k'] | None,
     p_nonterminal: Float32[Array, ' 2**d'],
     p_propose_grow: Float32[Array, ' 2**(d-1)'],
+    log_s: Float32[Array, ' p'] | None,
 ) -> GrowMoves:
     """
     Propose a GROW move for each tree.
@@ -667,6 +689,9 @@ def propose_grow_moves(
         ancestors, including at the maximum depth where it should be zero.
     p_propose_grow
         The unnormalized probability of choosing a leaf to grow.
+    log_s
+        Unnormalized log-probability used to choose a variable to split on
+        amongst the available ones.
 
     Returns
     -------
@@ -687,7 +712,7 @@ def propose_grow_moves(
 
     # sample a decision rule
     var, num_available_var = choose_variable(
-        keys.pop(), var_tree, split_tree, max_split, leaf_to_grow, blocked_vars
+        keys.pop(), var_tree, split_tree, max_split, leaf_to_grow, blocked_vars, log_s
     )
     split_idx, l, r = choose_split(
         keys.pop(), var, var_tree, split_tree, max_split, leaf_to_grow
@@ -815,6 +840,11 @@ def categorical(
         return ``n``.
     norm : Float32[Array, '']
         The sum of `distr`.
+
+    Notes
+    -----
+    This function uses a cumsum instead of the Gumbel trick, so it's ok only
+    for small ranges with probabilities well greater than 0.
     """
     ecdf = jnp.cumsum(distr)
     u = random.uniform(key, (), ecdf.dtype, 0, ecdf[-1])
@@ -828,6 +858,7 @@ def choose_variable(
     max_split: UInt[Array, ' p'],
     leaf_index: Int32[Array, ''],
     blocked_vars: Int32[Array, ' k'] | None,
+    log_s: Float32[Array, ' p'] | None,
 ) -> tuple[Int32[Array, ''], Int32[Array, '']]:
     """
     Choose a variable to split on for a new non-terminal node.
@@ -847,6 +878,9 @@ def choose_variable(
     blocked_vars
         The indices of the variables that have no available cutpoints. If
         `None`, all variables are assumed unblocked.
+    log_s
+        The logarithm of the prior probability for choosing a variable. If
+        `None`, use a uniform distribution.
 
     Returns
     -------
@@ -859,7 +893,11 @@ def choose_variable(
     var_to_ignore = fully_used_variables(var_tree, split_tree, max_split, leaf_index)
     if blocked_vars is not None:
         var_to_ignore = jnp.concatenate([var_to_ignore, blocked_vars])
-    return randint_exclude(key, max_split.size, var_to_ignore)
+
+    if log_s is None:
+        return randint_exclude(key, max_split.size, var_to_ignore)
+    else:
+        return categorical_exclude(key, log_s, var_to_ignore)
 
 
 def fully_used_variables(
@@ -1019,14 +1057,53 @@ def randint_exclude(
     -----
     If all values in the range are excluded, return `sup`.
     """
-    exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
-    num_allowed = sup - jnp.count_nonzero(exclude < sup)
+    exclude, num_allowed = _process_exclude(sup, exclude)
     u = random.randint(key, (), 0, num_allowed)
 
     def loop(u, i_excluded):
         return jnp.where(i_excluded <= u, u + 1, u), None
 
     u, _ = lax.scan(loop, u, exclude)
+    return u, num_allowed
+
+
+def _process_exclude(sup, exclude):
+    exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
+    num_allowed = sup - jnp.count_nonzero(exclude < sup)
+    return exclude, num_allowed
+
+
+def categorical_exclude(
+    key: Key[Array, ''], logits: Float32[Array, ' k'], exclude: Integer[Array, ' n']
+) -> tuple[Int32[Array, ''], Int32[Array, '']]:
+    """
+    Draw from a categorical distribution, excluding a set of values.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    logits
+        The unnormalized log-probabilities of each category.
+    exclude
+        The values to exclude from the range [0, k). Values greater than or
+        equal to `logits.size` are ignored. Values can appear more than once.
+
+    Returns
+    -------
+    u : Int32[Array, '']
+        A random integer in the range ``[0, k)`` such that ``u not in exclude``.
+    num_allowed : Int32[Array, '']
+        The number of integers in the range that were not excluded.
+
+    Notes
+    -----
+    If all values in the range are excluded, the result is unspecified.
+    """
+    exclude, num_allowed = _process_exclude(logits.size, exclude)
+    kinda_neg_inf = jnp.finfo(logits.dtype).min
+    logits = logits.at[exclude].set(kinda_neg_inf)
+    u = random.categorical(key, logits)
     return u, num_allowed
 
 
@@ -1109,7 +1186,7 @@ def compute_partial_ratio(
     "partial" prior ratio is missing the factor P(children are leaves).
     """
     # the two ratios also contain factors num_available_split *
-    # num_available_var, but they cancel out
+    # num_available_var * s[var], but they cancel out
 
     # p_prune and 1 - p_nonterminal[child] * I(is the child growable) can't be
     # computed here because they need the count trees, which are computed in the
@@ -2378,3 +2455,44 @@ def step_z(key: Key[Array, ''], bart: State) -> State:
     resid = truncated_normal_onesided(key, (), ~bart.y, -trees_plus_offset)
     z = trees_plus_offset + resid
     return replace(bart, z=z, resid=resid)
+
+
+def step_s(key: Key[Array, ''], bart: State) -> State:
+    """
+    Update `log_s` using Dirichlet sampling.
+
+    The prior is s ~ Dirichlet(theta/p, ..., theta/p), and the posterior
+    is s ~ Dirichlet(theta/p + varcount, ..., theta/p + varcount), where
+    varcount is the count of how many times each variable is used in the
+    current forest.
+
+    Parameters
+    ----------
+    key
+        Random key for sampling.
+    bart
+        The current BART state.
+
+    Returns
+    -------
+    Updated BART state with re-sampled `log_s`.
+
+    Raises
+    ------
+    ValueError
+        If `bart.forest.log_s` or `bart.forest.theta` is `None`.
+    """
+    if bart.forest.log_s is None or bart.forest.theta is None:
+        msg = '`bart.forest.log_s` or `bart.forest.theta` is not set, cannot sample s.'
+        raise ValueError(msg)
+
+    # histogram current variable usage
+    p = bart.forest.max_split.size
+    varcount = grove.var_histogram(p, bart.forest.var_tree, bart.forest.split_tree)
+
+    # sample from Dirichlet posterior
+    alpha = bart.forest.theta / p + varcount
+    log_s = random.loggamma(key, alpha)
+
+    # update forest with new s
+    return replace(bart, forest=replace(bart.forest, log_s=log_s))
