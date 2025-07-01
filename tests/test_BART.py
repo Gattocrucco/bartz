@@ -33,7 +33,7 @@ import threading
 import time
 from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import jax
 import numpy
@@ -72,11 +72,10 @@ def gen_X(key, p, n, kind):
         raise KeyError(kind)
 
 
-def f(x):
+def f(x: Real[Array, 'p n'], s: Real[Array, ' p']) -> Float32[Array, ' n']:
     """Conditional mean of the DGP."""
     T = 2
-    p, _ = x.shape
-    return jnp.sum(jnp.cos(2 * jnp.pi / T * x), axis=0) / jnp.sqrt(p)
+    return s @ jnp.cos(2 * jnp.pi / T * x) / jnp.sqrt(s @ s)
 
 
 def gen_w(key, n):
@@ -84,22 +83,38 @@ def gen_w(key, n):
     return jnp.exp(random.uniform(key, (n,), float, -1, 1))
 
 
-def gen_y(key, X, w, kind):
+def gen_y(
+    key,
+    X,
+    w,
+    kind: Literal['continuous', 'probit'],
+    *,
+    s: Real[Array, ' p'] | Literal['uniform', 'random'] = 'uniform',
+):
     """Generate responses given predictors."""
-    keys = split(key)
+    keys = split(key, 3)
+
+    p, n = X.shape
+    if isinstance(s, jax.Array):
+        pass
+    elif s == 'random':
+        s = jnp.exp(random.uniform(keys.pop(), (p,), float, -1, 1))
+    elif s == 'uniform':
+        s = jnp.ones(p)
+
     match kind:
         case 'continuous':
             sigma = 0.1
-            error = sigma * random.normal(keys.pop(), (X.shape[1],))
+            error = sigma * random.normal(keys.pop(), (n,))
             if w is not None:
                 error *= w
-            return f(X) + error
+            return f(X, s) + error
 
         case 'probit':
             assert w is None
             _, n = X.shape
             error = random.normal(keys.pop(), (n,))
-            prob = ndtr(f(X) + error)
+            prob = ndtr(f(X, s) + error)
             return random.bernoulli(keys.pop(), prob, (n,))
 
 
@@ -111,12 +126,14 @@ def kw(keys, request):
         case 1:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
-            y = gen_y(keys.pop(), X, None, 'continuous')
+            y = gen_y(keys.pop(), X, None, 'continuous', s='random')
             return dict(
                 x_train=X,
                 y_train=y,
                 x_test=Xt,
                 w=None,
+                sparse=True,
+                theta=2,
                 ntree=20,
                 ndpost=100,
                 nskip=50,
@@ -194,6 +211,8 @@ def test_sequential_guarantee(kw):
 
     kw['seed'] = random.clone(kw['seed'])
 
+    if kw.get('sparse', False):
+        kw.setdefault('run_mcmc_kw', {}).setdefault('sparse_on_at', kw['nskip'] // 2)
     kw['nskip'] -= 1
     kw['ndpost'] += 1
     bart2 = gbart(**kw)
@@ -233,6 +252,8 @@ def test_output_shapes(kw):
         assert bart.sigma_mean.shape == ()
     assert bart.varcount.shape == (ndpost, p)
     assert bart.varcount_mean.shape == (p,)
+    assert bart.varprob.shape == (ndpost, p)
+    assert bart.varprob_mean.shape == (p,)
     assert bart.yhat_test.shape == (ndpost, m)
     if binary:
         assert bart.yhat_test_mean is None
@@ -263,6 +284,8 @@ def test_output_types(kw):
         assert bart.sigma_mean.dtype == jnp.float32
     assert bart.varcount.dtype == jnp.int32
     assert bart.varcount_mean.dtype == jnp.float32
+    assert bart.varprob.dtype == jnp.float32
+    assert bart.varprob_mean.dtype == jnp.float32
     assert bart.yhat_test.dtype == jnp.float32
     if not binary:
         assert bart.yhat_test_mean.dtype == jnp.float32
@@ -276,6 +299,66 @@ def test_predict(kw):
     bart = gbart(**kw)
     yhat_train = bart.predict(kw['x_train'])
     assert_array_equal(bart.yhat_train, yhat_train)
+
+
+def test_varprob(kw):
+    """Basic checks of the `varprob` attribute."""
+    bart = gbart(**kw)
+
+    # basic properties of probabilities
+    assert jnp.all(bart.varprob >= 0)
+    assert jnp.all(bart.varprob <= 1)
+    assert_allclose(bart.varprob.sum(axis=1), 1, rtol=1e-6)
+
+    # probabilities are either 0 or 1/peff if sparsity is disabled
+    sparse = kw.get('sparse', False)
+    if not sparse:
+        unique = jnp.unique(bart.varprob)
+        assert unique.size in (1, 2)
+        if unique.size == 2:
+            assert unique[0] == 0
+
+    # the mean is the mean
+    assert_array_equal(bart.varprob_mean, bart.varprob.mean(axis=0))
+
+
+def test_varprob_blocked_vars(keys):
+    """Check that varprob = 0 on predictors blocked a priori."""
+    X = gen_X(keys.pop(), 2, 30, 'continuous')
+    y = gen_y(keys.pop(), X, None, 'continuous')
+    with debug_nans(False):
+        xinfo = jnp.array([[jnp.nan], [0]])
+    bart = gbart(x_train=X, y_train=y, xinfo=xinfo, seed=keys.pop())
+    assert_array_equal(bart._mcmc_state.forest.max_split, [0, 1])
+    assert_array_equal(bart.varprob_mean, [0, 1])
+    assert jnp.all(bart.varprob_mean == bart.varprob)
+
+
+def test_variable_selection(keys):
+    """Check that variable selection works."""
+    # data config
+    p = 100  # number of predictors
+    peff = 5  # number of actually used predictors
+    n = 1000
+
+    # generate sparsity pattern
+    mask = jnp.zeros(p, bool).at[:peff].set(True)
+    mask = random.permutation(keys.pop(), mask)
+    s = mask.astype(float)
+
+    # generate data
+    X = gen_X(keys.pop(), p, n, 'continuous')
+    y = gen_y(keys.pop(), X, None, 'continuous', s=s)
+
+    # run bart
+    bart = gbart(
+        x_train=X, y_train=y, nskip=1000, sparse=True, theta=peff, seed=keys.pop()
+    )
+
+    # check that the variables have been identified
+    assert bart.varprob_mean[mask].sum() >= 0.9
+    assert jnp.all(bart.varprob_mean[mask] > 0.5 / peff)
+    assert jnp.all(bart.varprob_mean[~mask] < 0.5 / (p - peff))
 
 
 def test_scale_shift(kw):
@@ -524,22 +607,20 @@ def test_rbart(kw, keys):
     # the documentation says
 
     # check yhat_train
-    rhat_yhat_train = multivariate_rhat(jnp.stack([bart.yhat_train, rbart.yhat_train]))
+    rhat_yhat_train = multivariate_rhat([bart.yhat_train, rbart.yhat_train])
     assert rhat_yhat_train < 1.3
 
     # check yhat_test
-    rhat_yhat_test = multivariate_rhat(jnp.stack([bart.yhat_test, rbart.yhat_test]))
+    rhat_yhat_test = multivariate_rhat([bart.yhat_test, rbart.yhat_test])
     assert rhat_yhat_test < 1.3
 
     if kw['y_train'].dtype == bool:  # binary regression
         # check prob_train
-        rhat_prob_train = multivariate_rhat(
-            jnp.stack([bart.prob_train, rbart.prob_train])
-        )
+        rhat_prob_train = multivariate_rhat([bart.prob_train, rbart.prob_train])
         assert rhat_prob_train < 1.1
 
         # check prob_test
-        rhat_prob_test = multivariate_rhat(jnp.stack([bart.prob_test, rbart.prob_test]))
+        rhat_prob_test = multivariate_rhat([bart.prob_test, rbart.prob_test])
         assert rhat_prob_test < 1.1
 
     else:  # continuous regression
@@ -550,27 +631,31 @@ def test_rbart(kw, keys):
         assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.4)
 
         # check sigma
-        rhat_sigma = multivariate_rhat(
-            jnp.stack(
-                [bart.sigma[-bart.ndpost :, None], rbart.sigma[-rbart.ndpost :, None]]
-            )
-        )
+        rhat_sigma = rhat([bart.sigma[-bart.ndpost :], rbart.sigma[-rbart.ndpost :]])
         assert rhat_sigma < 1.02
 
         # check sigma_mean
         assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
 
-    # check varcount
+    # check varcount and varprob
     if p < n:
         # skip if p is large because it would be difficult for the MCMC to get
         # stuff about predictors right
-        rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, rbart.varcount]))
+
+        # check varcount
+        rhat_varcount = multivariate_rhat([bart.varcount, rbart.varcount])
         # there is a visible discrepancy on the number of nodes, with bartz
         # having deeper trees, this 4 is not just "not good to sampling
         # accuracy but close in practice.""
         assert rhat_varcount < 4
         # loose criterion as a patch
         assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.15)
+
+        # check varprob
+        if kw.get('sparse', False):
+            rhat_varprob = multivariate_rhat([bart.varprob, rbart.varprob])
+            assert rhat_varprob < 1.01
+            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.01)
 
 
 def test_xinfo():
@@ -663,9 +748,7 @@ def test_prior(keys, p, nsplits):
     # compare number of stub trees
     nstub_mcmc = count_stub_trees(bart._main_trace.split_tree)
     nstub_prior = count_stub_trees(prior_trace.split_tree)
-    rhat_nstub = multivariate_rhat(
-        jnp.stack([nstub_mcmc[:, None], nstub_prior[:, None]])
-    )
+    rhat_nstub = rhat([nstub_mcmc, nstub_prior])
     assert rhat_nstub < 1.01
 
     if (p, nsplits) != (1, 1):
@@ -674,16 +757,14 @@ def test_prior(keys, p, nsplits):
         # compare number of "simple" trees
         nsimple_mcmc = count_simple_trees(bart._main_trace.split_tree)
         nsimple_prior = count_simple_trees(prior_trace.split_tree)
-        rhat_nsimple = multivariate_rhat(
-            jnp.stack([nsimple_mcmc[:, None], nsimple_prior[:, None]])
-        )
+        rhat_nsimple = rhat([nsimple_mcmc, nsimple_prior])
         assert rhat_nsimple < 1.01
 
         # compare varcount
         varcount_prior = compute_varcount(
             bart._mcmc_state.forest.max_split.size, prior_trace
         )
-        rhat_varcount = multivariate_rhat(jnp.stack([bart.varcount, varcount_prior]))
+        rhat_varcount = multivariate_rhat([bart.varcount, varcount_prior])
         if p == 10:
             # varcount is p-dimensional
             assert rhat_varcount < 1.4
@@ -694,36 +775,32 @@ def test_prior(keys, p, nsplits):
         # trees, I only check #(internal nodes) = sum(varcount).
         sum_varcount_mcmc = bart.varcount.sum(axis=1)
         sum_varcount_prior = varcount_prior.sum(axis=1)
-        rhat_sum_varcount = multivariate_rhat(
-            jnp.stack([sum_varcount_mcmc[:, None], sum_varcount_prior[:, None]])
-        )
+        rhat_sum_varcount = rhat([sum_varcount_mcmc, sum_varcount_prior])
         assert rhat_sum_varcount < 1.01
 
         # compare imbalance index
         imb_mcmc = avg_imbalance_index(bart._main_trace.split_tree)
         imb_prior = avg_imbalance_index(prior_trace.split_tree)
-        rhat_imb = multivariate_rhat(jnp.stack([imb_mcmc[:, None], imb_prior[:, None]]))
+        rhat_imb = rhat([imb_mcmc, imb_prior])
         assert rhat_imb < 1.01
 
         # compare average max tree depth
         maxd_mcmc = avg_max_tree_depth(bart._main_trace.split_tree)
         maxd_prior = avg_max_tree_depth(prior_trace.split_tree)
-        rhat_maxd = multivariate_rhat(
-            jnp.stack([maxd_mcmc[:, None], maxd_prior[:, None]])
-        )
+        rhat_maxd = rhat([maxd_mcmc, maxd_prior])
         assert rhat_maxd < 1.01
 
         # compare max tree depth distribution
         dd_mcmc = bart.depth_distr()
         dd_prior = trace_depth_distr(prior_trace.split_tree)
-        rhat_dd = multivariate_rhat(jnp.stack([dd_mcmc, dd_prior]))
+        rhat_dd = multivariate_rhat([dd_mcmc, dd_prior])
         assert rhat_dd < 1.05
 
     # compare y
     X = random.randint(keys.pop(), (p, 30), 0, nsplits + 1)
     yhat_mcmc = evaluate_trace(bart._main_trace, X)
     yhat_prior = evaluate_trace(prior_trace, X)
-    rhat_yhat = multivariate_rhat(jnp.stack([yhat_mcmc, yhat_prior]))
+    rhat_yhat = multivariate_rhat([yhat_mcmc, yhat_prior])
     assert rhat_yhat < 1.05
 
 
@@ -764,7 +841,7 @@ def avg_max_tree_depth(
     return depth.mean(1)
 
 
-def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '']:
+def multivariate_rhat(chains: Real[Any, 'chain sample dim']) -> Float[Array, '']:
     """
     Compute the multivariate Gelman-Rubin R-hat.
 
@@ -782,6 +859,7 @@ def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '
     ValueError
         If there are not enough chains or samples.
     """
+    chains = jnp.asarray(chains)
     m, n, p = chains.shape
 
     if m < 2:
@@ -820,6 +898,23 @@ def multivariate_rhat(chains: Real[Array, 'chain sample dim']) -> Float[Array, '
     eigenvals = jnp.linalg.eigvalsh(L_1VL_T)
 
     return jnp.max(eigenvals)
+
+
+def rhat(chains: Real[Any, 'chain sample']) -> Float[Array, '']:
+    """
+    Compute the univariate Gelman-Rubin R-hat.
+
+    Parameters
+    ----------
+    chains
+        Independent chains of samples of a scalar.
+
+    Returns
+    -------
+    Univariate R-hat statistic.
+    """
+    chains = jnp.asarray(chains)
+    return multivariate_rhat(chains[:, :, None])
 
 
 def test_rhat(keys):

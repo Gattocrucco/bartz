@@ -86,7 +86,7 @@ class MainTrace(BurninTrace):
         if log_s is None:
             varprob = None
         else:
-            varprob = softmax(log_s, where=state.forest.max_split)
+            varprob = softmax(log_s, where=state.forest.max_split.astype(bool))
 
         return cls(
             leaf_tree=state.forest.leaf_tree,
@@ -320,7 +320,7 @@ def _run_mcmc_inner_loop(
                 carry,
                 bart=lax.cond(
                     carry.i_total < sparse_on_at,
-                    lambda: bart,
+                    lambda: carry.bart,
                     lambda: mcmcstep.step_s(keys.pop(), carry.bart),
                 ),
             )
