@@ -69,6 +69,12 @@ class Forest(Module):
         The decision boundaries.
     affluence_tree
         Marks leaves that can be grown.
+    max_split
+        The maximum split index for each predictor.
+    blocked_vars
+        Indices of variables that are not used. This shall include at least
+        the `i` such that ``max_split[i] == 0``, otherwise behavior is
+        undefined.
     p_nonterminal
         The prior probability of each node being nonterminal, conditional on
         its ancestors. Includes the nodes at maximum depth which should be set
@@ -139,8 +145,6 @@ class State(Module):
     ----------
     X
         The predictors.
-    max_split
-        The maximum split index for each predictor.
     y
         The response. If the data type is `bool`, the model is binary regression.
     resid

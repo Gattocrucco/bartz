@@ -769,12 +769,13 @@ class gbart(Module):
 
         # prepare arguments
         kw = dict(n_burn=nskip, n_skip=keepevery, inner_loop_length=printevery)
-        if printevery is not None:
-            kw.update(
-                mcmcloop.make_print_callback(None if printevery == 1 else 1, printevery)
+        kw.update(
+            mcmcloop.make_default_callback(
+                dot_every=None if printevery == 1 else 1,
+                report_every=printevery,
+                sparse_on_at=nskip // 2 if sparse else None,
             )
-        if sparse:
-            kw.update(sparse_on_at=nskip // 2)
+        )
         if run_mcmc_kw is not None:
             kw.update(run_mcmc_kw)
 

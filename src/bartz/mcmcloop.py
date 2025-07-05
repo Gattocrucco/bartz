@@ -24,7 +24,7 @@
 
 """Functions that implement the full BART posterior MCMC loop.
 
-The main entry point is `run_mcmc`.
+The entry points are `run_mcmc` and `make_default_callback`.
 """
 
 from collections.abc import Callable
@@ -107,6 +107,7 @@ class Callback(Protocol):
     def __call__(
         self,
         *,
+        key: Key[Array, ''],
         bart: State,
         burnin: Bool[Array, ''],
         i_total: Int32[Array, ''],
@@ -122,6 +123,8 @@ class Callback(Protocol):
 
         Parameters
         ----------
+        key
+            A key for random number generation.
         bart
             The MCMC state just after updating it.
         burnin
@@ -183,7 +186,6 @@ def run_mcmc(
     callback_state: CallbackState = None,
     burnin_extractor: Callable[[State], PyTree] = BurninTrace.from_state,
     main_extractor: Callable[[State], PyTree] = MainTrace.from_state,
-    sparse_on_at: int | None = None,
 ) -> tuple[State, PyTree[Shaped[Array, 'n_burn *']], PyTree[Shaped[Array, 'n_save *']]]:
     """
     Run the MCMC for the BART posterior.
@@ -225,9 +227,6 @@ def run_mcmc(
         Functions that extract the variables to be saved respectively only in
         the main trace and in both traces, given the MCMC state as argument.
         Must return a pytree, and must be vmappable.
-    sparse_on_at
-        If specified, variable selection is activated starting from this
-        iteration.
 
     Returns
     -------
@@ -274,7 +273,6 @@ def run_mcmc(
             n_skip,
             i_outer,
             n_iters,
-            sparse_on_at,
         )
 
     return carry.bart, carry.burnin_trace, carry.main_trace
@@ -305,7 +303,6 @@ def _run_mcmc_inner_loop(
     n_skip: Int32[Array, ''],
     i_outer: Int32[Array, ''],
     n_iters: Int32[Array, ''],
-    sparse_on_at: Int32[Array, ''] | None,
 ):
     def loop_impl(carry: _Carry) -> _Carry:
         """Loop body to run if i_total < n_iters."""
@@ -315,15 +312,6 @@ def _run_mcmc_inner_loop(
 
         # update state
         carry = replace(carry, bart=mcmcstep.step(keys.pop(), carry.bart))
-        if sparse_on_at is not None:
-            carry = replace(
-                carry,
-                bart=lax.cond(
-                    carry.i_total < sparse_on_at,
-                    lambda: carry.bart,
-                    lambda: mcmcstep.step_s(keys.pop(), carry.bart),
-                ),
-            )
 
         burnin = carry.i_total < n_burn
 
@@ -331,6 +319,7 @@ def _run_mcmc_inner_loop(
         if callback is not None:
             i_skip = _compute_i_skip(carry.i_total, n_burn, n_skip)
             rt = callback(
+                key=keys.pop(),
                 bart=carry.bart,
                 burnin=burnin,
                 i_total=carry.i_total,
@@ -347,13 +336,13 @@ def _run_mcmc_inner_loop(
                 carry = replace(carry, bart=bart, callback_state=callback_state)
 
         def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
-            return pytree_at_set(
+            return _pytree_at_set(
                 carry.burnin_trace, carry.i_total, burnin_extractor(carry.bart)
             ), carry.main_trace
 
         def save_to_main_trace() -> tuple[PyTree, PyTree]:
             idx = (carry.i_total - n_burn) // n_skip
-            return carry.burnin_trace, pytree_at_set(
+            return carry.burnin_trace, _pytree_at_set(
                 carry.main_trace, idx, main_extractor(carry.bart)
             )
 
@@ -380,7 +369,9 @@ def _run_mcmc_inner_loop(
     return carry
 
 
-def pytree_at_set(dest: PyTree, index: Int32[Array, ''], val: PyTree) -> PyTree:
+def _pytree_at_set(
+    dest: PyTree[Array, ' T'], index: Int32[Array, ''], val: PyTree[Array]
+) -> PyTree[Array, ' T']:
     """Map ``dest.at[index].set(val)`` over pytrees."""
 
     def at_set(dest, val):
@@ -394,22 +385,17 @@ def pytree_at_set(dest: PyTree, index: Int32[Array, ''], val: PyTree) -> PyTree:
     return tree.map(at_set, dest, val)
 
 
-class _PrintCallbackState(Module):
-    """State used by `_print_callback`."""
-
-    dot_every: Int32[Array, ''] | None
-    report_every: Int32[Array, ''] | None
-
-
-def make_print_callback(
+def make_default_callback(
+    *,
     dot_every: int | Integer[Array, ''] | None = 1,
     report_every: int | Integer[Array, ''] | None = 100,
+    sparse_on_at: int | Integer[Array, ''] | None = None,
 ) -> dict[str, Any]:
     """
-    Prepare a logging callback for `run_mcmc`.
+    Prepare a default callback for `run_mcmc`.
 
     The callback prints a dot on every iteration, and a longer
-    report outer loop iteration.
+    report outer loop iteration, and can do variable selection.
 
     Parameters
     ----------
@@ -418,6 +404,9 @@ def make_print_callback(
     report_every
         A one line report is printed every `report_every` MCMC iterations,
         `None` to disable.
+    sparse_on_at
+        If specified, variable selection is activated starting from this
+        iteration. If `None`, variable selection is not used.
 
     Returns
     -------
@@ -425,21 +414,47 @@ def make_print_callback(
 
     Examples
     --------
-    >>> run_mcmc(..., **make_print_callback())
+    >>> run_mcmc(..., **make_default_callback())
     """
 
     def asarray_or_none(val: None | Any) -> None | Array:
         return None if val is None else jnp.asarray(val)
 
+    def callback(*, callback_state, **kwargs):
+        print_state, sparse_state = callback_state
+        print_callback(callback_state=print_state, **kwargs)
+        bart, _ = sparse_callback(callback_state=sparse_state, **kwargs)
+        return bart, callback_state
+        # here I assume that the callbacks don't update their states
+
     return dict(
-        callback=_print_callback,
-        callback_state=_PrintCallbackState(
-            asarray_or_none(dot_every), asarray_or_none(report_every)
+        callback=callback,
+        callback_state=(
+            PrintCallbackState(
+                asarray_or_none(dot_every), asarray_or_none(report_every)
+            ),
+            SparseCallbackState(asarray_or_none(sparse_on_at)),
         ),
     )
 
 
-def _print_callback(
+class PrintCallbackState(Module):
+    """State for `print_callback`.
+
+    Parameters
+    ----------
+    dot_every
+        A dot is printed every `dot_every` MCMC iterations, `None` to disable.
+    report_every
+        A one line report is printed every `report_every` MCMC iterations,
+        `None` to disable.
+    """
+
+    dot_every: Int32[Array, ''] | None
+    report_every: Int32[Array, ''] | None
+
+
+def print_callback(
     *,
     bart: State,
     burnin: Bool[Array, ''],
@@ -447,7 +462,7 @@ def _print_callback(
     n_burn: Int32[Array, ''],
     n_save: Int32[Array, ''],
     n_skip: Int32[Array, ''],
-    callback_state: _PrintCallbackState,
+    callback_state: PrintCallbackState,
     **_,
 ):
     """Print a dot and/or a report periodically during the MCMC."""
@@ -524,7 +539,7 @@ def _print_report(
     prop_total: int,
     fill: float,
 ):
-    """Print the report for `_print_callback`."""
+    """Print the report for `print_callback`."""
 
     def acc_string(acc_count, prop_count):
         if prop_count:
@@ -540,12 +555,43 @@ def _print_report(
     prefix = '\n' if newline else ''
     suffix = ' (burnin)' if burnin else ''
 
-    print(  # noqa: T201, see _print_callback for why not logging
+    print(  # noqa: T201, see print_callback for why not logging
         f'{prefix}It {i_total + 1}/{n_iters} '
         f'grow P={grow_prop:.0%} A={grow_acc}, '
         f'prune P={prune_prop:.0%} A={prune_acc}, '
         f'fill={fill:.0%}{suffix}'
     )
+
+
+class SparseCallbackState(Module):
+    """State for `sparse_callback`.
+
+    Parameters
+    ----------
+    sparse_on_at
+        If specified, variable selection is activated starting from this
+        iteration. If `None`, variable selection is not used.
+    """
+
+    sparse_on_at: Int32[Array, ''] | None
+
+
+def sparse_callback(
+    *,
+    key: Key[Array, ''],
+    bart: State,
+    i_total: Int32[Array, ''],
+    callback_state: SparseCallbackState,
+    **_,
+):
+    """Perform variable selection."""
+    if callback_state.sparse_on_at is not None:
+        bart = lax.cond(
+            i_total < callback_state.sparse_on_at,
+            lambda: bart,
+            lambda: mcmcstep.step_s(key, bart),
+        )
+    return bart, callback_state
 
 
 class Trace(grove.TreeHeaps, Protocol):
