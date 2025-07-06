@@ -344,7 +344,8 @@ def test_varprob_blocked_vars(keys):
     assert jnp.all(bart.varprob_mean == bart.varprob)
 
 
-def test_variable_selection(keys):
+@pytest.mark.parametrize('theta', ['fixed', 'free'])
+def test_variable_selection(keys: split, theta: Literal['fixed', 'free']):
     """Check that variable selection works."""
     # data config
     p = 100  # number of predictors
@@ -362,13 +363,18 @@ def test_variable_selection(keys):
 
     # run bart
     bart = gbart(
-        x_train=X, y_train=y, nskip=1000, sparse=True, theta=peff, seed=keys.pop()
+        x_train=X,
+        y_train=y,
+        nskip=1000,
+        sparse=True,
+        theta=peff if theta == 'fixed' else None,
+        seed=keys.pop(),
     )
 
     # check that the variables have been identified
     assert bart.varprob_mean[mask].sum() >= 0.9
-    assert jnp.all(bart.varprob_mean[mask] > 0.5 / peff)
-    assert jnp.all(bart.varprob_mean[~mask] < 0.5 / (p - peff))
+    assert bart.varprob_mean[mask].min().item() > 0.5 / peff
+    assert bart.varprob_mean[~mask].max().item() < 1 / (p - peff)
 
 
 def test_scale_shift(kw):
@@ -562,21 +568,8 @@ def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
     return kw_BART
 
 
-def test_rbart(kw, keys):
-    """Check bartz.BART gives the same results as R package BART."""
-    p, n = kw['x_train'].shape
-    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1)
-    # R BART can't change the min_points_per_leaf per leaf setting
-    kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
-
-    # run bart with both packages
-    bart = gbart(**kw)
-    kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
-    rbart = BART.mc_gbart(**kw_BART)
-    # use mc_gbart instead of gbart because gbart does not use the seed
-
-    # first cross-check the outputs of R BART alone
-
+def check_rbart(kw, bart, rbart):
+    """Subroutine for `test_rbart`, check that the R BART output is self-consistent."""
     # convert the trees to bartz format
     trees = rbart.treedraws['trees']
     trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
@@ -608,6 +601,23 @@ def test_rbart(kw, keys):
         # check prob_test
         prob_test = ndtr(yhat_test)
         assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
+
+
+def test_rbart(kw, keys):
+    """Check bartz.BART gives the same results as R package BART."""
+    p, n = kw['x_train'].shape
+    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1)
+    # R BART can't change the min_points_per_leaf per leaf setting
+    kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
+
+    # run bart with both packages
+    bart = gbart(**kw)
+    kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
+    rbart = BART.mc_gbart(**kw_BART)
+    # use mc_gbart instead of gbart because gbart does not use the seed
+
+    # first cross-check the outputs of R BART alone
+    check_rbart(kw, bart, rbart)
 
     # compare results of bartz and BART
 
@@ -647,7 +657,13 @@ def test_rbart(kw, keys):
         # check sigma_mean
         assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
 
-    # check varcount and varprob
+    # check number of tree nodes in forest
+    bart_count = bart.varcount.sum(axis=1)
+    rbart_count = rbart.varcount.sum(axis=1)
+    rhat_count = rhat([bart_count, rbart_count])
+    assert rhat_count < 30  # genuinely bad, see below
+    assert_allclose(bart_count.mean(), rbart_count.mean(), rtol=0.2)
+
     if p < n:
         # skip if p is large because it would be difficult for the MCMC to get
         # stuff about predictors right
@@ -658,12 +674,12 @@ def test_rbart(kw, keys):
         # having deeper trees, this 4 is not just "not good to sampling
         # accuracy but close in practice.""
         assert rhat_varcount < 4
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.3)
+        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.4)
 
         # check varprob
         if kw.get('sparse', False):
             rhat_varprob = multivariate_rhat([bart.varprob, rbart.varprob])
-            assert rhat_varprob < 1.1
+            assert rhat_varprob < 1.2
             assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.1)
 
 

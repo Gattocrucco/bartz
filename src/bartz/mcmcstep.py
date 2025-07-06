@@ -28,11 +28,12 @@ Functions that implement the BART posterior MCMC initialization and update step.
 Functions that do MCMC steps operate by taking as input a bart state, and
 outputting a new state. The inputs are not modified.
 
-The main entry points are:
+The entry points are:
 
   - `State`: The dataclass that represents a BART MCMC state.
   - `init`: Creates an initial `State` from data and configurations.
   - `step`: Performs one full MCMC step on a `State`, returning a new `State`.
+  - `step_sparse`: Performs the MCMC update for variable selection, which is skipped in `step`.
 """
 
 import math
@@ -44,6 +45,7 @@ import jax
 from equinox import Module, field, tree_at
 from jax import lax, random
 from jax import numpy as jnp
+from jax.scipy.special import gammaln
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
 from bartz import grove
@@ -111,6 +113,11 @@ class Forest(Module):
     theta
         The concentration parameter for the Dirichlet prior on the variable
         distribution `s`. Required only to update `s`.
+    a
+    b
+    rho
+        Parameters of the prior on `theta`. Required only to sample `theta`.
+        See `step_theta`.
     """
 
     leaf_tree: Float32[Array, 'num_trees 2**d']
@@ -135,6 +142,9 @@ class Forest(Module):
     sigma_mu2: Float32[Array, '']
     log_s: Float32[Array, ' p'] | None
     theta: Float32[Array, ''] | None
+    a: Float32[Array, ''] | None
+    b: Float32[Array, ''] | None
+    rho: Float32[Array, ''] | None
 
 
 class State(Module):
@@ -199,6 +209,9 @@ def init(
     min_points_per_leaf: int | Integer[Any, ''] | None = None,
     log_s: Float32[Any, ' p'] | None = None,
     theta: float | Float32[Any, ''] | None = None,
+    a: float | Float32[Any, ''] | None = None,
+    b: float | Float32[Any, ''] | None = None,
+    rho: float | Float32[Any, ''] | None = None,
 ) -> State:
     """
     Make a BART posterior sampling MCMC initial state.
@@ -260,10 +273,16 @@ def init(
     log_s
         The logarithm of the prior probability for choosing a variable to split
         along in a decision rule, conditional on the ancestors. Not normalized.
-        If not specified, use a uniform distribution.
+        If not specified, use a uniform distribution. If not specified and
+        `theta` or `rho`, `a`, `b` are, it's initialized automatically.
     theta
         The concentration parameter for the Dirichlet prior on `s`. Required
-        only to update `log_s`.
+        only to update `log_s`. If not specified, and `rho`, `a`, `b` are
+        specified, it's initialized automatically.
+    a
+    b
+    rho
+        Parameters of the prior on `theta`. Required only to sample `theta`.
 
     Returns
     -------
@@ -319,6 +338,15 @@ def init(
     else:
         blocked_vars = None
 
+    # check and initialize sparsity parameters
+    if not _all_none_or_not_none(rho, a, b):
+        msg = 'rho, a, b are not either all `None` or all set'
+        raise ValueError(msg)
+    if theta is None and rho is not None:
+        theta = rho
+    if log_s is None and theta is not None:
+        log_s = jnp.zeros(max_split.size)
+
     return State(
         X=jnp.asarray(X),
         y=y,
@@ -355,25 +383,31 @@ def init(
             leaf_indices=jnp.ones(
                 (num_trees, y.size), minimal_unsigned_dtype(2**max_depth - 1)
             ),
-            min_points_per_decision_node=(
-                None
-                if min_points_per_decision_node is None
-                else jnp.asarray(min_points_per_decision_node)
-            ),
-            min_points_per_leaf=(
-                None
-                if min_points_per_leaf is None
-                else jnp.asarray(min_points_per_leaf)
-            ),
+            min_points_per_decision_node=_asarray_or_none(min_points_per_decision_node),
+            min_points_per_leaf=_asarray_or_none(min_points_per_leaf),
             resid_batch_size=resid_batch_size,
             count_batch_size=count_batch_size,
             log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
             log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
             sigma_mu2=jnp.asarray(sigma_mu2),
-            log_s=None if log_s is None else jnp.asarray(log_s),
-            theta=None if theta is None else jnp.asarray(theta),
+            log_s=_asarray_or_none(log_s),
+            theta=_asarray_or_none(theta),
+            rho=_asarray_or_none(rho),
+            a=_asarray_or_none(a),
+            b=_asarray_or_none(b),
         ),
     )
+
+
+def _all_none_or_not_none(*args):
+    is_none = [x is None for x in args]
+    return all(is_none) or not any(is_none)
+
+
+def _asarray_or_none(x):
+    if x is None:
+        return None
+    return jnp.asarray(x)
 
 
 def _choose_suffstat_batch_size(
@@ -2481,14 +2515,8 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
     -------
     Updated BART state with re-sampled `log_s`.
 
-    Raises
-    ------
-    ValueError
-        If `bart.forest.log_s` or `bart.forest.theta` is `None`.
     """
-    if bart.forest.log_s is None or bart.forest.theta is None:
-        msg = '`bart.forest.log_s` or `bart.forest.theta` is not set, cannot sample s.'
-        raise ValueError(msg)
+    assert bart.forest.theta is not None
 
     # histogram current variable usage
     p = bart.forest.max_split.size
@@ -2500,3 +2528,85 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
 
     # update forest with new s
     return replace(bart, forest=replace(bart.forest, log_s=log_s))
+
+
+def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> State:
+    """
+    Update `theta`.
+
+    The prior is theta / (theta + rho) ~ Beta(a, b).
+
+    Parameters
+    ----------
+    key
+        Random key for sampling.
+    bart
+        The current BART state.
+    num_grid
+        The number of points in the evenly-spaced grid used to sample
+        theta / (theta + rho).
+
+    Returns
+    -------
+    Updated BART state with re-sampled `theta`.
+    """
+    assert bart.forest.log_s is not None
+    assert bart.forest.rho is not None
+    assert bart.forest.a is not None
+    assert bart.forest.b is not None
+
+    # the grid points are the midpoints of num_grid bins in (0, 1)
+    padding = 1 / (2 * num_grid)
+    lamda_grid = jnp.linspace(padding, 1 - padding, num_grid)
+
+    logp, theta_grid = _log_p_lamda(
+        lamda_grid, bart.forest.log_s, bart.forest.rho, bart.forest.a, bart.forest.b
+    )
+    i = random.categorical(key, logp)
+    theta = theta_grid[i]
+
+    return replace(bart, forest=replace(bart.forest, theta=theta))
+
+
+def _log_p_lamda(
+    lamda: Float32[Array, ' num_grid'],
+    log_s: Float32[Array, ' p'],
+    rho: Float32[Array, ''],
+    a: Float32[Array, ''],
+    b: Float32[Array, ''],
+) -> tuple[Float32[Array, ' num_grid'], Float32[Array, ' num_grid']]:
+    # in the following I use lamda[::-1] == 1 - lamda
+    theta = rho * lamda / lamda[::-1]
+    p = log_s.size
+    return (
+        (a - 1) * jnp.log1p(-lamda[::-1])  # log(lambda)
+        + (b - 1) * jnp.log1p(-lamda)  # log(1 - lambda)
+        + gammaln(theta)
+        - p * gammaln(theta / p)
+        + theta / p * jnp.sum(log_s)
+    ), theta
+
+
+def step_sparse(key: Key[Array, ''], bart: State) -> State:
+    """
+    Update the sparsity parameters.
+
+    This invokes `step_s`, and then `step_theta` only if the parameters of
+    the theta prior are defined.
+
+    Parameters
+    ----------
+    key
+        Random key for sampling.
+    bart
+        The current BART state.
+
+    Returns
+    -------
+    Updated BART state with re-sampled `log_s` and `theta`.
+    """
+    keys = split(key)
+    bart = step_s(keys.pop(), bart)
+    if bart.forest.rho is not None:
+        bart = step_theta(keys.pop(), bart)
+    return bart

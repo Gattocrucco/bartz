@@ -112,7 +112,7 @@ class gbart(Module):
     a
     b
     rho
-        Hyperparameters of the sparsity prior.
+        Hyperparameters of the sparsity prior used for variable selection.
 
         The prior distribution on the choice of predictor for each decision rule
         is
@@ -299,9 +299,9 @@ class gbart(Module):
         type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
         sparse: bool = False,
         theta: FloatLike | None = None,
-        a: FloatLike = 0.5,  # noqa: ARG002
-        b: FloatLike = 1.0,  # noqa: ARG002
-        rho: FloatLike | None = None,  # noqa: ARG002
+        a: FloatLike = 0.5,
+        b: FloatLike = 1.0,
+        rho: FloatLike | None = None,
         xinfo: Float[Array, 'p n'] | None = None,
         usequants: bool = False,
         rm_const: bool | None = True,
@@ -345,7 +345,9 @@ class gbart(Module):
             keepevery = 10 if y_train.dtype == bool else 1
 
         # process sparsity settings
-        log_s = self._process_sparsity_settings(sparse, theta, x_train)
+        theta, a, b, rho = self._process_sparsity_settings(
+            x_train, sparse, theta, a, b, rho
+        )
 
         # process "standardization" settings
         offset = self._process_offset_settings(y_train, offset)
@@ -374,8 +376,10 @@ class gbart(Module):
             ntree,
             init_kw,
             rm_const,
-            log_s,
             theta,
+            a,
+            b,
+            rho,
         )
         final_state, burnin_trace, main_trace = self._run_mcmc(
             initial_state,
@@ -617,15 +621,26 @@ class gbart(Module):
 
     @staticmethod
     def _process_sparsity_settings(
-        sparse: bool, theta: FloatLike | None, x_train: Real[Array, 'p n']
-    ) -> Float32[Array, ' p'] | None:
+        x_train: Real[Array, 'p n'],
+        sparse: bool,
+        theta: FloatLike | None,
+        a: FloatLike,
+        b: FloatLike,
+        rho: FloatLike | None,
+    ) -> (
+        tuple[None, None, None, None]
+        | tuple[FloatLike, None, None, None]
+        | tuple[None, FloatLike, FloatLike, FloatLike]
+    ):
         if not sparse:
-            return None
-        elif theta is None:
-            raise NotImplementedError
+            return None, None, None, None
+        elif theta is not None:
+            return theta, None, None, None
         else:
-            p, _ = x_train.shape
-            return jnp.zeros(p)
+            if rho is None:
+                p, _ = x_train.shape
+                rho = float(p)
+            return None, a, b, rho
 
     @staticmethod
     def _process_offset_settings(
@@ -700,8 +715,10 @@ class gbart(Module):
         ntree: int,
         init_kw: dict[str, Any] | None,
         rm_const: bool | None,
-        log_s: Float32[Array, ' p'] | None = None,
-        theta: FloatLike | None = None,
+        theta: FloatLike | None,
+        a: FloatLike | None,
+        b: FloatLike | None,
+        rho: FloatLike | None,
     ):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
@@ -727,8 +744,10 @@ class gbart(Module):
             sigma2_beta=sigma2_beta,
             min_points_per_decision_node=10,
             min_points_per_leaf=5,
-            log_s=log_s,
             theta=theta,
+            a=a,
+            b=b,
+            rho=rho,
         )
 
         if rm_const is None:
@@ -738,7 +757,7 @@ class gbart(Module):
         else:
             n_empty = jnp.count_nonzero(max_split == 0)
             if n_empty:
-                msg = f'There are {n_empty} predictors without decision rules'
+                msg = f'There are {n_empty}/{max_split.size} predictors without decision rules'
                 raise ValueError(msg)
             kw.update(filter_splitless_vars=False)
 

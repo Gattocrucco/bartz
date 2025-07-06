@@ -584,12 +584,12 @@ def sparse_callback(
     callback_state: SparseCallbackState,
     **_,
 ):
-    """Perform variable selection."""
+    """Perform variable selection, see `mcmcstep.step_sparse`."""
     if callback_state.sparse_on_at is not None:
         bart = lax.cond(
             i_total < callback_state.sparse_on_at,
             lambda: bart,
-            lambda: mcmcstep.step_s(key, bart),
+            lambda: mcmcstep.step_sparse(key, bart),
         )
     return bart, callback_state
 
