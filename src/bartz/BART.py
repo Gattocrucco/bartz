@@ -245,8 +245,6 @@ class gbart(Module):
         The prior mean of the latent mean function.
     sigest : Float32[Array, ''] | None
         The estimated standard deviation of the error used to set `lamda`.
-    sigma : Float32[Array, 'nskip+ndpost'] | None
-        The standard deviation of the error, including burn-in samples.
     yhat_test : Float32[Array, 'ndpost m'] | None
         The conditional posterior mean at `x_test` for each MCMC iteration.
 
@@ -280,13 +278,13 @@ class gbart(Module):
     """
 
     _main_trace: mcmcloop.MainTrace
+    _burnin_trace: mcmcloop.BurninTrace
     _mcmc_state: mcmcstep.State
     _splits: Real[Array, 'p max_num_splits']
     _x_train_fmt: Any = field(static=True)
 
     ndpost: int = field(static=True)
     offset: Float32[Array, '']
-    sigma: Float32[Array, ' nskip+ndpost'] | None = None
     sigest: Float32[Array, ''] | None = None
     yhat_test: Float32[Array, 'ndpost m'] | None = None
 
@@ -396,10 +394,10 @@ class gbart(Module):
         self.offset = final_state.offset  # from the state because of buffer donation
         self.ndpost = ndpost
         self.sigest = sigest
-        self.sigma = self._extract_sigma(burnin_trace, main_trace)
 
         # set private attributes
         self._main_trace = main_trace
+        self._burnin_trace = burnin_trace
         self._mcmc_state = final_state
         self._splits = splits
         self._x_train_fmt = x_train_fmt
@@ -439,6 +437,17 @@ class gbart(Module):
             return None
         else:
             return self.prob_train.mean(axis=0)
+
+    @cached_property
+    def sigma(self) -> Float32[Array, ' nskip+ndpost'] | None:
+        """The standard deviation of the error, including burn-in samples."""
+        if self._burnin_trace.sigma2 is None:
+            return None
+        else:
+            assert self._main_trace.sigma2 is not None
+            return jnp.sqrt(
+                jnp.concatenate([self._burnin_trace.sigma2, self._main_trace.sigma2])
+            )
 
     @cached_property
     def sigma_mean(self) -> Float32[Array, ''] | None:
@@ -790,7 +799,7 @@ class gbart(Module):
         kw = dict(n_burn=nskip, n_skip=keepevery, inner_loop_length=printevery)
         kw.update(
             mcmcloop.make_default_callback(
-                dot_every=None if printevery == 1 else 1,
+                dot_every=None if printevery is None or printevery == 1 else 1,
                 report_every=printevery,
                 sparse_on_at=nskip // 2 if sparse else None,
             )
@@ -799,16 +808,6 @@ class gbart(Module):
             kw.update(run_mcmc_kw)
 
         return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
-
-    @staticmethod
-    def _extract_sigma(
-        burnin_trace: mcmcloop.BurninTrace, main_trace: mcmcloop.MainTrace
-    ) -> Float32[Array, ' trace_length'] | None:
-        if burnin_trace.sigma2 is None:
-            return None
-        else:
-            assert main_trace.sigma2 is not None
-            return jnp.sqrt(jnp.concatenate([burnin_trace.sigma2, main_trace.sigma2]))
 
     def _predict(self, x):
         return mcmcloop.evaluate_trace(self._main_trace, x)

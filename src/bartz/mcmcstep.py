@@ -45,7 +45,7 @@ import jax
 from equinox import Module, field, tree_at
 from jax import lax, random
 from jax import numpy as jnp
-from jax.scipy.special import gammaln
+from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
 from bartz import grove
@@ -2559,8 +2559,12 @@ def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> Sta
     padding = 1 / (2 * num_grid)
     lamda_grid = jnp.linspace(padding, 1 - padding, num_grid)
 
+    # normalize s
+    log_s = bart.forest.log_s - logsumexp(bart.forest.log_s)
+
+    # sample lambda
     logp, theta_grid = _log_p_lamda(
-        lamda_grid, bart.forest.log_s, bart.forest.rho, bart.forest.a, bart.forest.b
+        lamda_grid, log_s, bart.forest.rho, bart.forest.a, bart.forest.b
     )
     i = random.categorical(key, logp)
     theta = theta_grid[i]

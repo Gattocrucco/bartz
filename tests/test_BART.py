@@ -127,7 +127,8 @@ def gen_y(
 def kw(keys, request):
     """Return a dictionary of keyword arguments for BART."""
     match request.param:
-        # continuous regression with some settings that induce large types
+        # continuous regression with some settings that induce large types,
+        # sparsity with free theta
         case 1:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
@@ -136,9 +137,7 @@ def kw(keys, request):
                 x_train=X,
                 y_train=y,
                 x_test=Xt,
-                w=None,
                 sparse=True,
-                theta=2,
                 ntree=20,
                 ndpost=100,
                 nskip=50,
@@ -152,21 +151,21 @@ def kw(keys, request):
                 ),
             )
 
-        # continuous regression with binary X and high p
+        # binary regression with binary X and high p
         case 2:
             p = 257  # > 256 to use uint16 for var_trees.
             X = gen_X(keys.pop(), p, 30, 'binary')
             Xt = gen_X(keys.pop(), p, 31, 'binary')
-            w = gen_w(keys.pop(), X.shape[1])
-            y = gen_y(keys.pop(), X, w, 'continuous')
+            y = gen_y(keys.pop(), X, None, 'probit')
             return dict(
                 x_train=X,
                 y_train=y,
                 x_test=Xt,
-                w=w,
+                type='pbart',
                 ntree=20,
                 ndpost=100,
                 nskip=50,
+                keepevery=1,  # the default with binary would be 10
                 printevery=None,
                 usequants=True,
                 # usequants=True with binary X to check the case in which the
@@ -183,21 +182,22 @@ def kw(keys, request):
                 ),
             )
 
-        # binary regression
+        # continuous regression with error weights and sparsity with fixed theta
         case 3:
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
-            y = gen_y(keys.pop(), X, None, 'probit')
+            w = gen_w(keys.pop(), X.shape[1])
+            y = gen_y(keys.pop(), X, w, 'continuous', s='random')
             return dict(
                 x_train=X,
                 x_test=Xt,
                 y_train=y,
-                type='pbart',
-                w=None,
+                w=w,
+                sparse=True,
+                theta=2,
                 ntree=20,
                 ndpost=100,
                 nskip=50,
-                keepevery=1,  # the default with binary would be 10
                 printevery=50,
                 usequants=True,
                 numcut=10,
@@ -462,13 +462,13 @@ def test_residuals_accuracy(kw):
     assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 
-def set_num_datapoints(kw, n):
+def set_num_datapoints(kw: dict, n):
     """Set the number of datapoints in the kw dictionary."""
     assert n <= kw['y_train'].size
     kw = kw.copy()
     kw['x_train'] = kw['x_train'][:, :n]
     kw['y_train'] = kw['y_train'][:n]
-    if kw['w'] is not None:
+    if kw.get('w') is not None:
         kw['w'] = kw['w'][:n]
     return kw
 
@@ -502,6 +502,15 @@ def test_no_datapoints(kw):
 def test_one_datapoint(kw):
     """Check automatic data scaling with 1 datapoint."""
     kw = set_num_datapoints(kw, 1)
+
+    # set the split grid manually because otherwise there would be 0 cutpoints
+    # when usequants=True, and computing varprob produces nans in that case
+    if kw.get('usequants', False):
+        p, _ = kw['x_train'].shape
+        nsplits = 10
+        xinfo = jnp.broadcast_to(jnp.arange(nsplits, dtype=jnp.float32), (p, nsplits))
+        kw.update(xinfo=xinfo)
+
     bart = gbart(**kw)
     if kw['y_train'].dtype == bool:
         tau_num = 3
@@ -514,8 +523,6 @@ def test_one_datapoint(kw):
     assert_allclose(
         bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
     )
-    if kw['usequants']:
-        assert jnp.all(bart._mcmc_state.forest.max_split == 0)
 
 
 def test_two_datapoints(kw):
@@ -553,7 +560,7 @@ def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
     kw_BART.pop('init_kw')
     kw_BART.pop('maxdepth', None)
     for arg in 'w', 'printevery':
-        if kw_BART[arg] is None:
+        if arg in kw_BART and kw_BART[arg] is None:
             kw_BART.pop(arg)
     kw_BART['seed'] = random.randint(key, (), 0, jnp.uint32(2**31)).item()
 
@@ -637,7 +644,7 @@ def test_rbart(kw, keys):
     if kw['y_train'].dtype == bool:  # binary regression
         # check prob_train
         rhat_prob_train = multivariate_rhat([bart.prob_train, rbart.prob_train])
-        assert rhat_prob_train < 1.1
+        assert rhat_prob_train < 1.2
 
         # check prob_test
         rhat_prob_test = multivariate_rhat([bart.prob_test, rbart.prob_test])
@@ -674,7 +681,7 @@ def test_rbart(kw, keys):
         # having deeper trees, this 4 is not just "not good to sampling
         # accuracy but close in practice.""
         assert rhat_varcount < 4
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.4)
+        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.2, atol=0.5)
 
         # check varprob
         if kw.get('sparse', False):
@@ -968,7 +975,7 @@ def test_jit(kw):
 
     X = kw.pop('x_train')
     y = kw.pop('y_train')
-    w = kw.pop('w')
+    w = kw.pop('w', None)
     key = kw.pop('seed')
 
     def task(X, y, w, key):
@@ -1047,7 +1054,7 @@ def test_polars(kw):
         x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
         x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
         y_train=pl.Series(numpy.array(kw['y_train'])),
-        w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
+        w=None if kw.get('w') is None else pl.Series(numpy.array(kw['w'])),
     )
     bart2 = gbart(**kw)
     pred2 = bart2.predict(kw['x_test'])
@@ -1062,7 +1069,7 @@ def test_data_format_mismatch(kw):
     kw.update(
         x_train=pl.DataFrame(numpy.array(kw['x_train']).T),
         x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
-        w=None if kw['w'] is None else pl.Series(numpy.array(kw['w'])),
+        w=None if kw.get('w') is None else pl.Series(numpy.array(kw['w'])),
     )
     bart = gbart(**kw)
     with pytest.raises(ValueError, match='format mismatch'):

@@ -48,6 +48,7 @@ class BurninTrace(Module):
     """MCMC trace with only diagnostic values."""
 
     sigma2: Float32[Array, '*trace_length'] | None
+    theta: Float32[Array, '*trace_length'] | None
     grow_prop_count: Int32[Array, '*trace_length']
     grow_acc_count: Int32[Array, '*trace_length']
     prune_prop_count: Int32[Array, '*trace_length']
@@ -60,6 +61,7 @@ class BurninTrace(Module):
         """Create a single-item burn-in trace from a MCMC state."""
         return cls(
             sigma2=state.sigma2,
+            theta=state.forest.theta,
             grow_prop_count=state.forest.grow_prop_count,
             grow_acc_count=state.forest.grow_acc_count,
             prune_prop_count=state.forest.prune_prop_count,
@@ -420,10 +422,10 @@ def make_default_callback(
     def asarray_or_none(val: None | Any) -> None | Array:
         return None if val is None else jnp.asarray(val)
 
-    def callback(*, callback_state, **kwargs):
+    def callback(*, bart, callback_state, **kwargs):
         print_state, sparse_state = callback_state
-        print_callback(callback_state=print_state, **kwargs)
-        bart, _ = sparse_callback(callback_state=sparse_state, **kwargs)
+        bart, _ = sparse_callback(callback_state=sparse_state, bart=bart, **kwargs)
+        print_callback(callback_state=print_state, bart=bart, **kwargs)
         return bart, callback_state
         # here I assume that the callbacks don't update their states
 
