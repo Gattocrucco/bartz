@@ -31,6 +31,44 @@ SOFTWARE.
 # Changelog
 
 
+## 0.7.0 Every woman knows the pain of deciding which predictors to throw away when her design matrix is full to the brim and the last season brought out new lagged features. Our 100% money-back guarantee Bayesian variable selection Dirichlet prior will pick out the best predictors for you automatically while the MCMC is running! (2025-07-07)
+
+The highlight of this release is the implementation of variable selection.
+
+* Changes apparent through the `gbart` interface:
+  * Parameters `sparse`, `theta`, `rho`, `a`, `b` to activate and configure variable selection
+  * The MCMC logging shows a `fill` metric which is how much the tree arrays are filled, to check the trees are not being constrained by the maximum depth limit
+  * Parameter `xinfo` to set manually the grid cutpoints for decision rules
+  * Fixed a stochastic bug with binary regression that would become likely with >1000 datapoints
+  * Parameter `rm_const` to decide how to handle "blocked" predictors that have no possible decision rules
+  * The defaults of parameters `ntree` and `keepevery` now depend on whether the regression is continuous or binary, as in the R package BART
+  * New attributes of `gbart` objects, matching those of R's `BART::gbart`:
+    * `prob_train`, `prob_test`, `prob_train_mean`, `prob_test_mean` (for binary regression)
+    * `sigma` includes burn-in samples, and `first_sigma` is gone
+    * `sigma_mean` (the mean is only over kept samples)
+    * `varcount`, `varcount_mean`
+    * `varprob`, `varprob_mean`
+* The `bartz.debug` submodule is now officially public, the main functionality is:
+  * The class `debug_gbart` that adds some debugging methods to `gbart`
+  * `trees_BART_to_bartz` to read trees in the format of R's BART package
+  * `sample_prior` to sample from the BART prior
+* Changes to internals:
+  * More typing in general
+  * Changes to `run_mcmc`:
+    * MCMC traces are dataclasses instead of dictionaries
+    * Switch back to using only one callback instead of two
+      * I realized that `jax.lax.cond` makes the additional callback pointless. I previously had a cached heuristic to not use `lax.cond` because it's not efficiently vmappable, but for all practical uses in the MCMC it would be.
+    * The callback accepts a jax random key, useful to implement additional MCMC steps
+    * Simplified main/burn-in distinction for custom trace extractors
+  * Changes to the MCMC internals:
+    * `min_points_per_decision_node` intended as replacement to `min_points_per_leaf`
+      * `min_points_per_leaf` is still available to allow the `gbart` interface to mimic R's BART
+      * This different constraint is easier to take into account exactly in the Metropolis-Hastings ratio, while `min_points_per_leaf` leads to a deviation from the stated distribution
+    * The tree structure MH should now match exactly the distributions written on paper, if `min_points_per_leaf` is not set
+    * The tree structure MH never proposes zero-probability states, if `min_points_per_leaf` is not set
+  * Valid usage should not produce infs or nans internally any more, so `jax.debug_infs` and `jax.debug_nans` can be used
+
+
 ## 0.6.0 bruv bernoulli got gauss beat any time (2025-05-29)
 
 * binary regression with probit link
