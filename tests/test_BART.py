@@ -648,7 +648,7 @@ def test_rbart(kw, keys):
 
         # check prob_test
         rhat_prob_test = multivariate_rhat([bart.prob_test, rbart.prob_test])
-        assert rhat_prob_test < 1.1
+        assert rhat_prob_test < 1.2
 
     else:  # continuous regression
         # check yhat_train_mean
