@@ -82,11 +82,11 @@ def make_p_nonterminal(maxdepth: int):
     return base / (1 + depth).astype(float) ** power
 
 
-Kind = Literal['plain', 'weights', 'binary']
+Kind = Literal['plain', 'weights', 'binary', 'sparse']
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3))
-def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs):
+def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs):  # noqa: C901
     """Simplified version of `bartz.mcmcstep.init` with data pre-filled."""
     X, y, max_split = gen_data(p, n)
 
@@ -130,6 +130,12 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs):
             kw['y'] = y > 0
             kw.pop('sigma2_alpha')
             kw.pop('sigma2_beta')
+
+        case 'sparse':
+            if not hasattr(mcmcstep, 'step_theta'):
+                msg = 'sparse not supported'
+                raise NotImplementedError(msg)
+            kw.update(a=0.5, b=1.0, rho=float(p))
 
     kw.update(kwargs)
 
@@ -221,19 +227,27 @@ class TimeStep:
 
     params: tuple[tuple[Mode, ...], tuple[Kind, ...]] = (
         ('compile', 'run'),
-        ('plain', 'binary', 'weights'),
+        ('plain', 'binary', 'weights', 'sparse'),
     )
     param_names = ('mode', 'kind')
 
     def setup(self, mode: Mode, kind: Kind):
         """Create an initial MCMC state and random seed, compile & warm-up."""
-        self.kw = dict(
-            key=random.key(2025_06_24_12_07), bart=simple_init(P, N, NTREE, kind)
-        )
+        key = random.key(2025_06_24_12_07)
+        keys = list(random.split(key, 3))
+        self.args = (keys, simple_init(P, N, NTREE, kind))
 
-        self.func = jit(step).lower(**self.kw).compile()
+        def func(keys, bart):
+            bart = step(key=keys.pop(), bart=bart)
+            if kind == 'sparse':
+                bart = mcmcstep.step_s(keys.pop(), bart)
+                bart = mcmcstep.step_theta(keys.pop(), bart)
+            return bart
+
+        self.func = func
+        self.compiled_func = jit(func).lower(*self.args).compile()
         if mode == 'run':
-            block_until_ready(self.func(**self.kw))
+            block_until_ready(self.compiled_func(*self.args))
 
     def time_step(self, mode: Mode, _):
         """Time running compiling `step` or running it a few times."""
@@ -241,13 +255,13 @@ class TimeStep:
             case 'compile':
 
                 @jit
-                def f(**kw):
-                    return step(**kw)
+                def f(*args):
+                    return self.func(*args)
 
-                f.lower(**self.kw).compile()
+                f.lower(*self.args).compile()
 
             case 'run':
-                block_until_ready(self.func(**self.kw))
+                block_until_ready(self.compiled_func(*self.args))
 
 
 class TimeGbart:

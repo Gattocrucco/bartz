@@ -71,7 +71,7 @@
         "warmup_time": 0.0
     },
     "speed.TimeStep.time_step": {
-        "code": "class TimeStep:\n    def time_step(self, mode: Mode, _):\n        \"\"\"Time running compiling `step` or running it a few times.\"\"\"\n        match mode:\n            case 'compile':\n    \n                @jit\n                def f(**kw):\n                    return step(**kw)\n    \n                f.lower(**self.kw).compile()\n    \n            case 'run':\n                block_until_ready(self.func(**self.kw))\n\n    def setup(self, mode: Mode, kind: Kind):\n        \"\"\"Create an initial MCMC state and random seed, compile & warm-up.\"\"\"\n        self.kw = dict(\n            key=random.key(2025_06_24_12_07), bart=simple_init(P, N, NTREE, kind)\n        )\n    \n        self.func = jit(step).lower(**self.kw).compile()\n        if mode == 'run':\n            block_until_ready(self.func(**self.kw))",
+        "code": "class TimeStep:\n    def time_step(self, mode: Mode, _):\n        \"\"\"Time running compiling `step` or running it a few times.\"\"\"\n        match mode:\n            case 'compile':\n    \n                @jit\n                def f(*args):\n                    return self.func(*args)\n    \n                f.lower(*self.args).compile()\n    \n            case 'run':\n                block_until_ready(self.compiled_func(*self.args))\n\n    def setup(self, mode: Mode, kind: Kind):\n        \"\"\"Create an initial MCMC state and random seed, compile & warm-up.\"\"\"\n        key=random.key(2025_06_24_12_07)\n        keys = list(random.split(key, 3))\n        self.args = (\n            keys, simple_init(P, N, NTREE, kind)\n        )\n    \n        def func(keys, bart):\n            bart = step(key=keys.pop(), bart=bart)\n            if kind == 'sparse':\n                bart = mcmcstep.step_s(keys.pop(), bart)\n                bart = mcmcstep.step_theta(keys.pop(), bart)\n            return bart\n    \n        self.func = func\n        self.compiled_func = jit(func).lower(*self.args).compile()\n        if mode == 'run':\n            block_until_ready(self.compiled_func(*self.args))",
         "min_run_count": 2,
         "name": "speed.TimeStep.time_step",
         "number": 0,
@@ -87,7 +87,8 @@
             [
                 "'plain'",
                 "'binary'",
-                "'weights'"
+                "'weights'",
+                "'sparse'"
             ]
         ],
         "repeat": 0,
@@ -96,7 +97,7 @@
         "timeout": 30.0,
         "type": "time",
         "unit": "seconds",
-        "version": "6c60eb9eae85261d3007278e6e3b6894e44af7d7a3474d5841209e7ad17d6e97",
+        "version": "761aaaf12738d13331e3e78bc4d5b0ff8bcc82b62afbc9ce6ea5121bb867d42c",
         "warmup_time": -1
     },
     "version": 2
