@@ -39,6 +39,7 @@ SOFTWARE.
 - [BayesTree](https://cran.r-project.org/package=BayesTree) R package, original BART implementation
 - [bartCause](https://github.com/vdorie/bartCause) R package, pre-made BART-based workflows for causal inference
 - [OpenBT](https://bitbucket.org/mpratola/openbt) Heteroskedastic BART, rotate & perturb proposals, C++ library with R interface
+- [OpenBT](https://github.com/jcyannotty/OpenBT) fork of the above
 - [stan4bart](https://github.com/vdorie/stan4bart)
 - [VCBART](https://github.com/skdeshpande91/VCBART)
 - [lsqfitgp](https://github.com/Gattocrucco/lsqfitgp) Infinite trees limit of BART
@@ -48,21 +49,19 @@ SOFTWARE.
 - [sparseBART](https://github.com/cspanbauer/sparseBART)
 - [pymc-bart](https://github.com/pymc-devs/pymc-bart) BART within PyMC
 - [semibart](https://github.com/zeldow/semibart)
-- [CSP-BART](https://github.com/ebprado/CSP-BART)
-- [AMBARTI](https://github.com/ebprado/AMBARTI)
-- [MOTR-BART](https://github.com/ebprado/MOTR-BART)
-- [bcfbma](https://github.com/EoghanONeill/bcfbma)
-- [bartBMAnew](https://github.com/EoghanONeill/bartBMAnew)
+- [ebprado](https://github.com/ebprado)'s repositories
+- [EoghanONeill](https://github.com/EoghanONeill)'s repositories
 - [gpbart](https://github.com/MateusMaiaDS/gpbart)
 - [GPBART](https://github.com/nchenderson/GPBART)
 - [bartpy](https://github.com/JakeColtman/bartpy)
 - [BayesTreePrior](https://github.com/AlexiaJM/BayesTreePrior) Sample the prior of BART
 - [BayesTree.jl](https://github.com/mathcg/BayesTree.jl)
 - [longbet](https://github.com/google/longbet)
-- [XSBART](https://github.com/richael008/XSBART) Accelerated SoftBart
+- [richael008](https://github.com/richael008)'s repositories
 - [bartMan](https://github.com/AlanInglis/bartMan) R package, posterior analysis and diagnostics
 - [drbart](https://github.com/vittorioorlandi/drbart) Density regression with BART
 - [bcf2](https://github.com/JingyuHe/bcf2) BCF warm-started with XBCF
-- [BART-BMA](https://github.com/BelindaHernandez/BART-BMA) (superseded by bartBMAnew)
+- [BART-BMA](https://github.com/BelindaHernandez/BART-BMA) (superseded by [bartBMAnew](https://github.com/EoghanONeill/bartBMAnew))
 - [XBCF](https://github.com/socket778/XBCF) (superseded by StochasticTree)
 - [mpibart](https://matthewpratola.com/mpibart) Old parallel implementation
+- [HE-BART](https://github.com/brunaw/HE-BART)
