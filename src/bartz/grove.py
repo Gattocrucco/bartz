@@ -176,7 +176,7 @@ def traverse_forest(
 
 def evaluate_forest(
     X: UInt[Array, 'p n'], trees: TreeHeaps, *, sum_trees: bool = True
-) -> Float32[Array, ' n'] | Float32[Array, 'm n']:
+) -> Float32[Array, ' n'] | Float32[Array, 'num_trees n']:
     """
     Evaluate a ensemble of trees at an array of points.
 
@@ -185,7 +185,7 @@ def evaluate_forest(
     X
         The coordinates to evaluate the trees at.
     trees
-        The tree heaps, with batch shape (m,).
+        The tree heaps, with batch shape (num_trees,).
     sum_trees
         Whether to sum the values across trees.
 
@@ -194,13 +194,13 @@ def evaluate_forest(
     The (sum of) the values of the trees at the points in `X`.
     """
     indices = traverse_forest(X, trees.var_tree, trees.split_tree)
-    ntree, _ = trees.leaf_tree.shape
-    tree_index = jnp.arange(ntree, dtype=minimal_unsigned_dtype(ntree - 1))
+    num_trees, _ = trees.leaf_tree.shape
+    tree_index = jnp.arange(num_trees, dtype=minimal_unsigned_dtype(num_trees - 1))
     leaves = trees.leaf_tree[tree_index[:, None], indices]
     if sum_trees:
         return jnp.sum(leaves, axis=0, dtype=jnp.float32)
-    # this sum suggests to swap the vmaps, but I think it's better for X
-    # copying to keep it that way
+        # this sum suggests to swap the vmaps, but I think it's better for X
+        # copying to keep it that way
     else:
         return leaves
 

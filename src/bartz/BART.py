@@ -22,17 +22,18 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Implement a class `gbart` that mimics the R BART package."""
+"""Implement classes `mc_gbart` and `gbart` that mimic the R BART package."""
 
 import math
 from collections.abc import Sequence
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Any, Literal, Protocol
 
 import jax
 import jax.numpy as jnp
 from equinox import Module, field
 from jax.scipy.special import ndtr
+from jax.tree import map_with_path
 from jaxtyping import (
     Array,
     Bool,
@@ -55,7 +56,7 @@ FloatLike = float | Float[Any, '']
 
 
 class DataFrame(Protocol):
-    """DataFrame duck-type for `gbart`.
+    """DataFrame duck-type for `mc_gbart`.
 
     Attributes
     ----------
@@ -71,7 +72,7 @@ class DataFrame(Protocol):
 
 
 class Series(Protocol):
-    """Series duck-type for `gbart`.
+    """Series duck-type for `mc_gbart`.
 
     Attributes
     ----------
@@ -86,7 +87,7 @@ class Series(Protocol):
         ...
 
 
-class gbart(Module):
+class mc_gbart(Module):
     R"""
     Nonparametric regression with Bayesian Additive Regression Trees (BART) [2]_.
 
@@ -214,9 +215,12 @@ class gbart(Module):
 
         Ignored if `xinfo` is specified.
     ndpost
-        The number of MCMC samples to save, after burn-in.
+        The number of MCMC samples to save, after burn-in. `ndpost` is the
+        total number of samples across all chains. `ndpost` is rounded up to the
+        first multiple of `mc_cores`.
     nskip
-        The number of initial MCMC samples to discard as burn-in.
+        The number of initial MCMC samples to discard as burn-in. This number
+        of samples is discarded from each chain.
     keepevery
         The thinning factor for the MCMC samples, after burn-in. By default, 1
         for continuous regression and 10 for binary regression.
@@ -229,6 +233,8 @@ class gbart(Module):
         iterations is a multiple of `printevery`, so if ``nskip + keepevery *
         ndpost`` is not a multiple of `printevery`, some of the last iterations
         will not be saved.
+    mc_cores
+        The number of independent MCMC chains.
     seed
         The seed for the random number generator.
     maxdepth
@@ -250,7 +256,7 @@ class gbart(Module):
 
     Notes
     -----
-    This interface imitates the function ``gbart`` from the R package `BART
+    This interface imitates the function ``mc_gbart`` from the R package `BART
     <https://cran.r-project.org/package=BART>`_, but with these differences:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
@@ -319,6 +325,7 @@ class gbart(Module):
         nskip: int = 100,
         keepevery: int | None = None,
         printevery: int | None = 100,
+        mc_cores: int = 2,
         seed: int | Key[Array, ''] = 0,
         maxdepth: int = 6,
         init_kw: dict | None = None,
@@ -381,6 +388,7 @@ class gbart(Module):
         )
         final_state, burnin_trace, main_trace = self._run_mcmc(
             initial_state,
+            mc_cores,
             ndpost,
             nskip,
             keepevery,
@@ -392,7 +400,7 @@ class gbart(Module):
 
         # set public attributes
         self.offset = final_state.offset  # from the state because of buffer donation
-        self.ndpost = ndpost
+        self.ndpost = main_trace.grow_prop_count.size
         self.sigest = sigest
 
         # set private attributes
@@ -439,30 +447,56 @@ class gbart(Module):
             return self.prob_train.mean(axis=0)
 
     @cached_property
-    def sigma(self) -> Float32[Array, ' nskip+ndpost'] | None:
+    def sigma(
+        self,
+    ) -> (
+        Float32[Array, ' nskip+ndpost']
+        | Float32[Array, 'nskip+ndpost/mc_cores mc_cores']
+        | None
+    ):
         """The standard deviation of the error, including burn-in samples."""
         if self._burnin_trace.sigma2 is None:
             return None
-        else:
-            assert self._main_trace.sigma2 is not None
-            return jnp.sqrt(
-                jnp.concatenate([self._burnin_trace.sigma2, self._main_trace.sigma2])
+        assert self._main_trace.sigma2 is not None
+        sigma = jnp.sqrt(
+            jnp.concatenate(
+                [self._burnin_trace.sigma2, self._main_trace.sigma2], axis=1
             )
+        )
+        sigma = sigma.T
+        _, mc_cores = sigma.shape
+        if mc_cores == 1:
+            sigma = sigma.squeeze(1)
+        return sigma
 
     @cached_property
     def sigma_mean(self) -> Float32[Array, ''] | None:
         """The mean of `sigma`, only over the post-burnin samples."""
         if self.sigma is None:
             return None
-        else:
-            return self.sigma[len(self.sigma) - self.ndpost :].mean(axis=0)
+        _, nskip = self._burnin_trace.grow_prop_count.shape
+        return self.sigma[nskip:, ...].mean()
 
     @cached_property
     def varcount(self) -> Int32[Array, 'ndpost p']:
         """Histogram of predictor usage for decision rules in the trees."""
-        return mcmcloop.compute_varcount(
+        return self._compute_varcount_multichain_flattened(
             self._mcmc_state.forest.max_split.size, self._main_trace
         )
+
+    @staticmethod
+    @partial(jax.vmap, in_axes=(None, 0))
+    def _compute_varcount_multichain(
+        p: int, main_trace: mcmcloop.MainTrace
+    ) -> Int32[Array, 'mc_cores ndpost/mc_cores p']:
+        return mcmcloop.compute_varcount(p, main_trace)
+
+    @classmethod
+    @partial(jax.jit, static_argnums=(0, 1))
+    def _compute_varcount_multichain_flattened(
+        cls, p: int, main_trace: mcmcloop.MainTrace
+    ) -> Int32[Array, 'ndpost p']:
+        return cls._compute_varcount_multichain(p, main_trace).reshape(-1, p)
 
     @cached_property
     def varcount_mean(self) -> Float32[Array, ' p']:
@@ -472,13 +506,15 @@ class gbart(Module):
     @cached_property
     def varprob(self) -> Float32[Array, 'ndpost p']:
         """Posterior samples of the probability of choosing each predictor for a decision rule."""
+        max_split = self._mcmc_state.forest.max_split
+        p = max_split.size
         varprob = self._main_trace.varprob
         if varprob is None:
-            max_split = self._mcmc_state.forest.max_split
-            p = max_split.size
             peff = jnp.count_nonzero(max_split)
             varprob = jnp.where(max_split, 1 / peff, 0)
             varprob = jnp.broadcast_to(varprob, (self.ndpost, p))
+        else:
+            varprob = varprob.reshape(-1, p)
         return varprob
 
     @cached_property
@@ -775,9 +811,11 @@ class gbart(Module):
 
         return mcmcstep.init(**kw)
 
-    @staticmethod
+    @classmethod
     def _run_mcmc(
+        cls,
         mcmc_state: mcmcstep.State,
+        mc_cores: int,
         ndpost: int,
         nskip: int,
         keepevery: int,
@@ -785,15 +823,18 @@ class gbart(Module):
         seed: int | Integer[Array, ''] | Key[Array, ''],
         run_mcmc_kw: dict | None,
         sparse: bool,
-    ):
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
         # prepare random generator seed
         if isinstance(seed, jax.Array) and jnp.issubdtype(
             seed.dtype, jax.dtypes.prng_key
         ):
-            key = seed.copy()
-            # copy because the inner loop in run_mcmc will donate the buffer
+            key = seed
         else:
             key = jax.random.key(seed)
+        keys = jax.random.split(key, mc_cores)
+
+        # round up ndpost
+        ndpost = mc_cores * (ndpost // mc_cores + bool(ndpost % mc_cores))
 
         # prepare arguments
         kw = dict(n_burn=nskip, n_skip=keepevery, inner_loop_length=printevery)
@@ -807,7 +848,75 @@ class gbart(Module):
         if run_mcmc_kw is not None:
             kw.update(run_mcmc_kw)
 
-        return mcmcloop.run_mcmc(key, mcmc_state, ndpost, **kw)
+        return cls._vmapped_run_mcmc(keys, mcmc_state, ndpost // mc_cores, **kw)
 
-    def _predict(self, x):
-        return mcmcloop.evaluate_trace(self._main_trace, x)
+    @classmethod
+    def _vmapped_run_mcmc(
+        cls, keys: Key[Array, ' mc_cores'], bart: mcmcstep.State, *args, **kwargs
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
+        out_axes = cls._vmap_axes_for_state(bart)
+
+        @partial(jax.vmap, out_axes=(out_axes, 0, 0))
+        def _partial_vmapped_run_mcmc(key):
+            return mcmcloop.run_mcmc(key, bart, *args, **kwargs)
+
+        return _partial_vmapped_run_mcmc(keys)
+
+    @staticmethod
+    def _vmap_axes_for_state(state: mcmcstep.State) -> mcmcstep.State:
+        def choose_vmap_index(path, _) -> Literal[0, None]:
+            no_vmap_attrs = (
+                '.X',
+                '.y',
+                '.offset',
+                '.prec_scale',
+                '.sigma2_alpha',
+                '.sigma2_beta',
+                '.forest.max_split',
+                '.forest.blocked_vars',
+                '.forest.p_nonterminal',
+                '.forest.p_propose_grow',
+                '.forest.min_points_per_decision_node',
+                '.forest.min_points_per_leaf',
+                '.forest.sigma_mu2',
+                '.forest.a',
+                '.forest.b',
+                '.forest.rho',
+            )
+            str_path = ''.join(map(str, path))
+            if str_path in no_vmap_attrs:
+                return None
+            else:
+                return 0
+
+        return map_with_path(choose_vmap_index, state)
+
+    def _predict(self, x: UInt[Array, 'p m']) -> Float32[Array, 'ndpost m']:
+        return self._evaluate_chains_flattened(self._main_trace, x)
+
+    @classmethod
+    @partial(jax.jit, static_argnums=(0,))
+    def _evaluate_chains_flattened(
+        cls, trace: mcmcloop.MainTrace, x: UInt[Array, 'p m']
+    ) -> Float32[Array, 'ndpost m']:
+        out = cls._evaluate_chains(trace, x)
+        mc_cores, ndpost_per_chain, m = out.shape
+        return out.reshape(mc_cores * ndpost_per_chain, m)
+
+    @staticmethod
+    @partial(jax.vmap, in_axes=(0, None))
+    def _evaluate_chains(
+        trace: mcmcloop.MainTrace, x: UInt[Array, 'p m']
+    ) -> Float32[Array, 'mc_cores ndpost/mc_cores m']:
+        return mcmcloop.evaluate_trace(trace, x)
+
+
+class gbart(mc_gbart):
+    """Subclass of `mc_gbart` that forces `mc_cores=1`."""
+
+    def __init__(self, *args, mc_cores: None = None, **kwargs):
+        if mc_cores is not None:
+            msg = 'gbart does not support mc_cores, use mc_gbart instead'
+            raise ValueError(msg)
+        kwargs.update(mc_cores=1)
+        super().__init__(*args, **kwargs)
