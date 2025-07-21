@@ -469,10 +469,13 @@ def print_callback(
 ):
     """Print a dot and/or a report periodically during the MCMC."""
     if callback_state.dot_every is not None:
-        cond = (i_total + 1) % callback_state.dot_every == 0
+        dot_cond = (i_total + 1) % callback_state.dot_every == 0
         lax.cond(
-            cond,
-            lambda: debug.callback(lambda: print('.', end='', flush=True)),  # noqa: T201
+            dot_cond,
+            lambda: debug.callback(
+                lambda: print('.', end='', flush=True),  # noqa: T201
+                ordered=True,
+            ),
             # logging can't do in-line printing so I'll stick to print
             lambda: None,
         )
@@ -482,7 +485,6 @@ def print_callback(
         def print_report():
             debug.callback(
                 _print_report,
-                newline=callback_state.dot_every is not None,
                 burnin=burnin,
                 i_total=i_total,
                 n_iters=n_burn + n_save * n_skip,
@@ -494,8 +496,17 @@ def print_callback(
                 fill=grove.forest_fill(bart.forest.split_tree),
             )
 
-        cond = (i_total + 1) % callback_state.report_every == 0
-        lax.cond(cond, print_report, lambda: None)
+        report_cond = (i_total + 1) % callback_state.report_every == 0
+
+        # print a newline after dots
+        if callback_state.dot_every is not None:
+            lax.cond(
+                report_cond & dot_cond,
+                lambda: debug.callback(lambda: print(), ordered=True),  # noqa: T201
+                lambda: None,
+            )
+
+        lax.cond(report_cond, print_report, lambda: None)
 
 
 def _convert_jax_arrays_in_args(func: Callable) -> Callable:
@@ -506,7 +517,7 @@ def _convert_jax_arrays_in_args(func: Callable) -> Callable:
     """
 
     def convert_jax_arrays(pytree: PyTree) -> PyTree:
-        def convert_jax_arrays(val: Any) -> Any:
+        def convert_jax_array(val: Any) -> Any:
             if not isinstance(val, jax.Array):
                 return val
             elif val.shape:
@@ -514,7 +525,7 @@ def _convert_jax_arrays_in_args(func: Callable) -> Callable:
             else:
                 return val.item()
 
-        return tree.map(convert_jax_arrays, pytree)
+        return tree.map(convert_jax_array, pytree)
 
     @wraps(func)
     def new_func(*args, **kw):
@@ -530,7 +541,6 @@ def _convert_jax_arrays_in_args(func: Callable) -> Callable:
 # deadlock with the main thread
 def _print_report(
     *,
-    newline: bool,
     burnin: bool,
     i_total: int,
     n_iters: int,
@@ -554,11 +564,10 @@ def _print_report(
     grow_acc = acc_string(grow_acc_count, grow_prop_count)
     prune_acc = acc_string(prune_acc_count, prune_prop_count)
 
-    prefix = '\n' if newline else ''
     suffix = ' (burnin)' if burnin else ''
 
     print(  # noqa: T201, see print_callback for why not logging
-        f'{prefix}It {i_total + 1}/{n_iters} '
+        f'It {i_total + 1}/{n_iters} '
         f'grow P={grow_prop:.0%} A={grow_acc}, '
         f'prune P={prune_prop:.0%} A={prune_acc}, '
         f'fill={fill:.0%}{suffix}'
