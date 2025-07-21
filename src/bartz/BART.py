@@ -854,13 +854,17 @@ class mc_gbart(Module):
     def _vmapped_run_mcmc(
         cls, keys: Key[Array, ' mc_cores'], bart: mcmcstep.State, *args, **kwargs
     ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
-        out_axes = cls._vmap_axes_for_state(bart)
+        bart_axes = cls._vmap_axes_for_state(bart)
 
-        @partial(jax.vmap, out_axes=(out_axes, 0, 0))
-        def _partial_vmapped_run_mcmc(key):
+        barts = jax.vmap(
+            lambda x: x, in_axes=None, out_axes=bart_axes, axis_size=keys.size
+        )(bart)
+
+        @partial(jax.vmap, in_axes=(0, bart_axes), out_axes=(bart_axes, 0, 0))
+        def _partial_vmapped_run_mcmc(key, bart):
             return mcmcloop.run_mcmc(key, bart, *args, **kwargs)
 
-        return _partial_vmapped_run_mcmc(keys)
+        return _partial_vmapped_run_mcmc(keys, barts)
 
     @staticmethod
     def _vmap_axes_for_state(state: mcmcstep.State) -> mcmcstep.State:
