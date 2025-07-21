@@ -490,7 +490,6 @@ def print_callback(
                 n_iters=n_burn + n_save * n_skip,
                 grow_prop_count=bart.forest.grow_prop_count,
                 grow_acc_count=bart.forest.grow_acc_count,
-                prune_prop_count=bart.forest.prune_prop_count,
                 prune_acc_count=bart.forest.prune_acc_count,
                 prop_total=len(bart.forest.leaf_tree),
                 fill=grove.forest_fill(bart.forest.split_tree),
@@ -546,31 +545,21 @@ def _print_report(
     n_iters: int,
     grow_prop_count: int,
     grow_acc_count: int,
-    prune_prop_count: int,
     prune_acc_count: int,
     prop_total: int,
     fill: float,
 ):
     """Print the report for `print_callback`."""
-
-    def acc_string(acc_count, prop_count):
-        if prop_count:
-            return f'{acc_count / prop_count:.0%}'
-        else:
-            return 'n/d'
-
     grow_prop = grow_prop_count / prop_total
-    prune_prop = prune_prop_count / prop_total
-    grow_acc = acc_string(grow_acc_count, grow_prop_count)
-    prune_acc = acc_string(prune_acc_count, prune_prop_count)
+    move_acc = (grow_acc_count + prune_acc_count) / prop_total
 
     suffix = ' (burnin)' if burnin else ''
 
     print(  # noqa: T201, see print_callback for why not logging
-        f'It {i_total + 1}/{n_iters} '
-        f'grow P={grow_prop:.0%} A={grow_acc}, '
-        f'prune P={prune_prop:.0%} A={prune_acc}, '
-        f'fill={fill:.0%}{suffix}'
+        f'Iteration {i_total + 1}/{n_iters}, '
+        f'grow prob: {grow_prop:.0%}, '
+        f'move acc: {move_acc:.0%}, '
+        f'fill: {fill:.0%}{suffix}'
     )
 
 
