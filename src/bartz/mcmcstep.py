@@ -2515,6 +2515,10 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
     -------
     Updated BART state with re-sampled `log_s`.
 
+    Notes
+    -----
+    This full conditional is approximated, because it does not take into account
+    that there are forbidden decision rules.
     """
     assert bart.forest.theta is not None
 
