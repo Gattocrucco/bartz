@@ -185,8 +185,8 @@ benchmark-site:
 benchmark-server: benchmark-site
 	$(ASV) preview $(ARGS)
 
-.PHONY: benchmark-current
-benchmark-current: check-committed
+.PHONY: benchmark-main
+benchmark-main:
 	$(ASV) run --show-stderr main^! $(ARGS)
 
 .PHONY: benchmark-quick

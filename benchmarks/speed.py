@@ -29,20 +29,25 @@ from functools import partial
 from inspect import signature
 from io import StringIO
 from itertools import product
+from re import escape, match
 from typing import Literal
 
 from asv_runner.benchmarks.mark import skip_for_params
 from jax import block_until_ready, clear_caches, eval_shape, jit, random, vmap
 from jax import numpy as jnp
+from jax.tree import map_with_path
 from jax.tree_util import tree_map
 
 from bartz import mcmcstep
 from bartz.mcmcloop import run_mcmc
 
 try:
-    from bartz.BART import gbart
+    from bartz.BART import mc_gbart as gbart
 except ImportError:
-    from bartz import BART as gbart
+    try:
+        from bartz.BART import gbart
+    except ImportError:
+        from bartz import BART as gbart
 
 try:
     from bartz.mcmcstep import step
@@ -82,7 +87,7 @@ def make_p_nonterminal(maxdepth: int):
     return base / (1 + depth).astype(float) ** power
 
 
-Kind = Literal['plain', 'weights', 'binary', 'sparse']
+Kind = Literal['plain', 'weights', 'binary', 'sparse', 'vmap-1', 'vmap-2']
 
 
 @partial(jit, static_argnums=(0, 1, 2, 3))
@@ -132,14 +137,52 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
             kw.pop('sigma2_beta')
 
         case 'sparse':
-            if not hasattr(mcmcstep, 'step_theta'):
+            if not hasattr(mcmcstep, 'step_sparse'):
                 msg = 'sparse not supported'
                 raise NotImplementedError(msg)
             kw.update(a=0.5, b=1.0, rho=float(p))
 
     kw.update(kwargs)
 
-    return init(**kw)
+    state = init(**kw)
+
+    if kind.startswith('vmap-'):
+        axes = vmap_axes_for_state(state)
+        length = int(kind.split('-')[1])
+        state = vmap(lambda x: x, in_axes=None, out_axes=axes, axis_size=length)(state)
+
+    return state
+
+
+def vmap_axes_for_state(state):
+    """Get vmap axes for the MCMC state."""
+
+    def choose_vmap_index(path, _) -> Literal[0, None]:
+        no_vmap_attrs = (
+            'X',
+            'y',
+            'offset',
+            'prec_scale',
+            'sigma2_alpha',
+            'sigma2_beta',
+            'max_split',
+            'blocked_vars',
+            'p_nonterminal',
+            'p_propose_grow',
+            'min_points_per_decision_node',
+            'min_points_per_leaf',
+            'sigma_mu2',
+            'a',
+            'b',
+            'rho',
+        )
+        str_path = ''.join(map(str, path))
+        if any(match(rf'\b{escape(attr)}\b', str_path) for attr in no_vmap_attrs):
+            return None
+        else:
+            return 0
+
+    return map_with_path(choose_vmap_index, state)
 
 
 Mode = Literal['compile', 'run']
@@ -227,22 +270,30 @@ class TimeStep:
 
     params: tuple[tuple[Mode, ...], tuple[Kind, ...]] = (
         ('compile', 'run'),
-        ('plain', 'binary', 'weights', 'sparse'),
+        ('plain', 'binary', 'weights', 'sparse', 'vmap-1', 'vmap-2'),
     )
     param_names = ('mode', 'kind')
 
     def setup(self, mode: Mode, kind: Kind):
         """Create an initial MCMC state and random seed, compile & warm-up."""
         key = random.key(2025_06_24_12_07)
-        keys = list(random.split(key, 3))
+        if kind.startswith('vmap-'):
+            length = int(kind.split('-')[1])
+            keys = list(random.split(key, (2, length)))
+        else:
+            keys = list(random.split(key))
+
         self.args = (keys, simple_init(P, N, NTREE, kind))
 
         def func(keys, bart):
             bart = step(key=keys.pop(), bart=bart)
             if kind == 'sparse':
-                bart = mcmcstep.step_s(keys.pop(), bart)
-                bart = mcmcstep.step_theta(keys.pop(), bart)
+                bart = mcmcstep.step_sparse(keys.pop(), bart)
             return bart
+
+        if kind.startswith('vmap-'):
+            axes = vmap_axes_for_state(self.args[1])
+            func = vmap(func, in_axes=(0, axes), out_axes=axes)
 
         self.func = func
         self.compiled_func = jit(func).lower(*self.args).compile()
@@ -265,16 +316,32 @@ class TimeStep:
 
 
 class TimeGbart:
-    """Benchmarks of `BART.gbart`."""
+    """Benchmarks of `BART.mc_gbart`."""
 
     # asv config
-    params: tuple[tuple[int, ...], tuple[Cache, ...]] = ((0, NITERS), ('cold', 'warm'))
-    param_names = ('niters', 'cache')
+    params: tuple[tuple[int, ...], tuple[Cache, ...], tuple[int, ...]] = (
+        (0, NITERS),
+        ('cold', 'warm'),
+        (1, 2, 8, 32),
+    )
+    param_names = ('niters', 'cache', 'nchains')
     warmup_time = 0.0
     number = 1
 
-    def setup(self, niters: int, cache: Cache):
+    def setup(self, niters: int, cache: Cache, nchains: int):
         """Prepare the arguments and run once to warm-up."""
+        # check support for multiple chains
+        if (niters == 0 or cache == 'cold') and nchains > 1:
+            msg = 'skip multi-chain with 0 iterations or cold cache'
+            raise NotImplementedError(msg)
+
+        sig = signature(gbart)
+        support_multichain = 'mc_cores' in sig.parameters
+        if nchains != 1 and not support_multichain:
+            msg = 'multi-chain not supported'
+            raise NotImplementedError(msg)
+
+        # random seed
         key = random.key(2025_06_24_14_55)
         keys = list(random.split(key, 3))
 
@@ -287,8 +354,14 @@ class TimeGbart:
 
         # arguments
         self.kw = dict(
-            x_train=X, y_train=y, nskip=niters // 2, ndpost=niters // 2, seed=keys.pop()
+            x_train=X,
+            y_train=y,
+            nskip=niters // 2,
+            ndpost=(niters - niters // 2) * nchains,
+            seed=keys.pop(),
         )
+        if support_multichain:
+            self.kw.update(mc_cores=nchains)
 
         # decide how much to cold-start
         match cache:
