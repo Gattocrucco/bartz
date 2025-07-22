@@ -831,7 +831,13 @@ class mc_gbart(Module):
             key = seed
         else:
             key = jax.random.key(seed)
-        keys = jax.random.split(key, mc_cores)
+        if mc_cores == 1:
+            # avoid splitting if there's just one chain, such that running
+            # k times with 1 chain from k split keys is equivalent to running
+            # with k chains
+            keys = key[None]
+        else:
+            keys = jax.random.split(key, mc_cores)
 
         # round up ndpost
         ndpost = mc_cores * (ndpost // mc_cores + bool(ndpost % mc_cores))
@@ -918,9 +924,9 @@ class mc_gbart(Module):
 class gbart(mc_gbart):
     """Subclass of `mc_gbart` that forces `mc_cores=1`."""
 
-    def __init__(self, *args, mc_cores: None = None, **kwargs):
-        if mc_cores is not None:
-            msg = 'gbart does not support mc_cores, use mc_gbart instead'
-            raise ValueError(msg)
+    def __init__(self, *args, **kwargs):
+        if 'mc_cores' in kwargs:
+            msg = "gbart.__init__() got an unexpected keyword argument 'mc_cores'"
+            raise TypeError(msg)
         kwargs.update(mc_cores=1)
         super().__init__(*args, **kwargs)

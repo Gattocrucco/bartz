@@ -31,7 +31,7 @@ import os
 import signal
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import Any, Literal
 
@@ -43,7 +43,8 @@ from jax import debug_nans, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jaxtyping import Array, Float, Float32, Int32, Key, Real, UInt
+from jax.tree_util import tree_map
+from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
 from bartz.debug import (
@@ -55,6 +56,7 @@ from bartz.debug import (
     trees_BART_to_bartz,
 )
 from bartz.debug import debug_gbart as gbart
+from bartz.debug import debug_mc_gbart as mc_gbart
 from bartz.grove import is_actual_leaf, tree_depth, tree_depths
 from bartz.jaxext import split
 from bartz.mcmcloop import (
@@ -63,18 +65,20 @@ from bartz.mcmcloop import (
     compute_varcount,
     evaluate_trace,
 )
+from bartz.mcmcstep import State
 from tests.rbartpackages import BART
 from tests.util import assert_close_matrices
 
 
-def gen_X(key, p, n, kind):
+def gen_X(
+    key: Key[Array, ''], p: int, n: int, kind: Literal['continuous', 'binary']
+) -> Real[Array, 'p n']:
     """Generate a matrix of predictors."""
-    if kind == 'continuous':
-        return random.uniform(key, (p, n), float, -2, 2)
-    elif kind == 'binary':
-        return random.bernoulli(key, 0.5, (p, n)).astype(float)
-    else:
-        raise KeyError(kind)
+    match kind:
+        case 'continuous':
+            return random.uniform(key, (p, n), float, -2, 2)
+        case 'binary':
+            return random.bernoulli(key, 0.5, (p, n)).astype(float)
 
 
 def f(x: Real[Array, 'p n'], s: Real[Array, ' p']) -> Float32[Array, ' n']:
@@ -83,19 +87,19 @@ def f(x: Real[Array, 'p n'], s: Real[Array, ' p']) -> Float32[Array, ' n']:
     return s @ jnp.cos(2 * jnp.pi / T * x) / jnp.sqrt(s @ s)
 
 
-def gen_w(key, n):
+def gen_w(key: Key[Array, ''], n: int) -> Float32[Array, ' n']:
     """Generate a vector of error weights."""
     return jnp.exp(random.uniform(key, (n,), float, -1, 1))
 
 
 def gen_y(
-    key,
-    X,
-    w,
+    key: Key[Array, ''],
+    X: Real[Array, 'p n'],
+    w: Float32[Array, ' n'] | None,
     kind: Literal['continuous', 'probit'],
     *,
     s: Real[Array, ' p'] | Literal['uniform', 'random'] = 'uniform',
-):
+) -> Float32[Array, ' n'] | Bool[Array, ' n']:
     """Generate responses given predictors."""
     keys = split(key, 3)
 
@@ -145,6 +149,7 @@ def kw(keys, request):
                 usequants=False,
                 numcut=256,  # > 255 to use uint16 for X and split_trees
                 maxdepth=9,  # > 8 to use uint16 for leaf_indices
+                mc_cores=2,
                 seed=keys.pop(),
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
@@ -173,6 +178,7 @@ def kw(keys, request):
                 numcut=255,
                 maxdepth=6,
                 seed=keys.pop(),
+                mc_cores=1,
                 init_kw=dict(
                     resid_batch_size=16,
                     count_batch_size=16,
@@ -203,6 +209,7 @@ def kw(keys, request):
                 numcut=10,
                 maxdepth=8,  # 8 to check if leaf_indices changes type too soon
                 seed=keys.pop(),
+                mc_cores=1,
                 init_kw=dict(
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
                 ),
@@ -211,9 +218,11 @@ def kw(keys, request):
 
 def test_sequential_guarantee(kw):
     """Check that the way iterations are saved does not influence the result."""
+    # reference run
     kw['keepevery'] = 1
-    bart1 = gbart(**kw)
+    bart1 = mc_gbart(**kw)
 
+    # run moving some samples form burn-in to main
     kw['seed'] = random.clone(kw['seed'])
     if kw.get('sparse', False):
         callback_state = (
@@ -222,29 +231,43 @@ def test_sequential_guarantee(kw):
         )
         # see `mcmcloop.make_default_callback`
         kw.setdefault('run_mcmc_kw', {}).setdefault('callback_state', callback_state)
-    kw['nskip'] -= 1
-    kw['ndpost'] += 1
-    bart2 = gbart(**kw)
-    assert_array_equal(bart1.yhat_train, bart2.yhat_train[1:])
+    delta = 1
+    kw['nskip'] -= delta
+    kw['ndpost'] += delta * kw['mc_cores']
+    bart2 = mc_gbart(**kw)
+    assert_array_equal(
+        bart1.yhat_train,
+        bart2.yhat_train.reshape(
+            kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
+        )[:, delta:, :].reshape(bart1.ndpost, kw['y_train'].size),
+    )
 
+    # run keeping 1 every 2 samples
     kw['seed'] = random.clone(kw['seed'])
     kw['keepevery'] = 2
-    bart3 = gbart(**kw)
-    yhat_train = bart2.yhat_train[1::2]
-    assert_array_equal(yhat_train, bart3.yhat_train[: len(yhat_train)])
+    bart3 = mc_gbart(**kw)
+    bart2_yhat_train = bart2.yhat_train.reshape(
+        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
+    )[:, 1::2, :]
+    bart3_yhat_train = bart3.yhat_train.reshape(
+        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
+    )[:, : bart2_yhat_train.shape[1], :]
+    assert_array_equal(bart2_yhat_train, bart3_yhat_train)
 
 
 def test_output_shapes(kw):
-    """Check the output shapes of all the array attributes of BART.gbart."""
-    bart = gbart(**kw)
+    """Check the output shapes of all the array attributes of `bartz.BART.mc_gbart`."""
+    bart = mc_gbart(**kw)
 
     ndpost = kw['ndpost']
     nskip = kw['nskip']
+    mc_cores = kw['mc_cores']
     p, n = kw['x_train'].shape
     _, m = kw['x_test'].shape
 
     binary = kw['y_train'].dtype == bool
 
+    assert ndpost == bart.ndpost
     assert bart.offset.shape == ()
     if binary:
         assert bart.prob_test.shape == (ndpost, m)
@@ -258,7 +281,10 @@ def test_output_shapes(kw):
         assert bart.prob_test_mean is None
         assert bart.prob_train is None
         assert bart.prob_train_mean is None
-        assert bart.sigma.shape == (nskip + ndpost,)
+        if mc_cores == 1:
+            assert bart.sigma.shape == (nskip + ndpost,)
+        else:
+            assert bart.sigma.shape == (nskip + ndpost // mc_cores, mc_cores)
         assert bart.sigma_mean.shape == ()
     assert bart.varcount.shape == (ndpost, p)
     assert bart.varcount_mean.shape == (p,)
@@ -278,7 +304,7 @@ def test_output_shapes(kw):
 
 def test_output_types(kw):
     """Check the output types of all the attributes of BART.gbart."""
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
 
     binary = kw['y_train'].dtype == bool
 
@@ -306,14 +332,14 @@ def test_output_types(kw):
 
 def test_predict(kw):
     """Check that the public BART.gbart.predict method works."""
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     yhat_train = bart.predict(kw['x_train'])
     assert_array_equal(bart.yhat_train, yhat_train)
 
 
 def test_varprob(kw):
     """Basic checks of the `varprob` attribute."""
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
 
     # basic properties of probabilities
     assert jnp.all(bart.varprob >= 0)
@@ -338,7 +364,7 @@ def test_varprob_blocked_vars(keys):
     y = gen_y(keys.pop(), X, None, 'continuous')
     with debug_nans(False):
         xinfo = jnp.array([[jnp.nan], [0]])
-    bart = gbart(x_train=X, y_train=y, xinfo=xinfo, seed=keys.pop())
+    bart = mc_gbart(x_train=X, y_train=y, xinfo=xinfo, seed=keys.pop())
     assert_array_equal(bart._mcmc_state.forest.max_split, [0, 1])
     assert_array_equal(bart.varprob_mean, [0, 1])
     assert jnp.all(bart.varprob_mean == bart.varprob)
@@ -362,7 +388,7 @@ def test_variable_selection(keys: split, theta: Literal['fixed', 'free']):
     y = gen_y(keys.pop(), X, None, 'continuous', s=s)
 
     # run bart
-    bart = gbart(
+    bart = mc_gbart(
         x_train=X,
         y_train=y,
         nskip=1000,
@@ -382,7 +408,7 @@ def test_scale_shift(kw):
     if kw['y_train'].dtype == bool:
         pytest.skip('Cannot rescale binary responses.')
 
-    bart1 = gbart(**kw)
+    bart1 = mc_gbart(**kw)
 
     offset = 0.4703189
     scale = 0.5294714
@@ -390,7 +416,7 @@ def test_scale_shift(kw):
     # note: using the same seed does not guarantee stable error because the mcmc
     # makes discrete choices based on thresholds on floats, so numerical error
     # can be amplified.
-    bart2 = gbart(**kw)
+    bart2 = mc_gbart(**kw)
 
     assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-6)
     assert_allclose(
@@ -425,7 +451,7 @@ def test_scale_shift(kw):
 def test_min_points_per_decision_node(kw):
     """Check that the limit of at least 10 datapoints per decision node is respected."""
     kw['init_kw'].update(min_points_per_leaf=None)
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     distr = bart.points_per_decision_node_distr()
     distr_marg = distr.sum(axis=(0, 1))
 
@@ -441,7 +467,7 @@ def test_min_points_per_decision_node(kw):
 def test_min_points_per_leaf(kw):
     """Check that the limit of at least 5 datapoints per leaf is respected."""
     kw['init_kw'].update(min_points_per_decision_node=None)
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     distr = bart.points_per_leaf_distr()
     distr_marg = distr.sum(axis=(0, 1))
 
@@ -457,7 +483,7 @@ def test_min_points_per_leaf(kw):
 def test_residuals_accuracy(kw):
     """Check that running residuals are close to the recomputed final residuals."""
     kw.update(ntree=200, ndpost=1000, nskip=0)
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     accum_resid, actual_resid = bart.compare_resid()
     assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
@@ -484,7 +510,7 @@ def test_no_datapoints(kw):
     xinfo = jnp.broadcast_to(jnp.arange(nsplits, dtype=jnp.float32), (p, nsplits))
     kw.update(xinfo=xinfo)
 
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     ndpost = kw['ndpost']
     assert bart.yhat_train.shape == (ndpost, 0)
     assert bart.offset == 0
@@ -511,7 +537,7 @@ def test_one_datapoint(kw):
         xinfo = jnp.broadcast_to(jnp.arange(nsplits, dtype=jnp.float32), (p, nsplits))
         kw.update(xinfo=xinfo)
 
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     if kw['y_train'].dtype == bool:
         tau_num = 3
         assert bart.sigest is None
@@ -528,7 +554,7 @@ def test_one_datapoint(kw):
 def test_two_datapoints(kw):
     """Check automatic data scaling with 2 datapoints."""
     kw = set_num_datapoints(kw, 2)
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     if kw['y_train'].dtype != bool:
         assert_allclose(bart.sigest, kw['y_train'].std(), rtol=1e-6)
     if kw['usequants']:
@@ -546,18 +572,18 @@ def test_few_datapoints(kw):
         min_points_per_decision_node=10, min_points_per_leaf=None
     )
     kw = set_num_datapoints(kw, 9)  # < 10 = 2 * 5
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
     kw['init_kw'].update(min_points_per_decision_node=None, min_points_per_leaf=5)
     kw['seed'] = random.clone(kw['seed'])
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 
-def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: gbart) -> dict:
+def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: mc_gbart) -> dict:
     """Convert bartz keyword arguments to R BART keyword arguments."""
-    kw_BART = dict(**kw, rm_const=False, mc_cores=1)
+    kw_BART = dict(**kw, rm_const=False)
     kw_BART.pop('init_kw')
     kw_BART.pop('maxdepth', None)
     for arg in 'w', 'printevery':
@@ -612,14 +638,14 @@ def check_rbart(kw, bart, rbart):
 
 
 def test_rbart(kw, keys):
-    """Check bartz.BART gives the same results as R package BART."""
+    """Check `bartz.BART` gives the same results as the R package BART."""
     p, n = kw['x_train'].shape
-    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1)
+    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1, mc_cores=1)
     # R BART can't change the min_points_per_leaf per leaf setting
     kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
 
     # run bart with both packages
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
     rbart = BART.mc_gbart(**kw_BART)
     # use mc_gbart instead of gbart because gbart does not use the seed
@@ -686,7 +712,10 @@ def test_rbart(kw, keys):
 
         # check varprob
         if kw.get('sparse', False):
-            rhat_varprob = multivariate_rhat([bart.varprob, rbart.varprob])
+            rhat_varprob = multivariate_rhat(
+                [bart.varprob[:, 1:], rbart.varprob[:, 1:]]
+            )
+            # drop one component because varprob sums to 1
             assert rhat_varprob < 1.7
             assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.1)
 
@@ -708,7 +737,7 @@ def test_xinfo():
         numcut=0,
         xinfo=xinfo,
     )
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
 
     xinfo_wo_nan = jnp.where(jnp.isnan(xinfo), jnp.finfo(jnp.float32).max, xinfo)
     assert_array_equal(bart._splits, xinfo_wo_nan)
@@ -725,7 +754,7 @@ def test_xinfo_wrong_p():
         x_train=jnp.empty((5, 0)), y_train=jnp.empty(0), ndpost=0, nskip=0, xinfo=xinfo
     )
     with pytest.raises(ValueError, match=r'xinfo\.shape'):
-        gbart(**kw)
+        mc_gbart(**kw)
 
 
 @pytest.mark.parametrize(
@@ -751,10 +780,11 @@ def test_prior(keys, p, nsplits):
         printevery=None,
         xinfo=xinfo,
         seed=keys.pop(),
+        mc_cores=1,
         init_kw=dict(min_points_per_decision_node=None, min_points_per_leaf=None),
         # unset limits on datapoints per node because there's no data
     )
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
 
     # extract p_nonterminal in original format from mcmc state
     p_nonterminal = bart._mcmc_state.forest.p_nonterminal
@@ -982,7 +1012,7 @@ def test_jit(kw):
     key = kw.pop('seed')
 
     def task(X, y, w, key):
-        bart = gbart(X, y, w=w, **kw, seed=key)
+        bart = mc_gbart(X, y, w=w, **kw, seed=key)
         return bart._mcmc_state, bart.yhat_train
 
     task_compiled = jax.jit(task)
@@ -1044,12 +1074,12 @@ def test_interrupt(kw):
         kw['printevery'] = 50
     kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
-        call_with_timed_interrupt(3, gbart, **kw)
+        call_with_timed_interrupt(3, mc_gbart, **kw)
 
 
 def test_polars(kw):
     """Test passing data as DataFrame and Series."""
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     pred = bart.predict(kw['x_test'])
 
     kw.update(
@@ -1059,7 +1089,7 @@ def test_polars(kw):
         y_train=pl.Series(numpy.array(kw['y_train'])),
         w=None if kw.get('w') is None else pl.Series(numpy.array(kw['w'])),
     )
-    bart2 = gbart(**kw)
+    bart2 = mc_gbart(**kw)
     pred2 = bart2.predict(kw['x_test'])
 
     assert_array_equal(bart.yhat_train, bart2.yhat_train)
@@ -1074,7 +1104,7 @@ def test_data_format_mismatch(kw):
         x_test=pl.DataFrame(numpy.array(kw['x_test']).T),
         w=None if kw.get('w') is None else pl.Series(numpy.array(kw['w'])),
     )
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
     with pytest.raises(ValueError, match='format mismatch'):
         bart.predict(kw['x_test'].to_numpy().T)
 
@@ -1084,7 +1114,7 @@ def test_automatic_integer_types(kw):
 
     Some integer variables change type automatically to be as small as possible.
     """
-    bart = gbart(**kw)
+    bart = mc_gbart(**kw)
 
     def select_type(cond):
         return jnp.uint8 if cond else jnp.uint16
@@ -1098,3 +1128,136 @@ def test_automatic_integer_types(kw):
     assert bart._mcmc_state.forest.leaf_indices.dtype == leaf_indices_type
     assert bart._mcmc_state.X.dtype == X_type
     assert bart._mcmc_state.forest.max_split.dtype == split_trees_type
+
+
+def test_gbart_multichain_error(keys):
+    """Check that `bartz.BART.gbart` does not support `mc_cores`."""
+    # set mc_cores to 2, which is not supported by gbart
+    X = gen_X(keys.pop(), 10, 100, 'continuous')
+    y = gen_y(keys.pop(), X, None, 'continuous')
+    with pytest.raises(TypeError, match=r'mc_cores'):
+        gbart(X, y, mc_cores=1)
+    with pytest.raises(TypeError, match=r'mc_cores'):
+        gbart(X, y, mc_cores=2)
+    with pytest.raises(TypeError, match=r'mc_cores'):
+        gbart(X, y, mc_cores='gatto')
+
+
+def test_convergence(kw):
+    """Run multiple chains and check convergence with rhat."""
+    nchains = 4
+    nsamples = 1000
+    p, n = kw['x_train'].shape
+    kw.update(
+        nskip=nsamples,
+        ndpost=nsamples * nchains,
+        mc_cores=nchains,
+        keepevery=1,
+        ntree=max(2 * n, p),
+    )
+    bart = mc_gbart(**kw)
+
+    yhat_train = bart.yhat_train.reshape(nchains, nsamples, n)
+    rhat_yhat_train = multivariate_rhat(yhat_train)
+    assert rhat_yhat_train < 1.6
+    print(f'{rhat_yhat_train.item()=}')
+
+    if kw['y_train'].dtype == bool:  # binary regression
+        prob_train = bart.prob_train.reshape(nchains, nsamples, n)
+        rhat_prob_train = multivariate_rhat(prob_train)
+        assert rhat_prob_train < 1.05
+        print(f'{rhat_prob_train.item()=}')
+
+    else:  # continuous regression
+        sigma = bart.sigma[nsamples:, :].T
+        rhat_sigma = rhat(sigma)
+        assert rhat_sigma < 1.05
+        print(f'{rhat_sigma.item()=}')
+
+    if p < n:
+        varcount = bart.varcount.reshape(nchains, nsamples, p)
+        rhat_varcount = multivariate_rhat(varcount)
+        assert rhat_varcount < 3
+        print(f'{rhat_varcount.item()=}')
+
+        if kw.get('sparse', False):
+            varprob = bart.varprob.reshape(nchains, nsamples, p)
+            rhat_varprob = multivariate_rhat(varprob[:, :, 1:])
+            # drop one component because varprob sums to 1
+            assert rhat_varprob < 3
+            print(f'{rhat_varprob.item()=}')
+
+
+def test_split_key_multichain_equivalence(kw):
+    """Check that `mc_gbart` is equivalent to multiple `gbart` invocations."""
+    # config
+    nchains = 4
+    ndpost_per_chain = kw['ndpost']
+
+    # a single multi-chain bart
+    kw.update(mc_cores=nchains, ndpost=ndpost_per_chain * nchains)
+    bart1 = mc_gbart(**kw)
+
+    # multiple single-chain barts
+    key = random.clone(kw.pop('seed'))
+    keys = random.split(key, nchains)
+    kw.pop('mc_cores')
+    kw.update(ndpost=ndpost_per_chain)
+    barts = [gbart(**kw, seed=key) for key in keys]
+    bart2 = merge_barts(bart1, barts)
+
+    # compare
+    assert_close_matrices(bart1.yhat_train, bart2.yhat_train, rtol=1e-5)
+    assert_close_matrices(bart1.yhat_test, bart2.yhat_test, rtol=1e-5)
+    if kw['y_train'].dtype == bool:  # binary regression
+        assert_close_matrices(bart1.prob_train, bart2.prob_train)
+        assert_close_matrices(bart1.prob_test, bart2.prob_test)
+    else:  # continuous regression
+        assert_close_matrices(bart1.yhat_train_mean, bart2.yhat_train_mean, rtol=1e-5)
+        assert_close_matrices(bart1.yhat_test_mean, bart2.yhat_test_mean, rtol=1e-5)
+        assert_close_matrices(bart1.sigma, bart2.sigma, rtol=1e-5)
+        assert_allclose(bart1.sigma_mean, bart2.sigma_mean, rtol=1e-6)
+
+
+def merge_barts(ref_bart: mc_gbart, barts: Sequence[gbart]) -> mc_gbart:
+    """Merge multiple single-chain gbart instances into a multichain mc_gbart."""
+    out = object.__new__(mc_gbart)
+
+    vars(out)['_main_trace'] = tree_map(
+        lambda *x: jnp.concatenate(x), *(bart._main_trace for bart in barts)
+    )
+    vars(out)['_burnin_trace'] = tree_map(
+        lambda *x: jnp.concatenate(x), *(bart._burnin_trace for bart in barts)
+    )
+    vars(out)['_mcmc_state'] = merge_mcmc_state(
+        ref_bart._mcmc_state, *(bart._mcmc_state for bart in barts)
+    )
+    vars(out)['_splits'] = ref_bart._splits
+    vars(out)['_x_train_fmt'] = ref_bart._x_train_fmt
+    vars(out)['ndpost'] = ref_bart.ndpost
+    vars(out)['offset'] = ref_bart.offset
+    vars(out)['sigest'] = ref_bart.sigest
+    if ref_bart.yhat_test is None:
+        vars(out)['yhat_test'] = None
+    else:
+        vars(out)['yhat_test'] = jnp.concatenate([bart.yhat_test for bart in barts])
+
+    return out
+
+
+def merge_mcmc_state(ref_state: State, *states: State):
+    """Merge multi-chain MCMC states."""
+    state_axes = mc_gbart._vmap_axes_for_state(ref_state)
+
+    def merge_state_variables(axis: int | None, ref_leaf, *leaves):
+        if axis is None:
+            return ref_leaf
+        return jnp.concatenate(leaves)
+
+    return tree_map(
+        merge_state_variables,
+        state_axes,
+        ref_state,
+        *states,
+        is_leaf=lambda x: x is None,
+    )

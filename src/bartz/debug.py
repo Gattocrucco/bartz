@@ -488,16 +488,10 @@ def check_rule_consistency(
 
         # recurse
         if node < tree.var_tree.size // 2:
-            bad |= _check_recursive(
-                2 * node,
-                lower,
-                upper.at[jnp.where(split, var, max_split.size)].set(split),
-            )
-            bad |= _check_recursive(
-                2 * node + 1,
-                lower.at[jnp.where(split, var, max_split.size)].set(split),
-                upper,
-            )
+            idx = jnp.where(split, var, max_split.size)
+            bad |= _check_recursive(2 * node, lower, upper.at[idx].set(split))
+            bad |= _check_recursive(2 * node + 1, lower.at[idx].set(split), upper)
+
         return bad
 
     return ~_check_recursive(1, lower, upper)
@@ -599,8 +593,7 @@ def check_trace(
     A matrix of error codes for each tree.
     """
     trees = TreesTrace.from_dataclass(trace)
-    check_forest = vmap(check_tree, in_axes=(0, None))
-    return check_forest(trees, max_split)
+    return lax.map(partial(check_tree, max_split=max_split), trees)
 
 
 @partial(vmap_nodoc, in_axes=(0, None))
