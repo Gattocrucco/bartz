@@ -191,7 +191,7 @@ def trace_depth_distr(
     return vmap(forest_depth_distr)(split_tree)
 
 
-@vmap
+@vmap_nodoc
 def chains_depth_distr(
     split_tree: UInt[Array, 'nchains trace_length num_trees 2**(d-1)'],
 ) -> Int32[Array, 'nchains trace_length d']:
