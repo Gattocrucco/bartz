@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Debugging utilities. The entry point is the class `debug_gbart`."""
+"""Debugging utilities. The main functionality is the class `debug_mc_gbart`."""
 
 from collections.abc import Callable
 from dataclasses import replace
@@ -37,7 +37,7 @@ from jax import numpy as jnp
 from jax.tree_util import tree_map
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, UInt
 
-from bartz.BART import FloatLike, gbart
+from bartz.BART import FloatLike, gbart, mc_gbart
 from bartz.grove import (
     TreeHeaps,
     evaluate_forest,
@@ -191,6 +191,24 @@ def trace_depth_distr(
     return vmap(forest_depth_distr)(split_tree)
 
 
+@vmap_nodoc
+def chains_depth_distr(
+    split_tree: UInt[Array, 'nchains trace_length num_trees 2**(d-1)'],
+) -> Int32[Array, 'nchains trace_length d']:
+    """Histogram the depths of chains of forests of trees.
+
+    Parameters
+    ----------
+    split_tree
+        The cutpoints of the decision rules of the trees.
+
+    Returns
+    -------
+    A tensor where element (c,t,i) counts how many trees have depth i in forest t in chain c.
+    """
+    return trace_depth_distr(split_tree)
+
+
 def points_per_decision_node_distr(
     var_tree: UInt[Array, ' 2**(d-1)'],
     split_tree: UInt[Array, ' 2**(d-1)'],
@@ -251,31 +269,32 @@ def forest_points_per_decision_node_distr(
 
 
 @jit
-def trace_points_per_decision_node_distr(
-    trace: TreeHeaps, X: UInt[Array, 'p n']
-) -> Int32[Array, 'trace_length n+1']:
-    """Separately histogram points-per-node counts over a sequence of sets of trees.
+@partial(vmap_nodoc, in_axes=(0, None))
+def chains_points_per_decision_node_distr(
+    chains: TreeHeaps, X: UInt[Array, 'p n']
+) -> Int32[Array, 'nchains trace_length n+1']:
+    """Separately histogram points-per-node counts over chains of forests of trees.
 
     For each set of trees, count how many parent-of-leaf nodes select each
     possible amount of points.
 
     Parameters
     ----------
-    trace
-        The sequence of sets of trees. The variables must have broadcast shape
-        (trace_length, num_trees).
+    chains
+        The chains of forests of trees. The variables must have broadcast shape
+        (nchains, trace_length, num_trees).
     X
         The set of points to count.
 
     Returns
     -------
-    A matrix where element (t,i) counts how many next-to-leaf nodes have i points in set t.
+    A tensor where element (c,t,i) counts how many next-to-leaf nodes have i points in forest t in chain c.
     """
 
-    def loop(_, trace):
-        return None, forest_points_per_decision_node_distr(trace, X)
+    def loop(_, forests):
+        return None, forest_points_per_decision_node_distr(forests, X)
 
-    _, distr = lax.scan(loop, None, trace)
+    _, distr = lax.scan(loop, None, chains)
     return distr
 
 
@@ -336,19 +355,20 @@ def forest_points_per_leaf_distr(
 
 
 @jit
-def trace_points_per_leaf_distr(
-    trace: TreeHeaps, X: UInt[Array, 'p n']
-) -> Int32[Array, 'trace_length n+1']:
-    """Separately histogram points-per-leaf counts over a sequence of sets of trees.
+@partial(vmap_nodoc, in_axes=(0, None))
+def chains_points_per_leaf_distr(
+    chains: TreeHeaps, X: UInt[Array, 'p n']
+) -> Int32[Array, 'nchains trace_length n+1']:
+    """Separately histogram points-per-leaf counts over chains of forests of trees.
 
     For each set of trees, count how many leaves select each possible amount of
     points.
 
     Parameters
     ----------
-    trace
-        The sequence of sets of trees. The variables must have broadcast shape
-        (trace_length, num_trees).
+    chains
+        The chains of forests of trees. The variables must have broadcast shape
+        (nchains, trace_length, num_trees).
     X
         The set of points to count.
 
@@ -357,10 +377,10 @@ def trace_points_per_leaf_distr(
     A matrix where element (t,i) counts how many leaves have i points in set t.
     """
 
-    def loop(_, trace):
-        return None, forest_points_per_leaf_distr(trace, X)
+    def loop(_, forests):
+        return None, forest_points_per_leaf_distr(forests, X)
 
-    _, distr = lax.scan(loop, None, trace)
+    _, distr = lax.scan(loop, None, chains)
     return distr
 
 
@@ -468,16 +488,10 @@ def check_rule_consistency(
 
         # recurse
         if node < tree.var_tree.size // 2:
-            bad |= _check_recursive(
-                2 * node,
-                lower,
-                upper.at[jnp.where(split, var, max_split.size)].set(split),
-            )
-            bad |= _check_recursive(
-                2 * node + 1,
-                lower.at[jnp.where(split, var, max_split.size)].set(split),
-                upper,
-            )
+            idx = jnp.where(split, var, max_split.size)
+            bad |= _check_recursive(2 * node, lower, upper.at[idx].set(split))
+            bad |= _check_recursive(2 * node + 1, lower.at[idx].set(split), upper)
+
         return bad
 
     return ~_check_recursive(1, lower, upper)
@@ -579,8 +593,31 @@ def check_trace(
     A matrix of error codes for each tree.
     """
     trees = TreesTrace.from_dataclass(trace)
-    check_forest = vmap(check_tree, in_axes=(0, None))
-    return check_forest(trees, max_split)
+    return lax.map(partial(check_tree, max_split=max_split), trees)
+
+
+@partial(vmap_nodoc, in_axes=(0, None))
+def check_chains(
+    chains: TreeHeaps, max_split: UInt[Array, ' p']
+) -> UInt[Array, 'nchains trace_length num_trees']:
+    """Check the validity of sequences of sets of trees.
+
+    Use `describe_error` to parse the error codes returned by this function.
+
+    Parameters
+    ----------
+    chains
+        The sequences of sets of trees to check. The tree arrays must have
+        broadcast shape (nchains, trace_length, num_trees). This object can have
+        additional attributes beyond the tree arrays, they are ignored.
+    max_split
+        The maximum split value for each variable.
+
+    Returns
+    -------
+    A tensor of error codes for each tree.
+    """
+    return check_trace(chains, max_split)
 
 
 def _get_next_line(s: str, i: int) -> tuple[str, int]:
@@ -1173,18 +1210,46 @@ def sample_prior(
     return tree_map(lambda x: x.reshape(trace_length, num_trees, -1), trees)
 
 
-class debug_gbart(gbart):
-    """A subclass of `gbart` that adds debugging functionality.
+@partial(jit, static_argnames=('sum_trees',))
+def evaluate_forests(
+    X: UInt[Array, 'p n'], trees: TreeHeaps, *, sum_trees: bool = True
+) -> Float32[Array, 'nforests n'] | Float32[Array, 'nforests num_trees n']:
+    """
+    Evaluate ensembles of trees at an array of points.
+
+    Parameters
+    ----------
+    X
+        The coordinates to evaluate the trees at.
+    trees
+        The tree heaps, with batch shape (nforests, num_trees).
+    sum_trees
+        Whether to sum the values in each forest.
+
+    Returns
+    -------
+    The (sum of) the values of the trees at the points in `X`.
+    """
+
+    @partial(vmap, in_axes=(None, 0))
+    def _evaluate_forests(X, trees):
+        return evaluate_forest(X, trees, sum_trees=sum_trees)
+
+    return _evaluate_forests(X, trees)
+
+
+class debug_mc_gbart(mc_gbart):
+    """A subclass of `mc_gbart` that adds debugging functionality.
 
     Parameters
     ----------
     *args
-        Passed to `gbart`.
+        Passed to `mc_gbart`.
     check_trees
         If `True`, check all trees with `check_trace` after running the MCMC,
         and assert that they are all valid. Set to `False` to allow jax tracing.
     **kw
-        Passed to `gbart`.
+        Passed to `mc_gbart`.
     """
 
     def __init__(self, *args, check_trees: bool = True, **kw):
@@ -1194,24 +1259,28 @@ class debug_gbart(gbart):
             bad_count = jnp.count_nonzero(bad)
             assert bad_count == 0
 
-    def show_tree(self, i_sample: int, i_tree: int, print_all: bool = False):
+    def print_tree(
+        self, i_chain: int, i_sample: int, i_tree: int, print_all: bool = False
+    ):
         """Print a single tree in human-readable format.
 
         Parameters
         ----------
+        i_chain
+            The index of the MCMC chain.
         i_sample
-            The index of the posterior sample.
+            The index of the (post-burnin) sample in the chain.
         i_tree
             The index of the tree in the sample.
         print_all
             If `True`, also print the content of unused node slots.
         """
         tree = TreesTrace.from_dataclass(self._main_trace)
-        tree = tree_map(lambda x: x[i_sample, i_tree, :], tree)
+        tree = tree_map(lambda x: x[i_chain, i_sample, i_tree, :], tree)
         s = format_tree(tree, print_all=print_all)
         print(s)  # noqa: T201, this method is intended for debug
 
-    def sigma_harmonic_mean(self, prior: bool = False) -> Float32[Array, '']:
+    def sigma_harmonic_mean(self, prior: bool = False) -> Float32[Array, ' mc_cores']:
         """Return the harmonic mean of the error variance.
 
         Parameters
@@ -1231,27 +1300,29 @@ class debug_gbart(gbart):
             alpha = bart.sigma2_alpha
             beta = bart.sigma2_beta
         else:
-            resid = bart.resid
-            alpha = bart.sigma2_alpha + resid.size / 2
-            norm2 = resid @ resid
+            alpha = bart.sigma2_alpha + bart.resid.size / 2
+            norm2 = jnp.einsum('ij,ij->i', bart.resid, bart.resid)
             beta = bart.sigma2_beta + norm2 / 2
         sigma2 = beta / alpha
         return jnp.sqrt(sigma2)
 
-    def compare_resid(self) -> tuple[Float32[Array, ' n'], Float32[Array, ' n']]:
+    def compare_resid(
+        self,
+    ) -> tuple[Float32[Array, 'mc_cores n'], Float32[Array, 'mc_cores n']]:
         """Re-compute residuals to compare them with the updated ones.
 
         Returns
         -------
-        resid1 : Float32[Array, 'n']
+        resid1 : Float32[Array, 'mc_cores n']
             The final state of the residuals updated during the MCMC.
-        resid2 : Float32[Array, 'n']
+        resid2 : Float32[Array, 'mc_cores n']
             The residuals computed from the final state of the trees.
         """
         bart = self._mcmc_state
         resid1 = bart.resid
 
-        trees = evaluate_forest(bart.X, bart.forest)
+        forests = TreesTrace.from_dataclass(bart.forest)
+        trees = evaluate_forests(bart.X, forests)
 
         if bart.z is not None:
             ref = bart.z
@@ -1261,14 +1332,16 @@ class debug_gbart(gbart):
 
         return resid1, resid2
 
-    def avg_acc(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+    def avg_acc(
+        self,
+    ) -> tuple[Float32[Array, ' mc_cores'], Float32[Array, ' mc_cores']]:
         """Compute the average acceptance rates of tree moves.
 
         Returns
         -------
-        acc_grow : Float32[Array, '']
+        acc_grow : Float32[Array, 'mc_cores']
             The average acceptance rate of grow moves.
-        acc_prune : Float32[Array, '']
+        acc_prune : Float32[Array, 'mc_cores']
             The average acceptance rate of prune moves.
         """
         trace = self._main_trace
@@ -1276,18 +1349,20 @@ class debug_gbart(gbart):
         def acc(prefix):
             acc = getattr(trace, f'{prefix}_acc_count')
             prop = getattr(trace, f'{prefix}_prop_count')
-            return acc.sum() / prop.sum()
+            return acc.sum(axis=1) / prop.sum(axis=1)
 
         return acc('grow'), acc('prune')
 
-    def avg_prop(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+    def avg_prop(
+        self,
+    ) -> tuple[Float32[Array, ' mc_cores'], Float32[Array, ' mc_cores']]:
         """Compute the average proposal rate of grow and prune moves.
 
         Returns
         -------
-        prop_grow : Float32[Array, '']
+        prop_grow : Float32[Array, 'mc_cores']
             The fraction of times grow was proposed instead of prune.
-        prop_prune : Float32[Array, '']
+        prop_prune : Float32[Array, 'mc_cores']
             The fraction of times prune was proposed instead of grow.
 
         Notes
@@ -1298,61 +1373,65 @@ class debug_gbart(gbart):
         trace = self._main_trace
 
         def prop(prefix):
-            return getattr(trace, f'{prefix}_prop_count').sum()
+            return getattr(trace, f'{prefix}_prop_count').sum(axis=1)
 
         pgrow = prop('grow')
         pprune = prop('prune')
         total = pgrow + pprune
         return pgrow / total, pprune / total
 
-    def avg_move(self) -> tuple[Float32[Array, ''], Float32[Array, '']]:
+    def avg_move(
+        self,
+    ) -> tuple[Float32[Array, ' mc_cores'], Float32[Array, ' mc_cores']]:
         """Compute the move rate.
 
         Returns
         -------
-        rate_grow : Float32[Array, '']
+        rate_grow : Float32[Array, 'mc_cores']
             The fraction of times a grow move was proposed and accepted.
-        rate_prune : Float32[Array, '']
+        rate_prune : Float32[Array, 'mc_cores']
             The fraction of times a prune move was proposed and accepted.
         """
         agrow, aprune = self.avg_acc()
         pgrow, pprune = self.avg_prop()
         return agrow * pgrow, aprune * pprune
 
-    def depth_distr(self) -> Float32[Array, 'trace_length d']:
+    def depth_distr(self) -> Float32[Array, 'mc_cores ndpost/mc_cores d']:
         """Histogram of tree depths for each state of the trees.
 
         Returns
         -------
         A matrix where each row contains a histogram of tree depths.
         """
-        return trace_depth_distr(self._main_trace.split_tree)
+        return chains_depth_distr(self._main_trace.split_tree)
 
-    def points_per_decision_node_distr(self) -> Float32[Array, 'trace_length n+1']:
+    def points_per_decision_node_distr(
+        self,
+    ) -> Float32[Array, 'mc_cores ndpost/mc_cores n+1']:
         """Histogram of number of points belonging to parent-of-leaf nodes.
 
         Returns
         -------
         A matrix where each row contains a histogram of number of points.
         """
-        return trace_points_per_decision_node_distr(
+        return chains_points_per_decision_node_distr(
             self._main_trace, self._mcmc_state.X
         )
 
-    def points_per_leaf_distr(self) -> Float32[Array, 'trace_length n+1']:
+    def points_per_leaf_distr(self) -> Float32[Array, 'mc_cores ndpost/mc_cores n+1']:
         """Histogram of number of points belonging to leaves.
 
         Returns
         -------
         A matrix where each row contains a histogram of number of points.
         """
-        return trace_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
+        return chains_points_per_leaf_distr(self._main_trace, self._mcmc_state.X)
 
-    def check_trees(self) -> UInt[Array, 'trace_length ntree']:
+    def check_trees(self) -> UInt[Array, 'mc_cores ndpost/mc_cores ntree']:
         """Apply `check_trace` to all the tree draws."""
-        return check_trace(self._main_trace, self._mcmc_state.forest.max_split)
+        return check_chains(self._main_trace, self._mcmc_state.forest.max_split)
 
-    def tree_goes_bad(self) -> Bool[Array, 'trace_length ntree']:
+    def tree_goes_bad(self) -> Bool[Array, 'mc_cores ndpost/mc_cores ntree']:
         """Find iterations where a tree becomes invalid.
 
         Returns
@@ -1360,5 +1439,20 @@ class debug_gbart(gbart):
         A where (i,j) is `True` if tree j is invalid at iteration i but not i-1.
         """
         bad = self.check_trees().astype(bool)
-        bad_before = jnp.pad(bad[:-1], [(1, 0), (0, 0)])
+        bad_before = jnp.pad(bad[:, :-1, :], [(0, 0), (1, 0), (0, 0)])
         return bad & ~bad_before
+
+
+class debug_gbart(debug_mc_gbart, gbart):
+    """A subclass of `gbart` that adds debugging functionality.
+
+    Parameters
+    ----------
+    *args
+        Passed to `gbart`.
+    check_trees
+        If `True`, check all trees with `check_trace` after running the MCMC,
+        and assert that they are all valid. Set to `False` to allow jax tracing.
+    **kw
+        Passed to `gbart`.
+    """

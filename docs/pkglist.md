@@ -28,22 +28,16 @@ SOFTWARE.
 
 - [StochasticTree](https://github.com/StochasticTree) C++ library with R and Python bindings taylored to researchers who want to make their own BART variants
 - [bnptools](https://github.com/rsparapa/bnptools) Feature-rich R packages for BART and some variants
-- [dbarts](https://github.com/vdorie/dbarts) Fast R package
+- [vdorie](https://github.com/vdorie)'s repositories (dbarts, bartCause, stan4bart)
 - [bartMachine](https://github.com/kapelner/bartMachine) R package, supports missing predictors imputation
 - [SoftBART](https://github.com/theodds/SoftBART) R package with a smooth version of BART
-- [bcf](https://github.com/jaredsmurray/bcf) R package for BCF, version of BART for causal inference
-- [flexBART](https://github.com/skdeshpande91/flexBART) Fast R package, supports categorical predictors
-- [flexBCF](https://github.com/skdeshpande91/flexBCF) R package, bcf optimized for large datasets
-- [XBART](https://github.com/JingyuHe/XBART) R/Python package, faster variant of BART
-- [BART](https://github.com/JingyuHe/BART) R package, BART warm-started with XBART
+- [jaredsmurray](https://github.com/jaredsmurray)'s repositories (bcf, monbart)
+- [skdeshpande91](https://github.com/skdeshpande91)'s repositories (flexBART, flexBCF, VCBART)
+- [JingyuHe](https://github.com/JingyuHe)'s repositories (XBART & related)
 - [BayesTree](https://cran.r-project.org/package=BayesTree) R package, original BART implementation
-- [bartCause](https://github.com/vdorie/bartCause) R package, pre-made BART-based workflows for causal inference
 - [OpenBT](https://bitbucket.org/mpratola/openbt) Heteroskedastic BART, rotate & perturb proposals, C++ library with R interface
 - [OpenBT](https://github.com/jcyannotty/OpenBT) fork of the above
-- [stan4bart](https://github.com/vdorie/stan4bart)
-- [VCBART](https://github.com/skdeshpande91/VCBART)
 - [lsqfitgp](https://github.com/Gattocrucco/lsqfitgp) Infinite trees limit of BART
-- [monbart](https://github.com/jaredsmurray/monbart)
 - [mBART](https://github.com/remcc/mBART_shlib)
 - [SequentialBART](https://github.com/mjdaniels/SequentialBART)
 - [sparseBART](https://github.com/cspanbauer/sparseBART)
@@ -51,8 +45,8 @@ SOFTWARE.
 - [semibart](https://github.com/zeldow/semibart)
 - [ebprado](https://github.com/ebprado)'s repositories
 - [EoghanONeill](https://github.com/EoghanONeill)'s repositories
-- [gpbart](https://github.com/MateusMaiaDS/gpbart)
-- [GPBART](https://github.com/nchenderson/GPBART)
+- [MateusMaiaDS](https://github.com/MateusMaiaDS)'s repositories
+- [nchenderson](https://github.com/nchenderson)'s repositories
 - [bartpy](https://github.com/JakeColtman/bartpy)
 - [BayesTreePrior](https://github.com/AlexiaJM/BayesTreePrior) Sample the prior of BART
 - [BayesTree.jl](https://github.com/mathcg/BayesTree.jl)
@@ -60,8 +54,8 @@ SOFTWARE.
 - [richael008](https://github.com/richael008)'s repositories
 - [bartMan](https://github.com/AlanInglis/bartMan) R package, posterior analysis and diagnostics
 - [drbart](https://github.com/vittorioorlandi/drbart) Density regression with BART
-- [bcf2](https://github.com/JingyuHe/bcf2) BCF warm-started with XBCF
 - [BART-BMA](https://github.com/BelindaHernandez/BART-BMA) (superseded by [bartBMAnew](https://github.com/EoghanONeill/bartBMAnew))
 - [XBCF](https://github.com/socket778/XBCF) (superseded by StochasticTree)
 - [mpibart](https://matthewpratola.com/mpibart) Old parallel implementation
 - [HE-BART](https://github.com/brunaw/HE-BART)
+- [pgbart](https://github.com/balajiln/pgbart) Particle Gibbs BART
