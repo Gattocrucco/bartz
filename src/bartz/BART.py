@@ -831,13 +831,6 @@ class mc_gbart(Module):
             key = seed
         else:
             key = jax.random.key(seed)
-        if mc_cores == 1:
-            # avoid splitting if there's just one chain, such that running
-            # k times with 1 chain from k split keys is equivalent to running
-            # with k chains
-            keys = key[None]
-        else:
-            keys = jax.random.split(key, mc_cores)
 
         # round up ndpost
         ndpost = mc_cores * (ndpost // mc_cores + bool(ndpost % mc_cores))
@@ -854,7 +847,21 @@ class mc_gbart(Module):
         if run_mcmc_kw is not None:
             kw.update(run_mcmc_kw)
 
-        return cls._vmapped_run_mcmc(keys, mcmc_state, ndpost // mc_cores, **kw)
+        if mc_cores == 1:
+            return cls._single_run_mcmc(key, mcmc_state, ndpost, **kw)
+        else:
+            keys = jax.random.split(key, mc_cores)
+            return cls._vmapped_run_mcmc(keys, mcmc_state, ndpost // mc_cores, **kw)
+
+    @classmethod
+    def _single_run_mcmc(
+        cls, key: Key[Array, ''], bart: mcmcstep.State, *args, **kwargs
+    ):
+        out = mcmcloop.run_mcmc(key, bart, *args, **kwargs)
+        axes = cls._vmap_axes_for_state(bart)
+        return jax.vmap(lambda x: x, in_axes=None, out_axes=(axes, 0, 0), axis_size=1)(
+            out
+        )
 
     @classmethod
     def _vmapped_run_mcmc(
