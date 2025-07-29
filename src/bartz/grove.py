@@ -64,7 +64,7 @@ class TreeHeaps(Protocol):
     `var_tree` and `split_tree` are half as long as `leaf_tree`.
     """
 
-    leaf_tree: Float32[Array, '* 2**d']
+    leaf_tree: Float32[Array, '* 2**d k']
     var_tree: UInt[Array, '* 2**(d-1)']
     split_tree: UInt[Array, '* 2**(d-1)']
 
@@ -176,7 +176,7 @@ def traverse_forest(
 
 def evaluate_forest(
     X: UInt[Array, 'p n'], trees: TreeHeaps, *, sum_trees: bool = True
-) -> Float32[Array, ' n'] | Float32[Array, 'num_trees n']:
+) -> Float32[Array, ' n k'] | Float32[Array, 'num_trees n k']:
     """
     Evaluate a ensemble of trees at an array of points.
 
@@ -194,7 +194,8 @@ def evaluate_forest(
     The (sum of) the values of the trees at the points in `X`.
     """
     indices = traverse_forest(X, trees.var_tree, trees.split_tree)
-    num_trees, _ = trees.leaf_tree.shape
+    # num_trees, _ = trees.leaf_tree.shape
+    num_trees = trees.leaf_tree.shape[0]
     tree_index = jnp.arange(num_trees, dtype=minimal_unsigned_dtype(num_trees - 1))
     leaves = trees.leaf_tree[tree_index[:, None], indices]
     if sum_trees:

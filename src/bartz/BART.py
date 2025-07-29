@@ -168,6 +168,10 @@ class mc_gbart(Module):
         The inverse scale of the prior standard deviation on the latent mean
         function, relative to half the observed range of `y_train`. If `y_train`
         has less than two elements, `k` is ignored and the scale is set to 1.
+    t0
+    s0
+        Parameters of the prior on the error covariance matrix, when y is a matrix,
+        and assume the error covariance follows a inverse wishard distribution
     power
     base
         Parameters of the prior on tree node generation. The probability that a
@@ -297,7 +301,8 @@ class mc_gbart(Module):
     def __init__(
         self,
         x_train: Real[Array, 'p n'] | DataFrame,
-        y_train: Bool[Array, ' n'] | Float32[Array, ' n'] | Series,
+        # y_train: Bool[Array, ' n'] | Float32[Array, ' n'] | Series,
+        y_train: Bool[Array, ' n'] | Float[Array, 'n k'] | Series,
         *,
         x_test: Real[Array, 'p m'] | DataFrame | None = None,
         type: Literal['wbart', 'pbart'] = 'wbart',  # noqa: A002
@@ -305,6 +310,8 @@ class mc_gbart(Module):
         theta: FloatLike | None = None,
         a: FloatLike = 0.5,
         b: FloatLike = 1.0,
+        t0: FloatLike | None = None,  # Degrees of freedom for Inverse-Wishart
+        s0: Float[Array, 'k k'] | None = None, # Scale matrix for Inverse-Wishart
         rho: FloatLike | None = None,
         xinfo: Float[Array, 'p n'] | None = None,
         usequants: bool = False,
@@ -318,7 +325,7 @@ class mc_gbart(Module):
         lamda: FloatLike | None = None,
         tau_num: FloatLike | None = None,
         offset: FloatLike | None = None,
-        w: Float[Array, ' n'] | None = None,
+        w: Float[Array, ' n k'] | None = None,
         ntree: int | None = None,
         numcut: int = 100,
         ndpost: int = 1000,
@@ -357,9 +364,15 @@ class mc_gbart(Module):
         # process "standardization" settings
         offset = self._process_offset_settings(y_train, offset)
         sigma_mu = self._process_leaf_sdev_settings(y_train, k, ntree, tau_num)
-        lamda, sigest = self._process_error_variance_settings(
-            x_train, y_train, sigest, sigdf, sigquant, lamda
-        )
+
+        if y_train.shape[1] == 1:
+            lamda, sigest = self._process_error_variance_settings(
+                x_train, y_train, sigest, sigdf, sigquant, lamda
+            )
+            t0 = s0 = None
+        else:
+            t0, s0 = self._process_error_variance_matrix_settings(x_train, y_train, t0, s0)
+            lamda = sigest = None 
 
         # determine splits
         splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
@@ -375,6 +388,8 @@ class mc_gbart(Module):
             lamda,
             sigma_mu,
             sigdf,
+            t0,
+            s0,
             power,
             base,
             maxdepth,
@@ -591,17 +606,25 @@ class mc_gbart(Module):
         return x, fmt
 
     @staticmethod
-    def _process_response_input(y) -> Shaped[Array, ' n']:
+    def _process_response_input(y) -> Shaped[Array, ' n d']:
+        """
+        This method now handles both 1D and 2D `y` and ensures
+        the internal representation is always a 2D matrix.
+        """
         if hasattr(y, 'to_numpy'):
             y = y.to_numpy()
         y = jnp.asarray(y)
-        assert y.ndim == 1
+        if y.ndim == 1:
+            y = y.reshape(-1, 1)
+        if y.ndim != 2:
+            raise ValueError("y_train must be a 1D vector or 2D matrix.")
         return y
 
     @staticmethod
     def _check_same_length(x1, x2):
-        get_length = lambda x: x.shape[-1]
-        assert get_length(x1) == get_length(x2)
+        # get_length = lambda x: x.shape[-1]
+        # assert get_length(x1) == get_length(x2)
+        assert x1.shape[1] == x2.shape[0]
 
     @staticmethod
     def _process_error_variance_settings(
@@ -639,6 +662,45 @@ class mc_gbart(Module):
             invchi2 = invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
             return sigest2 / invchi2rid, jnp.sqrt(sigest2)
+    
+    @staticmethod
+    def _process_error_variance_matrix_settings(
+        x_train: Real[Array, 'p n'],
+            y_train: Float32[Array, 'n k'],
+            t0: float | None,
+            s0: Float32[Array, 'k k'] | None,
+        ) -> tuple[float, Float32[Array, 'k k']]:
+        n_obs = x_train.shape[1]
+        n_preds = x_train.shape[0]
+        n_outcomes = y_train.shape[1]
+
+        if t0 is None:
+            t0 = float(n_outcomes + 1/2)
+        if t0 <= n_outcomes - 1:
+            raise ValueError(f"Degrees of freedom `t0` must be > {n_outcomes - 1}")
+
+        if s0 is not None:
+            if s0.shape != (n_outcomes, n_outcomes):
+                raise ValueError(f"Scale matrix `s0` must have shape ({n_outcomes}, {n_outcomes})")
+            return jnp.asarray(t0, dtype=jnp.float32), jnp.asarray(s0)
+
+        # Step 1: Get an empirical estimate of the residual covariance (Sigma_hat).
+        if n_obs <= n_preds:
+            print("Warning: n <= p. Using marginal covariance of y to estimate error covariance.")
+            Sigma_hat = jnp.cov(y_train, rowvar=False)
+        else:
+            coeffs, residuals, rank, _ = jnp.linalg.lstsq(x_train.T, y_train, rcond=None)
+            dof = n_obs - rank
+            
+            # Unbiased estimate of the residual covariance matrix: (E^T * E) / (n - rank)
+            Sigma_hat = (residuals.T @ residuals) / dof
+
+        # Step 2: Use the empirical estimate to set the prior's scale matrix (Psi).
+        # A common choice is to scale Sigma_hat by a factor related to the prior degrees of freedom.
+        # This centers the prior's expectation around the OLS estimate.
+        s0 = (t0 - n_outcomes - 1) * Sigma_hat
+
+        return jnp.asarray(t0, dtype=jnp.float32), s0
 
     @staticmethod
     def _check_type_settings(y_train, type, w):  # noqa: A002
@@ -689,15 +751,15 @@ class mc_gbart(Module):
 
     @staticmethod
     def _process_offset_settings(
-        y_train: Float32[Array, ' n'] | Bool[Array, ' n'],
+        y_train: Float32[Array, ' n k'] | Bool[Array, ' n'],
         offset: float | Float32[Any, ''] | None,
     ) -> Float32[Array, '']:
         if offset is not None:
             return jnp.asarray(offset)
-        elif y_train.size < 1:
-            return jnp.array(0.0)
+        elif y_train.shape[0] < 1:
+            return jnp.zeros(y_train.shape[1])
         else:
-            mean = y_train.mean()
+            mean = y_train.mean(axis=0)
 
         if y_train.dtype == bool:
             bound = 1 / (1 + y_train.size)
@@ -708,20 +770,24 @@ class mc_gbart(Module):
 
     @staticmethod
     def _process_leaf_sdev_settings(
-        y_train: Float32[Array, ' n'] | Bool[Array, ' n'],
+        y_train: Float32[Array, ' n k'] | Bool[Array, ' n'],
         k: float,
         ntree: int,
         tau_num: FloatLike | None,
     ):
+        k = y_train.shape[1] 
         if tau_num is None:
             if y_train.dtype == bool:
                 tau_num = 3.0
-            elif y_train.size < 2:
-                tau_num = 1.0
+            elif y_train.shape[0]  < 2:
+                tau_num = jnp.ones(k) if k > 1 else 1.0
             else:
-                tau_num = (y_train.max() - y_train.min()) / 2
-
-        return tau_num / (k * math.sqrt(ntree))
+                tau_num = (y_train.max(axis=0) - y_train.min(axis=0)) / 2
+        sigma_mu_vector = tau_num / (k * math.sqrt(ntree))
+        if k == 1:
+            return sigma_mu_vector.item()
+        else:
+            return jnp.diag(jnp.square(sigma_mu_vector))
 
     @staticmethod
     def _determine_splits(
@@ -754,6 +820,8 @@ class mc_gbart(Module):
         lamda: Float32[Array, ''] | None,
         sigma_mu: FloatLike,
         sigdf: FloatLike,
+        t0: FloatLike | None,
+        s0: Float[Array, 'd d'] | None,
         power: FloatLike,
         base: FloatLike,
         maxdepth: int,
@@ -768,13 +836,6 @@ class mc_gbart(Module):
         depth = jnp.arange(maxdepth - 1)
         p_nonterminal = base / (1 + depth).astype(float) ** power
 
-        if y_train.dtype == bool:
-            sigma2_alpha = None
-            sigma2_beta = None
-        else:
-            sigma2_alpha = sigdf / 2
-            sigma2_beta = lamda * sigma2_alpha
-
         kw = dict(
             X=x_train,
             # copy y_train because it's going to be donated in the mcmc loop
@@ -784,9 +845,9 @@ class mc_gbart(Module):
             max_split=max_split,
             num_trees=ntree,
             p_nonterminal=p_nonterminal,
-            sigma_mu2=jnp.square(sigma_mu),
-            sigma2_alpha=sigma2_alpha,
-            sigma2_beta=sigma2_beta,
+            # sigma_mu2=jnp.square(sigma_mu),
+            # sigma2_alpha=sigma2_alpha,
+            # sigma2_beta=sigma2_beta,
             min_points_per_decision_node=10,
             min_points_per_leaf=5,
             theta=theta,
@@ -794,6 +855,24 @@ class mc_gbart(Module):
             b=b,
             rho=rho,
         )
+        
+        if y_train.dtype == bool:
+            kw['sigma2_alpha'] = None
+            kw['sigma2_beta'] = None
+            kw['sigma_mu2'] = jnp.square(sigma_mu) 
+
+        elif y_train.shape[1] == 1:
+            sigma2_alpha = sigdf / 2
+            sigma2_beta = lamda * sigma2_alpha
+            kw['sigma2_alpha'] = sigma2_alpha
+            kw['sigma2_beta'] = sigma2_beta
+            kw['sigma_mu2'] = jnp.square(sigma_mu) 
+
+        else:
+            # Multivariate continuous case
+            kw['sigma_cov_prior_df'] = t0
+            kw['sigma_cov_prior_scale'] = s0
+            kw['leaf_prior_cov'] = sigma_mu
 
         if rm_const is None:
             kw.update(filter_splitless_vars=False)

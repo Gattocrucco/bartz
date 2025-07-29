@@ -47,7 +47,7 @@ from bartz.mcmcstep import State
 class BurninTrace(Module):
     """MCMC trace with only diagnostic values."""
 
-    sigma2: Float32[Array, '*trace_length'] | None
+    sigma2: Float32[Array, '*trace_length'] | Float32[Array, '*trace_length k k'] | None
     theta: Float32[Array, '*trace_length'] | None
     grow_prop_count: Int32[Array, '*trace_length']
     grow_acc_count: Int32[Array, '*trace_length']
@@ -74,10 +74,11 @@ class BurninTrace(Module):
 class MainTrace(BurninTrace):
     """MCMC trace with trees and diagnostic values."""
 
-    leaf_tree: Float32[Array, '*trace_length 2**d']
+    # leaf_tree: Float32[Array, '*trace_length 2**d']
+    leaf_tree: Float32[Array, '*trace_length 2**d k']
     var_tree: UInt[Array, '*trace_length 2**(d-1)']
     split_tree: UInt[Array, '*trace_length 2**(d-1)']
-    offset: Float32[Array, '*trace_length']
+    offset: Float32[Array, '*trace_length k']
     varprob: Float32[Array, '*trace_length p'] | None
 
     @classmethod
@@ -597,13 +598,13 @@ def sparse_callback(
 class Trace(grove.TreeHeaps, Protocol):
     """Protocol for a MCMC trace."""
 
-    offset: Float32[Array, ' trace_length']
+    offset: Float32[Array, ' trace_length k']
 
 
 class TreesTrace(Module):
     """Implementation of `bartz.grove.TreeHeaps` for an MCMC trace."""
 
-    leaf_tree: Float32[Array, 'trace_length num_trees 2**d']
+    leaf_tree: Float32[Array, 'trace_length num_trees 2**d k']
     var_tree: UInt[Array, 'trace_length num_trees 2**(d-1)']
     split_tree: UInt[Array, 'trace_length num_trees 2**(d-1)']
 
@@ -616,7 +617,7 @@ class TreesTrace(Module):
 @jax.jit
 def evaluate_trace(
     trace: Trace, X: UInt[Array, 'p n']
-) -> Float32[Array, 'trace_length n']:
+) -> Float32[Array, 'trace_length n k']:
     """
     Compute predictions for all iterations of the BART MCMC.
 
@@ -638,7 +639,8 @@ def evaluate_trace(
     def loop(_, item):
         offset, trees = item
         values = evaluate_trees(X, trees)
-        return None, offset + jnp.sum(values, axis=0, dtype=jnp.float32)
+        total_prediction = jnp.sum(values, axis=0, dtype=jnp.float32)
+        return None, offset + total_prediction
 
     _, y = lax.scan(loop, None, (trace.offset, trees))
     return y
