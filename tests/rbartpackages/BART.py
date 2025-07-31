@@ -24,11 +24,12 @@
 
 """Wrapper for the R package BART."""
 
-from typing import NamedTuple, TypedDict
+from typing import NamedTuple, TypedDict, cast
 
 import numpy as np
 from jaxtyping import AbstractDtype, Bool, Float64, Int32
 from numpy import ndarray
+from rpy2.rlike.container import NamedList
 
 from tests.rbartpackages._base import RObjectBase, rmethod
 
@@ -93,6 +94,7 @@ class mc_gbart(RObjectBase):
         self.ndpost = self.ndpost.astype(int).item()
         self.offset = self.offset.item()
         self.proc_time = ProcTime(*map(float, self.proc_time))
+
         if np.all(self.rm_const < 0):
             _, p = self.varcount.shape
             rm_const = np.ones(p, bool)
@@ -103,20 +105,24 @@ class mc_gbart(RObjectBase):
         else:
             msg = 'failed to parse rm.const because indices change sign'
             raise ValueError(msg)
+
         if self.sigma_mean is not None:
             self.sigma_mean = self.sigma_mean.item()
+
+        r_treedraws = cast(NamedList, self.treedraws)
+        cutpoints: NamedList = r_treedraws.getbyname('cutpoints')
         self.treedraws = {
             'cutpoints': {
-                i if k is None else k.item(): v
-                for i, (k, v) in enumerate(self.treedraws['cutpoints'].items())
+                i if it.name is None else it.name.item(): it.value
+                for i, it in enumerate(cutpoints.items())
             },
-            'trees': self.treedraws['trees'].item(),
+            'trees': r_treedraws.getbyname('trees').item(),
         }
 
     @rmethod
     def predict(
         self, newdata: Float64[ndarray, 'm p'], *args, **kwargs
-    ) -> Float64[ndarray, 'ndpost m']:
+    ) -> Float64[ndarray, 'ndpost/mc_cores m']:
         """Compute predictions."""
         ...
 
