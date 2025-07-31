@@ -26,7 +26,7 @@ SOFTWARE.
 
 # Other BART packages
 
-- [StochasticTree](https://github.com/StochasticTree) C++ library with R and Python bindings taylored to researchers who want to make their own BART variants
+- [stochtree](https://github.com/StochasticTree/stochtree) C++ library with R and Python interfaces
 - [bnptools](https://github.com/rsparapa/bnptools) Feature-rich R packages for BART and some variants
 - [vdorie](https://github.com/vdorie)'s repositories (dbarts, bartCause, stan4bart)
 - [bartMachine](https://github.com/kapelner/bartMachine) R package, supports missing predictors imputation
