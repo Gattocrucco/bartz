@@ -58,7 +58,7 @@ UV_SYNC = uv sync --frozen --inexact
 
 .PHONY: lock
 lock:
-	uv lock
+	uv lock --upgrade
 	mv uv.lock config/uv-highest.lock
 
 .PHONY: setup
@@ -76,7 +76,7 @@ setup-ci:
 
 .PHONY: lock-old
 lock-old:
-	uv lock --resolution lowest-direct --exclude-newer $(OLD_DATE)
+	uv lock --upgrade --resolution lowest-direct --exclude-newer $(OLD_DATE)
 	mv uv.lock config/uv-lowest-direct.lock
 
 .PHONY: setup-old
