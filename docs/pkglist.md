@@ -45,7 +45,7 @@ SOFTWARE.
 - [semibart](https://github.com/zeldow/semibart)
 - [ebprado](https://github.com/ebprado)'s repositories
 - [EoghanONeill](https://github.com/EoghanONeill)'s repositories
-- [MateusMaiaDS](https://github.com/MateusMaiaDS)'s repositories
+- [MateusMaiaDS](https://github.com/MateusMaiaDS)'s repositories (subart, gpbart)
 - [nchenderson](https://github.com/nchenderson)'s repositories
 - [bartpy](https://github.com/JakeColtman/bartpy)
 - [BayesTreePrior](https://github.com/AlexiaJM/BayesTreePrior) Sample the prior of BART
@@ -59,3 +59,4 @@ SOFTWARE.
 - [mpibart](https://matthewpratola.com/mpibart) Old parallel implementation
 - [HE-BART](https://github.com/brunaw/HE-BART)
 - [pgbart](https://github.com/balajiln/pgbart) Particle Gibbs BART
+- [skewBART](https://github.com/Seungha-Um/skewBART) multivariate skewed responses
