@@ -16,10 +16,8 @@ def test_wishart_bartlett_output():
     # Create a random positive definite matrix for the scale
     A = random.normal(scale_key, (k, k))
     scale = A @ A.T + jnp.eye(k)
-    scale_inv = jnp.linalg.inv(scale)
 
-    # Sample from the wishart distribution
-    wishart_sample = _sample_wishart_bartlett(sample_key, df, scale_inv)
+    wishart_sample = _sample_wishart_bartlett(sample_key, df, scale)
 
     # Check shape
     assert wishart_sample.shape == (k, k)

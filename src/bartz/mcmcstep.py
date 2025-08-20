@@ -2474,15 +2474,26 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
 
 
 def _sample_wishart_bartlett(
-    key: Key[Array, ''], df: int, scale_inv: Float32[Array, 'k k']
+    key: Key[Array, ''], df: int, scale: Float32[Array, 'k k']
 ) -> Float32[Array, 'k k']:
     """
-    Bartlett decomposition: sample W ~ Wishart(df, scale_inv).
+    Sample from Wishart(df, scale) using Bartlett decomposition.
 
-    where scale_inv is the inverse of the desired scale matrix.
+    Parameters
+    ----------
+    key
+        A JAX random key
+    df
+        Degrees of freedom
+    scale
+        Scale matrix of the Wishart distribution
+
+    Returns
+    -------
+    A sample from Wishart(df, scale)
     """
-    k = scale_inv.shape[0]
-    L = jnp.linalg.cholesky(scale_inv)
+    k = scale.shape[0]
+    L = jnp.linalg.cholesky(scale)
 
     diag_key, offdiag_key = random.split(key)
 
