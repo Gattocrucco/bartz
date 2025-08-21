@@ -106,7 +106,7 @@ class Forest(Module):
         The number of grow/prune moves accepted during one full MCMC cycle.
     sigma_mu2
         The prior variance of a leaf, conditional on the tree structure.
-    leaf_prior_cov
+    sigma_mu2_cov
         The prior variance matrix of a leaf, in multivaraite responses case.
     log_s
         The logarithm of the prior probability for choosing a variable to split
@@ -142,7 +142,7 @@ class Forest(Module):
     grow_acc_count: Int32[Array, '']
     prune_acc_count: Int32[Array, '']
     sigma_mu2: Float32[Array, '']
-    leaf_prior_cov: Float32[Array, 'd d'] | None
+    sigma_mu2_cov: Float32[Array, 'd d'] 
     log_s: Float32[Array, ' p'] | None
     theta: Float32[Array, ''] | None
     a: Float32[Array, ''] | None
@@ -169,7 +169,7 @@ class State(Module):
         Constant shift added to the sum of trees.
     sigma2
         The error variance. `None` in binary regression.
-    sigma_cov
+    sigma2_cov
         The error covariance matrix, in multivariate responses case.
     prec_scale
         The scale on the error precision, i.e., ``1 / error_scale ** 2``.
@@ -178,8 +178,8 @@ class State(Module):
     sigma2_beta
         The shape and scale parameters of the inverse gamma prior on the noise
         variance. `None` in binary regression.
-    sigma_cov_prior_df
-    sigma_cov_prior_scale
+    sigma2_cov_prior_df
+    sigma2_cov_prior_scale
         The df and scale parameters of the inverse Wishard prior on the noise covariance matrix.
     forest
         The sum of trees model.
@@ -191,12 +191,12 @@ class State(Module):
     offset: Float32[Array, 'k']
     resid: Float32[Array, ' n k']
     sigma2: Float32[Array, ''] | None
-    sigma_cov: Float32[Array, 'k k'] | None
+    sigma2_cov: Float32[Array, 'k k'] | None # For error covariance
     prec_scale: Float32[Array, ' n'] | None
     sigma2_alpha: Float32[Array, ''] | None
     sigma2_beta: Float32[Array, ''] | None
-    sigma_cov_prior_df: Float32[Array, ''] | None # For Inverse-Wishart
-    sigma_cov_prior_scale: Float32[Array, 'd d'] | None # For Inverse-Wishart
+    sigma2_cov_prior_df: Float32[Array, ''] | None # For Inverse-Wishart
+    sigma2_cov_prior_scale: Float32[Array, 'd d'] | None # For Inverse-Wishart
     forest: Forest
 
 
@@ -209,11 +209,11 @@ def init(
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
     sigma_mu2: float | Float32[Any, ''],
-    sigma_mu2_cov: Float32[Array, 'k k'] | None = None,
+    sigma_mu2_cov: Float32[Array, 'k k'] | None = None, # for leaf ndoes
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
-    sigma_cov_prior_df: Float32[Array, ''] | None = None,
-    sigma_cov_prior_scale: Float32[Array, 'k k'] | None = None,
+    sigma2_cov_prior_df: Float32[Array, ''] | None = None, # for error covariance, inverse wishard prior
+    sigma2_cov_prior_scale: Float32[Array, 'k k'] | None = None, # for error covariance, inverse wishard prior
     error_scale: Float32[Any, ' n'] | None = None,
     min_points_per_decision_node: int | Integer[Any, ''] | None = None,
     resid_batch_size: int | None | Literal['auto'] = 'auto',
@@ -250,10 +250,15 @@ def init(
         The prior variance of a leaf, conditional on the tree structure. The
         prior variance of the sum of trees is ``num_trees * sigma_mu2``. The
         prior mean of leaves is always zero.
+    sigma_mu2_cov
+        The prior covariance of a leaf, conditional on the tree structure, when have multiple responses.
     sigma2_alpha
     sigma2_beta
         The shape and scale parameters of the inverse gamma prior on the error
         variance. Leave unspecified for binary regression.
+    sigma2_cov_prior_df
+    sigma2_cov_prior_scale
+        The parameters of the inverse Wishard prior on the error covariance matrix.
     error_scale
         Each error is scaled by the corresponding factor in `error_scale`, so
         the error variance for ``y[i]`` is ``sigma2 * error_scale[i] ** 2``.
@@ -334,8 +339,10 @@ def init(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
 
-    is_binary = y.dtype == bool
+    # sigma2_cov = None 
+    is_binary = y.dtype == bool 
     is_multivariate = not is_binary and y.shape[1] > 1
+
     k = 1 if is_binary else y.shape[1]
     if is_binary:
         if (error_scale, sigma2_alpha, sigma2_beta) != 3 * (None,):
@@ -345,9 +352,9 @@ def init(
             )
             raise ValueError(msg)
         sigma2 = None
-    elif is_multivariate:
-        sigma_cov = sigma_cov_prior_scale / (sigma_cov_prior_df - k - 1)
     else:
+        sigma2_cov = sigma2_cov_prior_scale / (sigma2_cov_prior_df - k - 1)
+        # sigma2_cov_inv = inv(sigma2_cov_prior_scale) * sigma2_cov_prior_df
         sigma2_alpha = jnp.asarray(sigma2_alpha)
         sigma2_beta = jnp.asarray(sigma2_beta)
         sigma2 = sigma2_beta / sigma2_alpha
@@ -377,14 +384,14 @@ def init(
         offset=offset,
         resid=jnp.zeros(y.shape) if is_binary else y - offset,
         sigma2=sigma2,
-        sigma_mu2_cov = sigma_mu2_cov,
+        sigma2_cov = sigma2_cov,
         prec_scale=(
             None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
         ),
         sigma2_alpha=sigma2_alpha,
         sigma2_beta=sigma2_beta,
-        sigma_cov_prior_df=sigma_cov_prior_df,
-        sigma_cov_prior_scale=sigma_cov_prior_scale,
+        sigma2_cov_prior_df=sigma2_cov_prior_df,
+        sigma2_cov_prior_scale=sigma2_cov_prior_scale,
         forest=Forest(
             leaf_tree=make_vector_leaf_forest(max_depth, k, jnp.float32),
             var_tree=make_forest(max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)),
@@ -395,7 +402,7 @@ def init(
                 .set(
                     True
                     if min_points_per_decision_node is None
-                    else y.size >= min_points_per_decision_node
+                    else y.shape[0] >= min_points_per_decision_node
                 )
             ),
             blocked_vars=blocked_vars,
@@ -407,7 +414,7 @@ def init(
             p_nonterminal=p_nonterminal[grove.tree_depths(2**max_depth)],
             p_propose_grow=p_nonterminal[grove.tree_depths(2 ** (max_depth - 1))],
             leaf_indices=jnp.ones(
-                (num_trees, y.size), minimal_unsigned_dtype(2**max_depth - 1)
+                (num_trees, y.shape[0]), minimal_unsigned_dtype(2**max_depth - 1)
             ),
             min_points_per_decision_node=_asarray_or_none(min_points_per_decision_node),
             min_points_per_leaf=_asarray_or_none(min_points_per_leaf),
@@ -416,7 +423,7 @@ def init(
             log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
             log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
             sigma_mu2=jnp.asarray(sigma_mu2),
-            leaf_prior_cov = sigma_cov,
+            sigma_mu2_cov = sigma_mu2_cov,
             log_s=_asarray_or_none(log_s),
             theta=_asarray_or_none(theta),
             rho=_asarray_or_none(rho),
@@ -454,7 +461,7 @@ def _choose_suffstat_batch_size(
 
     if resid_batch_size == 'auto':
         platform = get_platform()
-        n = max(1, y.size)
+        n = max(1, y.shape[0])
         if platform == 'cpu':
             resid_batch_size = 2 ** round(math.log2(n / 6))  # n/6
         elif platform == 'gpu':
@@ -466,7 +473,7 @@ def _choose_suffstat_batch_size(
         if platform == 'cpu':
             count_batch_size = None
         elif platform == 'gpu':
-            n = max(1, y.size)
+            n = max(1, y.shape[0])
             count_batch_size = 2 ** round(math.log2(n) / 2 - 2)  # n^1/2
             # /4 is good on V100, /2 on L4/T4, still haven't tried A100
             max_memory = 2**29
@@ -503,7 +510,7 @@ def step(key: Key[Array, ''], bart: State) -> State:
         return step_z(keys.pop(), bart)
     elif bart.y.shape[1] > 1: # Multivariate continuous regression
         bart = step_trees(keys.pop(), bart)
-        return step_sigma_cov(keys.pop(), bart) 
+        return step_sigma2_cov(keys.pop(), bart) 
     else:  # continuous regression
         bart = step_trees(keys.pop(), bart)
         return step_sigma(keys.pop(), bart)
@@ -1546,8 +1553,8 @@ class PreLf(Module):
         obtain the posterior leaf samples.
     """
 
-    mean_factor: Float32[Array, 'num_trees 2**d']
-    centered_leaves: Float32[Array, 'num_trees 2**d']
+    mean_factor: Float32[Array, 'num_trees 2**d | num_trees 2**d k k']
+    centered_leaves: Float32[Array, 'num_trees 2**d | num_trees 2**d k']
 
 
 class ParallelStageOut(Module):
@@ -1675,12 +1682,12 @@ def accept_moves_parallel_stage(
     )
 
     # pre-compute some likelihood ratio & posterior terms
-    sigma = bart.sigma_cov if bart.sigma_cov is not None else bart.sigma2
+    sigma = bart.sigma2_cov if bart.sigma2_cov is not None else bart.sigma2
     assert sigma is not None  # `step` shall temporarily set it to 1
     prelkv, prelk = precompute_likelihood_terms(
-        bart.sigma2, bart.sigma_cov, bart.forest.sigma_mu2, bart.forest.leaf_prior_cov, move_precs
+        bart.sigma2, bart.sigma2_cov, bart.forest.sigma_mu2, bart.forest.sigma_mu2_cov, move_precs
     )
-    prelf = precompute_leaf_terms(key, prec_trees, bart.sigma2, bart.sigma_cov, bart.forest.sigma_mu2, bart.forest.leaf_prior_cov)
+    prelf = precompute_leaf_terms(key, prec_trees, bart.sigma2, bart.sigma2_cov, bart.forest.sigma_mu2, bart.forest.sigma_mu2_cov)
 
     return ParallelStageOut(
         bart=bart,
@@ -2061,42 +2068,67 @@ def precompute_likelihood_terms_univariate(
 
 
 def precompute_likelihood_terms_multivariate(
-    sigma_cov: Float32[Array, 'k k'],
+    sigma2_cov: Float32[Array, 'k k'],
     leaf_prior_cov: Float32[Array, 'k k'],
     move_precs: Counts, 
 ) -> tuple[PreLkV, PreLk]:
     """
     Pre-compute likelihood ratio terms for the multivariate case.
     """
-    ########## TODO ##############
+
+    leaf_prior_cov = jnp.atleast_2d(leaf_prior_cov)
+    
+    inv_Sigma = jnp.linalg.inv(sigma2_cov)         # (k,k)
+    inv_prior = jnp.linalg.inv(leaf_prior_cov)    # (k,k)
+
+    nL = move_precs.left .astype(sigma2_cov.dtype)[..., None, None]
+    nR = move_precs.right.astype(sigma2_cov.dtype)[..., None, None]
+    nT = move_precs.total.astype(sigma2_cov.dtype)[..., None, None]
+
+    A_left  = nL * inv_Sigma + inv_prior          # (...,k,k)
+    A_right = nR * inv_Sigma + inv_prior
+    A_total = nT * inv_Sigma + inv_prior
+    Ai_left  = jnp.linalg.inv(A_left)
+    Ai_right = jnp.linalg.inv(A_right)
+    Ai_total = jnp.linalg.inv(A_total)
+
+    sigma2_left = nL * leaf_prior_cov + sigma2_cov
+    sigma2_right = nR * leaf_prior_cov + sigma2_cov
+    sigma2_total = nT * leaf_prior_cov + sigma2_cov
+
+    logdet = lambda M: jnp.linalg.slogdet(M)[1] 
+    sqrt_term = 0.5 * (logdet(sigma2_cov) + logdet(sigma2_total) - logdet(sigma2_left) - logdet(sigma2_right))  # shape (num_trees,)
+
+    prelkv = PreLkV(
+        sigma2_left   = inv_Sigma @ leaf_prior_cov @ jnp.linalg.inv(sigma2_left),
+        sigma2_right  = inv_Sigma @ leaf_prior_cov @ jnp.linalg.inv(sigma2_right),
+        sigma2_total  = inv_Sigma @ leaf_prior_cov @ jnp.linalg.inv(sigma2_total),
+        sqrt_term    = sqrt_term
+    )
+
+    prelk = PreLk(exp_factor = 0.5)
 
     return prelkv, prelk
 
 def precompute_likelihood_terms(
     sigma2: Float32[Array, ''] | None,
-    sigma_cov: Float32[Array, 'k k'] | None,
+    sigma2_cov: Float32[Array, 'k k'] | None,
     sigma_mu2: Float32[Array, ''] | None,
-    leaf_prior_cov: Float32[Array, 'k k'] | None,
+    sigma_mu2_cov: Float32[Array, 'k k'] | None,
     move_precs: Precs | Counts,
 ) -> tuple[PreLkV, PreLk]:
-    """
-    JIT-compatible dispatcher for pre-computing likelihood ratio terms.
-    """
-    is_multivariate = sigma_cov is not None
-
-    def _leaf_terms_vector(_):
-        return precompute_likelihood_terms_multivariate(sigma_cov, leaf_prior_cov, move_precs)
-
-    def _leaf_terms_scalar(_):
-        return precompute_likelihood_terms_univariate(sigma2, sigma_mu2, move_precs)
-
-    # lax.cond chooses which function to run.
-    return lax.cond(
-            is_multivariate,
-            _leaf_terms_vector,
-            _leaf_terms_scalar,
-            operand=None
+    
+    is_multivariate = (
+        sigma2_cov is not None
+        and sigma_mu2_cov is not None
+        # and sigma2_cov.ndim == 2
+        # and sigma_mu2_cov.ndim == 2
     )
+    # jax.debug.print("sigma2_cov in precompute likelihood terms = {}", sigma2_cov)
+    if is_multivariate:
+        return precompute_likelihood_terms_multivariate(sigma2_cov, sigma_mu2_cov, move_precs)
+    else:
+        return precompute_likelihood_terms_univariate(sigma2, sigma_mu2, move_precs)
 
 def precompute_leaf_terms_univariate(
     key: Key[Array, ''],
@@ -2128,40 +2160,44 @@ def precompute_leaf_terms_multivariate(
     key: Key[Array, ''],
     # For multivariate, prec_trees is just the count of points in each leaf (count_trees)
     prec_trees: Int32[Array, 'num_trees 2**d'],
-    sigma_cov: Float32[Array, 'k k'],
+    sigma2_cov: Float32[Array, 'k k'],
     leaf_prior_cov: Float32[Array, 'k k'],
 ) -> PreLf:
     """
     Pre-compute terms to sample leaves from their multivariate posterior.
     """
-    #### TO DO ###
+    num_trees, num_leaves = prec_trees.shape
+    k = sigma2_cov.shape[0]
+
+    sigma2_cov_inv = jnp.linalg.inv(sigma2_cov)
+    leaf_prior_cov_inv = jnp.linalg.inv(leaf_prior_cov)
+    n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
+    posterior_precision = leaf_prior_cov_inv + n_k * sigma2_cov_inv
+    var_post = jnp.linalg.inv(posterior_precision)
+
+    z = random.normal(key, (num_trees, num_leaves, k))
+    L = jnp.linalg.cholesky(var_post)
+    centered_leaves = (L @ z[..., None]).squeeze(-1)
 
     return PreLf(
-        mean_factor=mean_factor,
-        centered_leaves=centered_leaves,
+        mean_factor = var_post @ sigma2_cov_inv, # Shape: [num_trees, num_leaves, k, k]
+        centered_leaves=centered_leaves, # Shape: [num_trees, num_leaves, k]
     )
 
 def precompute_leaf_terms(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
     sigma2: Float32[Array, ''] | None,
-    sigma_cov: Float32[Array, 'k k'] | None,
+    sigma2_cov: Float32[Array, 'k k'] | None,
     sigma_mu2: Float32[Array, ''] | None,
     leaf_prior_cov: Float32[Array, 'k k'] | None,
 ) -> PreLf:
-    is_multivariate = sigma_cov is not None
-    def _leaf_terms_vector(_):
-        return precompute_leaf_terms_multivariate(key, prec_trees, sigma_cov, leaf_prior_cov)
+    is_multivariate = sigma2_cov is not None
 
-    def _leaf_terms_scalar(_):
+    if is_multivariate:
+        return precompute_leaf_terms_multivariate(key, prec_trees, sigma2_cov, leaf_prior_cov)
+    else: 
         return precompute_leaf_terms_univariate(key, prec_trees, sigma2, sigma_mu2)
-
-    return lax.cond(
-            is_multivariate,
-            _leaf_terms_vector,
-            _leaf_terms_scalar,
-            operand=None
-        )
 
 
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
@@ -2320,11 +2356,11 @@ def accept_move_and_sample_leaves(
     else:
         scaled_resid = resid * at.prec_scale[:, None]
     resid_tree = sum_resid( ### TODO: need to modify it
-        scaled_resid, pt.leaf_indices, pt.leaf_tree.size, at.resid_batch_size
+        scaled_resid, pt.leaf_indices, pt.leaf_tree.shape[0], at.resid_batch_size
     )
 
     # subtract starting tree from function
-    resid_tree += pt.prec_tree * pt.leaf_tree
+    resid_tree += pt.prec_tree[..., None] * pt.leaf_tree
 
     # sum residuals in parent node modified by move
     resid_left = resid_tree[pt.move.left, :]
@@ -2334,7 +2370,7 @@ def accept_move_and_sample_leaves(
     resid_tree = resid_tree.at[pt.move.node, :].set(resid_total)
 
     # compute acceptance ratio
-    log_lk_ratio = compute_likelihood_ratio( ### TODO: need to modify it
+    log_lk_ratio = compute_likelihood_ratio( 
         resid_total, resid_left, resid_right, pt.prelkv, at.prelk
     )
     log_ratio = pt.move.log_trans_prior_ratio + log_lk_ratio
@@ -2346,13 +2382,12 @@ def accept_move_and_sample_leaves(
     acc = pt.move.allowed & (pt.move.logu <= log_ratio)
 
     # compute leaves posterior and sample leaves
-    mean_post = resid_tree * pt.prelf.mean_factor  ### need to change
-    leaf_tree = mean_post + pt.prelf.centered_leaves
+    mean_post, leaf_tree = _sample_posterior_leaves(resid_tree, pt.prelf)
 
     # copy leaves around such that the leaf indices point to the correct leaf
     to_prune = acc ^ pt.move.grow
     leaf_tree = (
-        leaf_tree.at[jnp.where(to_prune, pt.move.shape[0], leaf_tree.size)]
+        leaf_tree.at[jnp.where(to_prune, pt.move.left, leaf_tree.shape[0])]
         .set(leaf_tree[pt.move.node])
         .at[jnp.where(to_prune, pt.move.right, leaf_tree.shape[0])]
         .set(leaf_tree[pt.move.node])
@@ -2363,13 +2398,23 @@ def accept_move_and_sample_leaves(
 
     return resid, leaf_tree, acc, to_prune, log_lk_ratio
 
+def _sample_posterior_leaves(resid_tree: Float32[Array, 'num_leaves d'], 
+                             prelf: PreLf) -> Float32[Array, 'num_leaves d']:
+    is_multivariate = resid_tree.shape[-1] > 1
+    if is_multivariate:
+        mean_post = (prelf.mean_factor @ resid_tree[..., None]).squeeze(-1)
+        leaf_tree = leaf_tree = mean_post + prelf.centered_leaves
+    else:
+        mean_post = resid_tree * prelf.mean_factor 
+        leaf_tree = mean_post + prelf.centered_leaves
+    return mean_post, leaf_tree
 
 def sum_resid(
-    scaled_resid: Float32[Array, ' n'],
+    scaled_resid: Float32[Array, ' n k'],
     leaf_indices: UInt[Array, ' n'],
     tree_size: int,
     batch_size: int | None,
-) -> Float32[Array, ' {tree_size}']:
+) -> Float32[Array, ' {tree_size} k']:
     """
     Sum the residuals in each leaf.
 
@@ -2391,10 +2436,40 @@ def sum_resid(
     The sum of the residuals at data points in each leaf.
     """
     if batch_size is None:
-        aggr_func = _aggregate_scatter
+        # aggr_func = _aggregate_scatter
+        return _aggregate_scatter_vec(scaled_resid, leaf_indices, tree_size, jnp.float32)
     else:
-        aggr_func = partial(_aggregate_batched_onetree, batch_size=batch_size)
-    return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32)
+        return _aggregate_batched_onetree_vec(scaled_resid, leaf_indices, tree_size, jnp.float32, batch_size)
+        # aggr_func = partial(_aggregate_batched_onetree, batch_size=batch_size)
+    # return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32)
+
+def _aggregate_scatter_vec(
+    values : Float32[Array, 'n k'],
+    indices: Integer[Array, 'n'],
+    size   : int,
+    dtype  : jnp.dtype,
+) -> Float32[Array, '{size} k']:
+    """Unbatched scatter-add for (n,k) values."""
+    return jnp.zeros((size, values.shape[1]), dtype).at[indices, :].add(values)
+
+
+def _aggregate_batched_onetree_vec(
+    values : Float32[Array, 'n k'],
+    indices: Integer[Array, 'n'],
+    size   : int,
+    dtype  : jnp.dtype,
+    batch_size: int,
+) -> Float32[Array, '{size} k']:
+    n        = indices.shape[0]
+    nbatches = n // batch_size + bool(n % batch_size)
+    batch_indices = jnp.arange(n) % nbatches            # (n,)
+    return (
+        jnp.zeros((size, values.shape[1], nbatches), dtype)
+          .at[indices, :, batch_indices]
+        #   .add(values[:, :, None])                 # broadcast k-dim
+            .add(values)
+          .sum(axis=2)
+    )
 
 
 def _aggregate_batched_onetree(
@@ -2456,7 +2531,23 @@ def compute_likelihood_ratio_multivariate(
     prelk: PreLk,
 ) -> Float32[Array, '']:
     
-    ##### TODO #########
+    def _quadratic_form(r, cov):
+        # return r.T @ jnp.linalg.solve(cov, r)
+        return r.T @ cov @ r
+    qf_left = _quadratic_form(left_resid, prelkv.sigma2_left)
+    qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
+    qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
+    exp_term = prelk.exp_factor * (qf_left + qf_right - qf_total)
+
+    # jax.debug.print("eig(sigma2_left) = {}", jnp.linalg.eigvalsh(prelkv.sigma2_left))
+    # jax.debug.print("eig(sigma2_right) = {}", jnp.linalg.eigvalsh(prelkv.sigma2_right))
+    # jax.debug.print("eig(sigma2_total) = {}", jnp.linalg.eigvalsh(prelkv.sigma2_total))
+    # jax.debug.print("qf_left: {x}", x=qf_left)
+    # jax.debug.print("qf_right: {x}", x=qf_right)
+    # jax.debug.print("qf_total: {x}", x=qf_total)
+
+    # jax.debug.print("exp_term in compute_likelihood_ratio_multivariate: {x}", x=exp_term)
+    # jax.debug.print("result in compute_likelihood_ratio_multivariate: {x}", x=prelkv.sqrt_term + exp_term)
 
     return prelkv.sqrt_term + exp_term
 
@@ -2467,26 +2558,10 @@ def compute_likelihood_ratio(
     prelkv: PreLkV,
     prelk: PreLk,
 ) -> Float32[Array, '']:
-    """
-    JIT-compatible dispatcher for computing the likelihood ratio.
-    """
-    is_multivariate = total_resid.ndim > 0
-
-    def _leaf_terms_vector(op):
-        total, left, right, kv, k = op
-        return compute_likelihood_ratio_multivariate(total, left, right, kv, k)
-
-    def _leaf_terms_scalar(op):
-        total, left, right, kv, k = op
-        return compute_likelihood_ratio_univariate(total, left, right, kv, k)
-
-    # lax.cond chooses which function to run.
-    return lax.cond(
-        is_multivariate,
-        _leaf_terms_vector,
-        _leaf_terms_scalar,
-        operand=(total_resid, left_resid, right_resid, prelkv, prelk)
-    )
+    if total_resid.ndim > 0:
+        return compute_likelihood_ratio_multivariate(total_resid, left_resid, right_resid, prelkv, prelk)
+    else:
+        return compute_likelihood_ratio_univariate(total_resid, left_resid, right_resid, prelkv, prelk)
 
 
 
@@ -2613,7 +2688,7 @@ def _wishart_bartlett(key: Key[Array, ''],
     where scale_inv is *the inverse* of the desired scale matrix.
     """
     k = scale_inv.shape[0]
-    L = jnp.linalg.cholesky(scale_inv, lower=True)
+    L = jnp.linalg.cholesky(scale_inv)
 
     key, diag_key, offdiag_key = random.split(key, 3)
 
@@ -2628,21 +2703,21 @@ def _wishart_bartlett(key: Key[Array, ''],
 
     return L @ A @ A.T @ L.T
 
-def step_sigma_cov(key: Key[Array, ''], bart: State) -> State:
+def step_sigma2_cov(key: Key[Array, ''], bart: State) -> State:
     """
     Gibbs update of the k×k error covariance given an Inv-Wishart prior.
-    # The posterior is IW(t_n, s_n) where:
+    # The posterior is IW(t_n, s_nresid) where:
     # t_n = t_0 + n
     # s_n = s_0 + R'R
     """
     n, k= bart.resid.shape
-    t_n   = bart.sigma_df + n
-    s_n = bart.sigma_scale + bart.resid @ bart.resid.T            
+    t_n   = bart.sigma2_cov_prior_df + n
+    s_n = bart.sigma2_cov_prior_scale + bart.resid.T @ bart.resid            
 
     W   = _wishart_bartlett(key, t_n, jnp.linalg.inv(s_n))
     Sigma = jnp.linalg.inv(W) 
 
-    return replace(bart, sigma_cov=Sigma)
+    return replace(bart, sigma2_cov=Sigma)
 
 def step_z(key: Key[Array, ''], bart: State) -> State:
     """

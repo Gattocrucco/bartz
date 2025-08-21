@@ -371,8 +371,8 @@ class mc_gbart(Module):
             )
             t0 = s0 = None
         else:
-            t0, s0 = self._process_error_variance_matrix_settings(x_train, y_train, t0, s0)
-            lamda = sigest = None 
+            t0, s0, s0_inv = self._process_error_variance_matrix_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, t0, s0)
+            # lamda = sigest = None 
 
         # determine splits
         splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
@@ -492,6 +492,40 @@ class mc_gbart(Module):
         _, nskip = self._burnin_trace.grow_prop_count.shape
         return self.sigma[nskip:, ...].mean()
 
+    @cached_property
+    def sigma2_cov(
+        self,
+    ) -> (
+        Float32[Array, 'nskip+ndpost k k']
+        | Float32[Array, 'nskip+ndpost/mc_cores mc_cores k k']
+        | None
+    ):
+        """Error covariance matrices across iterations, including burn-in."""
+
+        if self._burnin_trace.sigma2_cov is None:
+            return None
+        assert self._main_trace.sigma2_cov is not None
+
+        # stack burn-in and post-burnin traces
+        sigma2_cov = jnp.concatenate(
+            [self._burnin_trace.sigma2_cov, self._main_trace.sigma2_cov],
+            axis=1  # assumes [chain, iteration, k, k]
+        )
+        sigma2_cov = sigma2_cov.transpose(1, 0, 2, 3)  # shape: [n_total, chain, k, k]
+        if sigma2_cov.shape[1] == 1:
+            sigma2_cov = sigma2_cov.squeeze(1)  # shape: [n_total, k, k]
+
+        return sigma2_cov
+
+    @cached_property
+    def sigma2_cov_mean(self) -> Float32[Array, 'k k'] | None:
+        """Mean of `sigma2_cov`, over post-burnin samples."""
+        if self.sigma2_cov is None:
+            return None
+
+        _, nskip = self._burnin_trace.grow_prop_count.shape
+        return self.sigma2_cov[nskip:, ...].mean(axis=0)  # shape: [k, k]
+    
     @cached_property
     def varcount(self) -> Int32[Array, 'ndpost p']:
         """Histogram of predictor usage for decision rules in the trees."""
@@ -666,16 +700,21 @@ class mc_gbart(Module):
     @staticmethod
     def _process_error_variance_matrix_settings(
         x_train: Real[Array, 'p n'],
-            y_train: Float32[Array, 'n k'],
-            t0: float | None,
-            s0: Float32[Array, 'k k'] | None,
+        y_train: Float32[Array, 'n k'],
+        sigest: Float32[Array, 'k'] | None, # Can now be a vector
+        sigdf: float,
+        sigquant: float,
+        lamda: Float32[Array, 'k'] | None, # Can now be a vector
+        t0: float | None,
+        s0: Float32[Array, 'k k'] | None,
         ) -> tuple[float, Float32[Array, 'k k']]:
         n_obs = x_train.shape[1]
         n_preds = x_train.shape[0]
         n_outcomes = y_train.shape[1]
 
         if t0 is None:
-            t0 = float(n_outcomes + 1/2)
+            # t0 = float(n_outcomes + 1/2)
+            t0 = float(sigdf + n_outcomes - 1)
         if t0 <= n_outcomes - 1:
             raise ValueError(f"Degrees of freedom `t0` must be > {n_outcomes - 1}")
 
@@ -683,24 +722,34 @@ class mc_gbart(Module):
             if s0.shape != (n_outcomes, n_outcomes):
                 raise ValueError(f"Scale matrix `s0` must have shape ({n_outcomes}, {n_outcomes})")
             return jnp.asarray(t0, dtype=jnp.float32), jnp.asarray(s0)
-
-        # Step 1: Get an empirical estimate of the residual covariance (Sigma_hat).
-        if n_obs <= n_preds:
-            print("Warning: n <= p. Using marginal covariance of y to estimate error covariance.")
-            Sigma_hat = jnp.cov(y_train, rowvar=False)
+        
+        if lamda is not None:
+        # From the IW-IG relationship, s0_ii = 2 * lamda_i
+            s0 = jnp.diag(2.0 * jnp.asarray(lamda))
+            return jnp.asarray(t0, dtype=jnp.float32), s0
+        
+        # --- Vectorized logic to calculate s0 from scratch ---
+        if sigest is not None:
+            sigest2_vec = jnp.square(sigest)
+        elif n_obs < 2:
+            sigest2_vec = jnp.ones(n_outcomes)
+        elif n_obs <= n_preds:
+            sigest2_vec = jnp.var(y_train, axis=0)
         else:
-            coeffs, residuals, rank, _ = jnp.linalg.lstsq(x_train.T, y_train, rcond=None)
+            x_centered = x_train.T - x_train.mean(axis=1)
+            y_centered = y_train - y_train.mean(axis=0)
+            _, chisq_vec, rank, _ = jnp.linalg.lstsq(x_centered, y_centered)
             dof = n_obs - rank
-            
-            # Unbiased estimate of the residual covariance matrix: (E^T * E) / (n - rank)
-            Sigma_hat = (residuals.T @ residuals) / dof
+            sigest2_vec = chisq_vec / dof
 
-        # Step 2: Use the empirical estimate to set the prior's scale matrix (Psi).
-        # A common choice is to scale Sigma_hat by a factor related to the prior degrees of freedom.
-        # This centers the prior's expectation around the OLS estimate.
-        s0 = (t0 - n_outcomes - 1) * Sigma_hat
-
-        return jnp.asarray(t0, dtype=jnp.float32), s0
+        alpha = sigdf / 2.0
+        invchi2 = invgamma.ppf(sigquant, alpha) / 2.0
+        invchi2rid = invchi2 * sigdf
+        lamda_vec = jnp.atleast_1d(sigest2_vec / invchi2rid)
+        
+        s0 = jnp.diag(t0 * lamda_vec)
+        s0_inv = jnp.diag(1/(t0 * lamda_vec))
+        return jnp.asarray(t0, dtype=jnp.float32), s0, s0_inv
 
     @staticmethod
     def _check_type_settings(y_train, type, w):  # noqa: A002
@@ -787,7 +836,7 @@ class mc_gbart(Module):
         if k == 1:
             return sigma_mu_vector.item()
         else:
-            return jnp.diag(jnp.square(sigma_mu_vector))
+            return jnp.diag(sigma_mu_vector)
 
     @staticmethod
     def _determine_splits(
@@ -867,12 +916,14 @@ class mc_gbart(Module):
             kw['sigma2_alpha'] = sigma2_alpha
             kw['sigma2_beta'] = sigma2_beta
             kw['sigma_mu2'] = jnp.square(sigma_mu) 
+            kw['sigma_mu2_cov'] = jnp.square(sigma_mu)  # place holder?
 
         else:
             # Multivariate continuous case
-            kw['sigma_cov_prior_df'] = t0
-            kw['sigma_cov_prior_scale'] = s0
-            kw['leaf_prior_cov'] = sigma_mu
+            kw['sigma2_cov_prior_df'] = t0
+            kw['sigma2_cov_prior_scale'] = s0
+            kw['sigma_mu2_cov'] = jnp.square(sigma_mu) 
+            kw['sigma_mu2'] = jnp.square(sigma_mu) # place holder?
 
         if rm_const is None:
             kw.update(filter_splitless_vars=False)
@@ -996,8 +1047,13 @@ class mc_gbart(Module):
         cls, trace: mcmcloop.MainTrace, x: UInt[Array, 'p m']
     ) -> Float32[Array, 'ndpost m']:
         out = cls._evaluate_chains(trace, x)
-        mc_cores, ndpost_per_chain, m = out.shape
-        return out.reshape(mc_cores * ndpost_per_chain, m)
+        if out.ndim == 3:
+            mc_cores, ndpost_per_chain, m = out.shape
+            out = out.reshape(mc_cores * ndpost_per_chain, m)
+        elif out.ndim == 4:
+            mc_cores, ndpost_per_chain, m, k = out.shape
+            out = out.reshape(mc_cores * ndpost_per_chain, m, k)
+        return out
 
     @staticmethod
     @partial(jax.vmap, in_axes=(0, None))

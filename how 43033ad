@@ -1,0 +1,39 @@
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{0}: checkout: moving from add-invwishart-sampler to mvbart
+[33m43033ad[m[33m ([m[1;31morigin/add-invwishart-sampler[m[33m, [m[1;32madd-invwishart-sampler[m[33m)[m HEAD@{1}: checkout: moving from main to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{2}: checkout: moving from mvbart to main
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{3}: checkout: moving from add-invwishart-sampler to mvbart
+[33m43033ad[m[33m ([m[1;31morigin/add-invwishart-sampler[m[33m, [m[1;32madd-invwishart-sampler[m[33m)[m HEAD@{4}: checkout: moving from mvbart to add-invwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{5}: checkout: moving from add-invwishart-sampler to mvbart
+[33m43033ad[m[33m ([m[1;31morigin/add-invwishart-sampler[m[33m, [m[1;32madd-invwishart-sampler[m[33m)[m HEAD@{6}: checkout: moving from mvbart to add-invwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{7}: checkout: moving from mvbart to mvbart
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{8}: checkout: moving from add-invwishart-sampler to mvbart
+[33m43033ad[m[33m ([m[1;31morigin/add-invwishart-sampler[m[33m, [m[1;32madd-invwishart-sampler[m[33m)[m HEAD@{9}: commit: Address PR feedback: rename scale_inv to scale
+[33m059d3a6[m HEAD@{10}: checkout: moving from mvbart to add-invwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{11}: checkout: moving from add-invwishart-sampler to mvbart
+[33m059d3a6[m HEAD@{12}: checkout: moving from mvbart to add-invwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{13}: checkout: moving from add-invwishart-sampler to mvbart
+[33m059d3a6[m HEAD@{14}: checkout: moving from add-inwishart-sampler to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{15}: checkout: moving from add-invwishart-sampler to add-inwishart-sampler
+[33m059d3a6[m HEAD@{16}: checkout: moving from add-inwishart-sampler to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{17}: checkout: moving from mvbart to add-inwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{18}: reset: moving to HEAD
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{19}: reset: moving to HEAD
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{20}: checkout: moving from add-invwishart-sampler to mvbart
+[33m059d3a6[m HEAD@{21}: checkout: moving from add-inwishart-sampler to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{22}: checkout: moving from add-invwishart-sampler to add-inwishart-sampler
+[33m059d3a6[m HEAD@{23}: checkout: moving from add-inwishart-sampler to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{24}: checkout: moving from add-inwishart-sampler to add-inwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{25}: checkout: moving from main to add-inwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{26}: checkout: moving from add-invwishart-sampler to main
+[33m059d3a6[m HEAD@{27}: checkout: moving from add-invwishart-sampler to add-invwishart-sampler
+[33m059d3a6[m HEAD@{28}: commit: Add inverse Wishart sampler using Bartlett decomposition
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{29}: checkout: moving from mvbart to add-invwishart-sampler
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{30}: checkout: moving from add-invwishart-sampler to mvbart
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{31}: checkout: moving from main to add-invwishart-sampler
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{32}: rebase (finish): returning to refs/heads/main
+[33m619e140[m[33m ([m[1;31mupstream/main[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m HEAD@{33}: rebase (start): checkout upstream/main
+[33mb13f533[m HEAD@{34}: checkout: moving from main to main
+[33mb13f533[m HEAD@{35}: checkout: moving from mvbart to main
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{36}: reset: moving to HEAD
+[33me8d1fb1[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmvbart[m[33m, [m[1;31morigin/mvbart[m[33m)[m HEAD@{37}: checkout: moving from main to mvbart
+[33mb13f533[m HEAD@{38}: clone: from https://github.com/miaoqingyu2/bartz.git

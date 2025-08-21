@@ -48,6 +48,7 @@ class BurninTrace(Module):
     """MCMC trace with only diagnostic values."""
 
     sigma2: Float32[Array, '*trace_length'] | Float32[Array, '*trace_length k k'] | None
+    sigma2_cov: Float32[Array, '*trace_length k k'] | None
     theta: Float32[Array, '*trace_length'] | None
     grow_prop_count: Int32[Array, '*trace_length']
     grow_acc_count: Int32[Array, '*trace_length']
@@ -61,6 +62,7 @@ class BurninTrace(Module):
         """Create a single-item burn-in trace from a MCMC state."""
         return cls(
             sigma2=state.sigma2,
+            sigma2_cov = state.sigma2_cov,
             theta=state.forest.theta,
             grow_prop_count=state.forest.grow_prop_count,
             grow_acc_count=state.forest.grow_acc_count,
