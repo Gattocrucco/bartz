@@ -311,7 +311,7 @@ class mc_gbart(Module):
         a: FloatLike = 0.5,
         b: FloatLike = 1.0,
         t0: FloatLike | None = None,  # Degrees of freedom for Inverse-Wishart
-        s0: Float[Array, 'k k'] | None = None, # Scale matrix for Inverse-Wishart
+        s0: Float[Array, 'k k'] | None = None,  # Scale matrix for Inverse-Wishart
         rho: FloatLike | None = None,
         xinfo: Float[Array, 'p n'] | None = None,
         usequants: bool = False,
@@ -371,8 +371,10 @@ class mc_gbart(Module):
             )
             t0 = s0 = None
         else:
-            t0, s0, s0_inv = self._process_error_variance_matrix_settings(x_train, y_train, sigest, sigdf, sigquant, lamda, t0, s0)
-            # lamda = sigest = None 
+            t0, s0, s0_inv = self._process_error_variance_matrix_settings(
+                x_train, y_train, sigest, sigdf, sigquant, lamda, t0, s0
+            )
+            # lamda = sigest = None
 
         # determine splits
         splits, max_split = self._determine_splits(x_train, usequants, numcut, xinfo)
@@ -501,7 +503,6 @@ class mc_gbart(Module):
         | None
     ):
         """Error covariance matrices across iterations, including burn-in."""
-
         if self._burnin_trace.sigma2_cov is None:
             return None
         assert self._main_trace.sigma2_cov is not None
@@ -509,7 +510,7 @@ class mc_gbart(Module):
         # stack burn-in and post-burnin traces
         sigma2_cov = jnp.concatenate(
             [self._burnin_trace.sigma2_cov, self._main_trace.sigma2_cov],
-            axis=1  # assumes [chain, iteration, k, k]
+            axis=1,  # assumes [chain, iteration, k, k]
         )
         sigma2_cov = sigma2_cov.transpose(1, 0, 2, 3)  # shape: [n_total, chain, k, k]
         if sigma2_cov.shape[1] == 1:
@@ -525,7 +526,7 @@ class mc_gbart(Module):
 
         _, nskip = self._burnin_trace.grow_prop_count.shape
         return self.sigma2_cov[nskip:, ...].mean(axis=0)  # shape: [k, k]
-    
+
     @cached_property
     def varcount(self) -> Int32[Array, 'ndpost p']:
         """Histogram of predictor usage for decision rules in the trees."""
@@ -651,7 +652,7 @@ class mc_gbart(Module):
         if y.ndim == 1:
             y = y.reshape(-1, 1)
         if y.ndim != 2:
-            raise ValueError("y_train must be a 1D vector or 2D matrix.")
+            raise ValueError('y_train must be a 1D vector or 2D matrix.')
         return y
 
     @staticmethod
@@ -696,18 +697,18 @@ class mc_gbart(Module):
             invchi2 = invgamma.ppf(sigquant, alpha) / 2
             invchi2rid = invchi2 * sigdf
             return sigest2 / invchi2rid, jnp.sqrt(sigest2)
-    
+
     @staticmethod
     def _process_error_variance_matrix_settings(
         x_train: Real[Array, 'p n'],
         y_train: Float32[Array, 'n k'],
-        sigest: Float32[Array, 'k'] | None, # Can now be a vector
+        sigest: Float32[Array, 'k'] | None,  # Can now be a vector
         sigdf: float,
         sigquant: float,
-        lamda: Float32[Array, 'k'] | None, # Can now be a vector
+        lamda: Float32[Array, 'k'] | None,  # Can now be a vector
         t0: float | None,
         s0: Float32[Array, 'k k'] | None,
-        ) -> tuple[float, Float32[Array, 'k k']]:
+    ) -> tuple[float, Float32[Array, 'k k']]:
         n_obs = x_train.shape[1]
         n_preds = x_train.shape[0]
         n_outcomes = y_train.shape[1]
@@ -716,18 +717,20 @@ class mc_gbart(Module):
             # t0 = float(n_outcomes + 1/2)
             t0 = float(sigdf + n_outcomes - 1)
         if t0 <= n_outcomes - 1:
-            raise ValueError(f"Degrees of freedom `t0` must be > {n_outcomes - 1}")
+            raise ValueError(f'Degrees of freedom `t0` must be > {n_outcomes - 1}')
 
         if s0 is not None:
             if s0.shape != (n_outcomes, n_outcomes):
-                raise ValueError(f"Scale matrix `s0` must have shape ({n_outcomes}, {n_outcomes})")
+                raise ValueError(
+                    f'Scale matrix `s0` must have shape ({n_outcomes}, {n_outcomes})'
+                )
             return jnp.asarray(t0, dtype=jnp.float32), jnp.asarray(s0)
-        
+
         if lamda is not None:
-        # From the IW-IG relationship, s0_ii = 2 * lamda_i
+            # From the IW-IG relationship, s0_ii = 2 * lamda_i
             s0 = jnp.diag(2.0 * jnp.asarray(lamda))
             return jnp.asarray(t0, dtype=jnp.float32), s0
-        
+
         # --- Vectorized logic to calculate s0 from scratch ---
         if sigest is not None:
             sigest2_vec = jnp.square(sigest)
@@ -746,9 +749,9 @@ class mc_gbart(Module):
         invchi2 = invgamma.ppf(sigquant, alpha) / 2.0
         invchi2rid = invchi2 * sigdf
         lamda_vec = jnp.atleast_1d(sigest2_vec / invchi2rid)
-        
+
         s0 = jnp.diag(t0 * lamda_vec)
-        s0_inv = jnp.diag(1/(t0 * lamda_vec))
+        s0_inv = jnp.diag(1 / (t0 * lamda_vec))
         return jnp.asarray(t0, dtype=jnp.float32), s0, s0_inv
 
     @staticmethod
@@ -824,11 +827,11 @@ class mc_gbart(Module):
         ntree: int,
         tau_num: FloatLike | None,
     ):
-        k = y_train.shape[1] 
+        k = y_train.shape[1]
         if tau_num is None:
             if y_train.dtype == bool:
                 tau_num = 3.0
-            elif y_train.shape[0]  < 2:
+            elif y_train.shape[0] < 2:
                 tau_num = jnp.ones(k) if k > 1 else 1.0
             else:
                 tau_num = (y_train.max(axis=0) - y_train.min(axis=0)) / 2
@@ -904,26 +907,26 @@ class mc_gbart(Module):
             b=b,
             rho=rho,
         )
-        
+
         if y_train.dtype == bool:
             kw['sigma2_alpha'] = None
             kw['sigma2_beta'] = None
-            kw['sigma_mu2'] = jnp.square(sigma_mu) 
+            kw['sigma_mu2'] = jnp.square(sigma_mu)
 
         elif y_train.shape[1] == 1:
             sigma2_alpha = sigdf / 2
             sigma2_beta = lamda * sigma2_alpha
             kw['sigma2_alpha'] = sigma2_alpha
             kw['sigma2_beta'] = sigma2_beta
-            kw['sigma_mu2'] = jnp.square(sigma_mu) 
+            kw['sigma_mu2'] = jnp.square(sigma_mu)
             kw['sigma_mu2_cov'] = jnp.square(sigma_mu)  # place holder?
 
         else:
             # Multivariate continuous case
             kw['sigma2_cov_prior_df'] = t0
             kw['sigma2_cov_prior_scale'] = s0
-            kw['sigma_mu2_cov'] = jnp.square(sigma_mu) 
-            kw['sigma_mu2'] = jnp.square(sigma_mu) # place holder?
+            kw['sigma_mu2_cov'] = jnp.square(sigma_mu)
+            kw['sigma_mu2'] = jnp.square(sigma_mu)  # place holder?
 
         if rm_const is None:
             kw.update(filter_splitless_vars=False)

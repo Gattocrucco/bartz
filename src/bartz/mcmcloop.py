@@ -62,7 +62,7 @@ class BurninTrace(Module):
         """Create a single-item burn-in trace from a MCMC state."""
         return cls(
             sigma2=state.sigma2,
-            sigma2_cov = state.sigma2_cov,
+            sigma2_cov=state.sigma2_cov,
             theta=state.forest.theta,
             grow_prop_count=state.forest.grow_prop_count,
             grow_acc_count=state.forest.grow_acc_count,

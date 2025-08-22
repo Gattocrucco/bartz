@@ -87,7 +87,10 @@ def make_tree(depth: int, dtype: DTypeLike) -> Shaped[Array, ' 2**{depth}']:
     """
     return jnp.zeros(2**depth, dtype)
 
-def make_vector_leaf_tree(depth: int, k: int, dtype: DTypeLike) -> Shaped[Array, '2**{depth} {k}']:
+
+def make_vector_leaf_tree(
+    depth: int, k: int, dtype: DTypeLike
+) -> Shaped[Array, '2**{depth} {k}']:
     shape = (2**depth, k)
     return jnp.zeros(shape, dtype)
 
