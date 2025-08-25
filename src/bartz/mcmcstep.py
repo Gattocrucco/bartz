@@ -45,6 +45,7 @@ import jax
 from equinox import Module, field, tree_at
 from jax import lax, random
 from jax import numpy as jnp
+from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
@@ -2474,10 +2475,10 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
 
 
 def _sample_wishart_bartlett(
-    key: Key[Array, ''], df: int, scale: Float32[Array, 'k k']
+    key: Key[Array, ''], df: int, scale_inv: Float32[Array, 'k k']
 ) -> Float32[Array, 'k k']:
     """
-    Sample from Wishart(df, scale) using Bartlett decomposition.
+    Sample a precision matrix W ~ Wishart(df, scale_inv) using Bartlett decomposition.
 
     Parameters
     ----------
@@ -2485,15 +2486,15 @@ def _sample_wishart_bartlett(
         A JAX random key
     df
         Degrees of freedom
-    scale
-        Scale matrix of the Wishart distribution
+    scale_inv
+        Scale matrix of the corresponding Inverse Wishart distribution
 
     Returns
     -------
     A sample from Wishart(df, scale)
     """
-    k = scale.shape[0]
-    L = jnp.linalg.cholesky(scale)
+    k = scale_inv.shape[0]
+    L = jnp.linalg.cholesky(scale_inv)
 
     diag_key, offdiag_key = random.split(key)
 
@@ -2505,8 +2506,9 @@ def _sample_wishart_bartlett(
 
     off_diag_A = random.normal(offdiag_key, (k, k))
     A = jnp.tril(off_diag_A, -1) + jnp.diag(diag_A)
+    T = solve_triangular(L, A, lower=True, trans='T')
 
-    return L @ A @ A.T @ L.T
+    return T @ T.T
 
 
 def step_z(key: Key[Array, ''], bart: State) -> State:
