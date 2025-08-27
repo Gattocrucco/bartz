@@ -2475,10 +2475,10 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
 
 
 def _sample_wishart_bartlett(
-    key: Key[Array, ''], df: int, scale_inv: Float32[Array, 'k k']
+    key: Key[Array, ''], df: Integer[Array, ''], scale_inv: Float32[Array, 'k k']
 ) -> Float32[Array, 'k k']:
     """
-    Sample a precision matrix W ~ Wishart(df, scale_inv) using Bartlett decomposition.
+    Sample a precision matrix W ~ Wishart(df, scale_inv^-1) using Bartlett decomposition.
 
     Parameters
     ----------
@@ -2493,18 +2493,25 @@ def _sample_wishart_bartlett(
     -------
     A sample from Wishart(df, scale)
     """
-    k = scale_inv.shape[0]
-    L = jnp.linalg.cholesky(scale_inv)
+    keys = split(key)
 
-    diag_key, offdiag_key = random.split(key)
+    k = scale_inv.shape[0]
+
+    # Gershgorin estimate for max eigenvalue
+    rho = jnp.max(jnp.sum(jnp.abs(scale_inv), axis=1))
+    u = k * rho * jnp.finfo(scale_inv.dtype).eps
+
+    # Stabilize the matrix
+    scale_inv = scale_inv.at[jnp.diag_indices(k)].add(u)
+    L = jnp.linalg.cholesky(scale_inv)
 
     # Diagonal elements: A_ii ~ sqrt(chi^2(df - i))
     # chi^2(k) = Gamma(k/2, scale=2)
     df_vector = df - jnp.arange(k)
-    chi2_samples = random.gamma(diag_key, df_vector / 2.0) * 2.0
+    chi2_samples = random.gamma(keys.pop(), df_vector / 2.0) * 2.0
     diag_A = jnp.sqrt(chi2_samples)
 
-    off_diag_A = random.normal(offdiag_key, (k, k))
+    off_diag_A = random.normal(keys.pop(), (k, k))
     A = jnp.tril(off_diag_A, -1) + jnp.diag(diag_A)
     T = solve_triangular(L, A, lower=True, trans='T')
 
