@@ -2499,7 +2499,7 @@ def _sample_wishart_bartlett(
 
     # Gershgorin estimate for max eigenvalue
     rho = jnp.max(jnp.sum(jnp.abs(scale_inv), axis=1))
-    u = k * rho * jnp.finfo(scale_inv.dtype).eps
+    u = k * rho * jnp.finfo(scale_inv.dtype).eps + jnp.finfo(scale_inv.dtype).eps
 
     # Stabilize the matrix
     scale_inv = scale_inv.at[jnp.diag_indices(k)].add(u)
