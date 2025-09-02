@@ -79,8 +79,8 @@ class TestWishart:
         denumerator = a.T @ sigma @ a
 
         ts = []
-        for _ in range(nsamples):
-            W = _sample_wishart_bartlett(keys.pop(), df, scale_inv)
+        for key in random.split(keys.pop(), nsamples):
+            W = _sample_wishart_bartlett(key, df, scale_inv)
             t = a.T @ W @ a / denumerator
             ts.append(t)
         ts = jnp.array(ts)

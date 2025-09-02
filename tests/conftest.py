@@ -49,4 +49,4 @@ def keys(request):
     rng = np.random.default_rng(seed)
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
-    return jaxext.split(key, 1024)
+    return jaxext.split(key, 128)

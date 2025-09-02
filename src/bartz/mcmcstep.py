@@ -2474,6 +2474,7 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, sigma2=beta / sample)
 
 
+@jax.jit
 def _sample_wishart_bartlett(
     key: Key[Array, ''], df: Integer[Array, ''], scale_inv: Float32[Array, 'k k']
 ) -> Float32[Array, 'k k']:
