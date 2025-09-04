@@ -45,6 +45,7 @@ import jax
 from equinox import Module, field, tree_at
 from jax import lax, random
 from jax import numpy as jnp
+from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
@@ -2471,6 +2472,51 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
     # random.gamma seems to be slow at compiling, maybe cdf inversion would
     # be better, but it's not implemented in jax
     return replace(bart, sigma2=beta / sample)
+
+
+@jax.jit
+def _sample_wishart_bartlett(
+    key: Key[Array, ''], df: Integer[Array, ''], scale_inv: Float32[Array, 'k k']
+) -> Float32[Array, 'k k']:
+    """
+    Sample a precision matrix W ~ Wishart(df, scale_inv^-1) using Bartlett decomposition.
+
+    Parameters
+    ----------
+    key
+        A JAX random key
+    df
+        Degrees of freedom
+    scale_inv
+        Scale matrix of the corresponding Inverse Wishart distribution
+
+    Returns
+    -------
+    A sample from Wishart(df, scale)
+    """
+    keys = split(key)
+
+    k = scale_inv.shape[0]
+
+    # Gershgorin estimate for max eigenvalue
+    rho = jnp.max(jnp.sum(jnp.abs(scale_inv), axis=1))
+    u = k * rho * jnp.finfo(scale_inv.dtype).eps + jnp.finfo(scale_inv.dtype).eps
+
+    # Stabilize the matrix
+    scale_inv = scale_inv.at[jnp.diag_indices(k)].add(u)
+    L = jnp.linalg.cholesky(scale_inv)
+
+    # Diagonal elements: A_ii ~ sqrt(chi^2(df - i))
+    # chi^2(k) = Gamma(k/2, scale=2)
+    df_vector = df - jnp.arange(k)
+    chi2_samples = random.gamma(keys.pop(), df_vector / 2.0) * 2.0
+    diag_A = jnp.sqrt(chi2_samples)
+
+    off_diag_A = random.normal(keys.pop(), (k, k))
+    A = jnp.tril(off_diag_A, -1) + jnp.diag(diag_A)
+    T = solve_triangular(L, A, lower=True, trans='T')
+
+    return T @ T.T
 
 
 def step_z(key: Key[Array, ''], bart: State) -> State:
