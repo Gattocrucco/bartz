@@ -1,6 +1,6 @@
 # bartz/docs/conf.py
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2024-2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -89,7 +89,7 @@ import bartz
 # -- Project information -----------------------------------------------------
 
 project = f'bartz {version}'
-author = 'Giacomo Petrillo'
+author = 'The Bartz Contributors'
 
 now = datetime.datetime.now(tz=datetime.timezone.utc)
 year = '2024'

@@ -1,6 +1,6 @@
 # bartz/config/ipython/profile_default/ipython_config.py
 #
-# Copyright (c) 2025, Giacomo Petrillo
+# Copyright (c) 2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
