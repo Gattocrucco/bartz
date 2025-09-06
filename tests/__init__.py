@@ -1,6 +1,6 @@
 # bartz/tests/__init__.py
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2024-2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #

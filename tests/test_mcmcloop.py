@@ -1,6 +1,6 @@
 # bartz/tests/test_mcmcloop.py
 #
-# Copyright (c) 2025, Giacomo Petrillo
+# Copyright (c) 2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
