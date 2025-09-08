@@ -2030,6 +2030,62 @@ def precompute_likelihood_terms(
     return prelkv, PreLk(exp_factor=sigma_mu2 / (2 * sigma2))
 
 
+def precompute_likelihood_terms_mv(
+    sigma2_cov_prec: Float32[Array, 'k k'],
+    sigma_mu2_cov_inv: Float32[Array, 'k k'],
+    move_precs: Precs | Counts,
+) -> tuple[PreLkV, PreLk]:
+    """
+    Pre-compute terms used in the likelihood ratio of the acceptance step.
+
+    Parameters
+    ----------
+    sigma2_cov_prec
+        The inverse of error variance, or the global error variance factor is `prec_scale`
+        is set.
+    sigma_mu2_cov_inv
+        The inverse of prior variance of each leaf.
+    move_precs
+        The likelihood precision scale in the leaves grown or pruned by the
+        moves, under keys 'left', 'right', and 'total' (left + right).
+
+    Returns
+    -------
+    prelkv : PreLkV
+        Dictionary with pre-computed terms of the likelihood ratio, one per
+        tree.
+    prelk : PreLk
+        Dictionary with pre-computed terms of the likelihood ratio, shared by
+        all trees.
+    """
+    sigma_mu2_cov_inv = jnp.atleast_2d(sigma_mu2_cov_inv)
+
+    nL = move_precs.left.astype(sigma2_cov_prec.dtype)[..., None, None]
+    nR = move_precs.right.astype(sigma2_cov_prec.dtype)[..., None, None]
+    nT = move_precs.total.astype(sigma2_cov_prec.dtype)[..., None, None]
+
+    sigma2_left = jnp.linalg.inv(sigma2_cov_prec + sigma_mu2_cov_inv / nL)
+    sigma2_right = jnp.linalg.inv(sigma2_cov_prec + sigma_mu2_cov_inv / nR)
+    sigma2_total = jnp.linalg.inv(sigma2_cov_prec + sigma_mu2_cov_inv / nT)
+
+    logdet = lambda M: jnp.linalg.slogdet(M)[1]
+    sqrt_term = 0.5 * (
+        logdet(sigma2_cov_prec * nT / (nR * nL))
+        + logdet(sigma2_total)
+        - logdet(sigma2_left)
+        - logdet(sigma2_right)
+    )  # shape (num_trees,)
+
+    prelkv = PreLkV(
+        sigma2_left=sigma2_cov_prec @ sigma2_left @ sigma2_cov_prec,
+        sigma2_right=sigma2_cov_prec @ sigma2_right @ sigma2_cov_prec,
+        sigma2_total=sigma2_cov_prec @ sigma2_total @ sigma2_cov_prec,
+        sqrt_term=sqrt_term,
+    )
+
+    return prelkv, PreLk(exp_factor=0.5)
+
+
 def precompute_leaf_terms(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
@@ -2103,14 +2159,15 @@ def precompute_leaf_terms_mv(
 
     n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
     posterior_precision = sigma_mu2_cov_inv + n_k * sigma2_cov_prec
-    var_post = jnp.linalg.inv(posterior_precision)
+    L_prec = jnp.linalg.cholesky(posterior_precision)
+    Y = solve_triangular(L_prec, sigma2_cov_prec, lower=True)
+    mean_factor = solve_triangular(L_prec, Y, lower=True, trans='T')
 
     z = random.normal(key, (num_trees, num_leaves, k))
-    L = jnp.linalg.cholesky(var_post)
-    centered_leaves = (L @ z[..., None]).squeeze(-1)
+    centered_leaves = solve_triangular(L_prec.T, z, lower=False)
 
     return PreLf(
-        mean_factor=var_post @ sigma2_cov_prec,  # Shape: [num_trees, num_leaves, k, k]
+        mean_factor=mean_factor,  # Shape: [num_trees, num_leaves, k, k]
         centered_leaves=centered_leaves,  # Shape: [num_trees, num_leaves, k]
     )
 
