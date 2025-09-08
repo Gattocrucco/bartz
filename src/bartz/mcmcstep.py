@@ -2073,6 +2073,48 @@ def precompute_leaf_terms(
     )
 
 
+def precompute_leaf_terms_mv(
+    key: Key[Array, ''],
+    prec_trees: Float32[Array, 'num_trees 2**d'],
+    sigma2_cov_prec: Float32[Array, 'k k'],
+    sigma_mu2_cov_inv: Float32[Array, 'k k'],
+) -> PreLf:
+    """
+    Pre-compute terms used to sample leaves from their posterior.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    prec_trees
+        The likelihood precision scale in each potential or actual leaf node.
+    sigma2_cov_prec
+        The inverse of error variance, or the global error variance factor if `prec_scale`
+        is set.
+    sigma_mu2_cov_inv
+        The inverse of prior variance of each leaf.
+
+    Returns
+    -------
+    Pre-computed terms for leaf sampling in multivariate case.
+    """
+    num_trees, num_leaves = prec_trees.shape
+    k = sigma2_cov_prec.shape[0]
+
+    n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
+    posterior_precision = sigma_mu2_cov_inv + n_k * sigma2_cov_prec
+    var_post = jnp.linalg.inv(posterior_precision)
+
+    z = random.normal(key, (num_trees, num_leaves, k))
+    L = jnp.linalg.cholesky(var_post)
+    centered_leaves = (L @ z[..., None]).squeeze(-1)
+
+    return PreLf(
+        mean_factor=var_post @ sigma2_cov_prec,  # Shape: [num_trees, num_leaves, k, k]
+        centered_leaves=centered_leaves,  # Shape: [num_trees, num_leaves, k]
+    )
+
+
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
