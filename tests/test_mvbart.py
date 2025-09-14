@@ -29,7 +29,15 @@ from jax import numpy as jnp
 from jax import random
 from scipy.stats import chi2, ks_1samp
 
-from bartz.mcmcstep import _sample_wishart_bartlett
+from bartz.mcmcstep import (
+    _sample_wishart_bartlett,
+    compute_likelihood_ratio,
+    compute_likelihood_ratio_mv,
+    precompute_leaf_terms,
+    precompute_leaf_terms_mv,
+    precompute_likelihood_terms,
+    precompute_likelihood_terms_mv,
+)
 from tests.util import assert_close_matrices
 
 
@@ -111,3 +119,102 @@ class TestWishart:
 
         test = ks_1samp(ts, chi2(df).cdf)
         assert test.pvalue > 0.01
+
+
+class TestPrecomputeLikelihood:
+    """Test precompute_likelihood_terms_mv correctness and stability."""
+
+    @pytest.fixture(params=[1, 2, 5, 10])
+    def k(self, request):
+        """Provide different ks for testing."""
+        return request.param
+
+    def random_pd_matrix(self, key, k):
+        """Generate a random positive definite matrix."""
+        A = random.normal(key, (k, k))
+        return A @ A.T + jnp.eye(k)
+
+    def test_shapes_leaf(self, keys):
+        """Check that shapes of outputs are correct."""
+        num_trees, num_leaves, k = 3, 4, 2
+        prec_trees = jnp.ones((num_trees, num_leaves))
+        error_cov_inv = self.random_pd_matrix(keys.pop(), k)
+        leaf_prior_cov_inv = self.random_pd_matrix(keys.pop(), k)
+
+        result = precompute_leaf_terms_mv(
+            keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv
+        )
+        assert result.mean_factor.shape == (num_trees, num_leaves, k, k)
+        assert result.centered_leaves.shape == (num_trees, num_leaves, k)
+
+    def test_likelihood_equiv(self, keys):
+        """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
+        k = 1
+        sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        error_cov_inv = jnp.array([[1.0 / sigma2]])
+        leaf_prior_cov_inv = jnp.array([[1.0 / sigma_mu2]])
+
+        class DummyPrecs:
+            left = jnp.array(3.0)
+            right = jnp.array(4.0)
+            total = jnp.array(7.0)
+
+        total_resid = random.normal(keys.pop(), (k,))
+        left_resid = random.normal(keys.pop(), (k,))
+        right_resid = random.normal(keys.pop(), (k,))
+
+        prelkv_mv, prelk_mv = precompute_likelihood_terms_mv(
+            error_cov_inv, leaf_prior_cov_inv, DummyPrecs()
+        )
+        likelihood_mv = compute_likelihood_ratio_mv(
+            total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
+        )
+
+        prelkv_uv, prelk_uv = precompute_likelihood_terms(
+            sigma2, sigma_mu2, DummyPrecs()
+        )
+        likelihood_uv = compute_likelihood_ratio(
+            total_resid.item(),
+            left_resid.item(),
+            right_resid.item(),
+            prelkv_uv,
+            prelk_uv,
+        )
+
+        assert jnp.allclose(
+            prelkv_mv.sqrt_term, prelkv_uv.sqrt_term, rtol=1e-6, atol=1e-6
+        )
+        assert jnp.allclose(likelihood_mv, likelihood_uv, rtol=1e-6, atol=1e-6)
+
+    def test_leaf_terms_equiv(self, keys):
+        """Check that precompute_leaf_terms and precompute_leaf_terms_mv agree when k = 1."""
+        num_trees, num_leaves = 2, 3
+        sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+
+        error_cov_inv = jnp.array([[1.0 / sigma2]])
+        leaf_prior_cov_inv = jnp.array([[1.0 / sigma_mu2]])
+        prec_trees = random.uniform(keys.pop(), (num_trees, num_leaves)) * 5.0
+        z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
+        z_uv = z_mv.squeeze(axis=-1)
+
+        result_uv = precompute_leaf_terms(
+            keys.pop(), prec_trees, sigma2, sigma_mu2, z_uv
+        )
+        result_mv = precompute_leaf_terms_mv(
+            keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv, z_mv
+        )
+
+        assert jnp.allclose(
+            result_uv.mean_factor,
+            result_mv.mean_factor[..., 0, 0],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        assert jnp.allclose(
+            result_uv.centered_leaves,
+            result_mv.centered_leaves[..., 0],
+            rtol=1e-6,
+            atol=1e-6,
+        )
