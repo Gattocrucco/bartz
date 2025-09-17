@@ -2031,10 +2031,23 @@ def precompute_likelihood_terms(
 
 
 def _chol_with_gersh(A):
-    rho = jnp.max(jnp.sum(jnp.abs(A), axis=-1))
-    u = A.shape[-1] * rho * jnp.finfo(A.dtype).eps
-    A = A.at[jnp.diag_indices_from(A)].add(u)
-    return jnp.linalg.cholesky(A)
+    """Cholesky with Gershgorin stabilization, supports batching."""
+
+    def _single(mat):
+        rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
+        u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
+        mat = mat.at[jnp.diag_indices_from(mat)].add(u)
+        return jnp.linalg.cholesky(mat)
+
+    if A.ndim == 2:
+        return _single(A)
+    elif A.ndim == 3:
+        return jax.vmap(_single)(A)
+    elif A.ndim == 4:
+        return jax.vmap(jax.vmap(_single))(A)
+    else:
+        msg = f'Unsupported ndim={A.ndim}'
+        raise ValueError(msg)
 
 
 def _logdet_from_chol(L):
@@ -2187,9 +2200,10 @@ def precompute_leaf_terms_mv(
     )
     posterior_precision = leaf_prior_cov_inv_batched + n_k * error_cov_inv_batched
 
-    L_prec = jnp.linalg.cholesky(posterior_precision)
+    L_prec = _chol_with_gersh(posterior_precision)
     Y = solve_triangular(L_prec, error_cov_inv_batched, lower=True)
     mean_factor = solve_triangular(L_prec, Y, trans='T', lower=True)
+
     if z is None:
         z = random.normal(key, (num_trees, num_leaves, k))
     centered_leaves = solve_triangular(L_prec, z, trans='T')
