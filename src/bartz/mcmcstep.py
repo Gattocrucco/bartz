@@ -2030,17 +2030,15 @@ def precompute_likelihood_terms(
     return prelkv, PreLk(exp_factor=sigma_mu2 / (2 * sigma2))
 
 
-def _chol_inv(mat):
-    """Compute mat^{-1} using Cholesky + triangular solves."""
-    L = jnp.linalg.cholesky(mat)
-    I = jnp.eye(mat.shape[-1], dtype=mat.dtype)
-    y = solve_triangular(L, I, lower=True)
-    return solve_triangular(L, y, trans='T', lower=False)
+def _chol_with_gersh(A):
+    rho = jnp.max(jnp.sum(jnp.abs(A), axis=-1))
+    u = A.shape[-1] * rho * jnp.finfo(A.dtype).eps
+    A = A.at[jnp.diag_indices_from(A)].add(u)
+    return jnp.linalg.cholesky(A)
 
 
-def _logdet_chol(mat):
-    """Compute logdet via Cholesky (sum of log of diag^2)."""
-    L = jnp.linalg.cholesky(mat)
+def _logdet_from_chol(L):
+    """Compute logdet of A = L'L via Cholesky (sum of log of diag^2)."""
     return 2.0 * jnp.sum(jnp.log(jnp.diag(L)))
 
 
@@ -2078,21 +2076,25 @@ def precompute_likelihood_terms_mv(
     nR = move_precs.right.astype(error_cov_inv.dtype)[..., None, None]
     nT = move_precs.total.astype(error_cov_inv.dtype)[..., None, None]
 
-    sigma2_left_tmp = error_cov_inv * nL + leaf_prior_cov_inv
-    sigma2_right_tmp = error_cov_inv * nR + leaf_prior_cov_inv
-    sigma2_total_tmp = error_cov_inv * nT + leaf_prior_cov_inv
+    L_left = _chol_with_gersh(error_cov_inv * nL + leaf_prior_cov_inv)
+    L_right = _chol_with_gersh(error_cov_inv * nR + leaf_prior_cov_inv)
+    L_total = _chol_with_gersh(error_cov_inv * nT + leaf_prior_cov_inv)
 
     sqrt_term = 0.5 * (
-        _logdet_chol(leaf_prior_cov_inv)
-        + _logdet_chol(sigma2_total_tmp)
-        - _logdet_chol(sigma2_left_tmp)
-        - _logdet_chol(sigma2_right_tmp)
-    )  # shape (num_trees,)
+        _logdet_from_chol(_chol_with_gersh(leaf_prior_cov_inv))
+        + _logdet_from_chol(L_total)
+        - _logdet_from_chol(L_left)
+        - _logdet_from_chol(L_right)
+    )
+
+    def _covariance_from_chol(L):
+        Y = solve_triangular(L, error_cov_inv, lower=True)
+        return Y.T @ Y
 
     prelkv = PreLkV(
-        sigma2_left=error_cov_inv @ _chol_inv(sigma2_left_tmp) @ error_cov_inv,
-        sigma2_right=error_cov_inv @ _chol_inv(sigma2_right_tmp) @ error_cov_inv,
-        sigma2_total=error_cov_inv @ _chol_inv(sigma2_total_tmp) @ error_cov_inv,
+        sigma2_left=_covariance_from_chol(L_left),
+        sigma2_right=_covariance_from_chol(L_right),
+        sigma2_total=_covariance_from_chol(L_total),
         sqrt_term=sqrt_term,
     )
 

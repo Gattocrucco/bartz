@@ -134,9 +134,9 @@ class TestPrecomputeLikelihood:
         A = random.normal(key, (k, k))
         return A @ A.T + jnp.eye(k)
 
-    def test_shapes_leaf(self, keys):
+    def test_shapes_leaf(self, keys, k):
         """Check that shapes of outputs are correct."""
-        num_trees, num_leaves, k = 3, 4, 2
+        num_trees, num_leaves = 3, 4
         prec_trees = jnp.ones((num_trees, num_leaves))
         error_cov_inv = self.random_pd_matrix(keys.pop(), k)
         leaf_prior_cov_inv = self.random_pd_matrix(keys.pop(), k)
@@ -149,7 +149,6 @@ class TestPrecomputeLikelihood:
 
     def test_likelihood_equiv(self, keys):
         """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
-        k = 1
         sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         error_cov_inv = jnp.array([[1.0 / sigma2]])
@@ -160,9 +159,9 @@ class TestPrecomputeLikelihood:
             right = jnp.array(4.0)
             total = jnp.array(7.0)
 
-        total_resid = random.normal(keys.pop(), (k,))
-        left_resid = random.normal(keys.pop(), (k,))
-        right_resid = random.normal(keys.pop(), (k,))
+        total_resid = random.normal(keys.pop(), (1,))
+        left_resid = random.normal(keys.pop(), (1,))
+        right_resid = random.normal(keys.pop(), (1,))
 
         prelkv_mv, prelk_mv = precompute_likelihood_terms_mv(
             error_cov_inv, leaf_prior_cov_inv, DummyPrecs()
