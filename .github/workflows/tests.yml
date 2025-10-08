@@ -106,7 +106,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ startsWith(github.ref, 'refs/tags/') && 'main' || '' }}
           fetch-depth: 0  # this fetches the full history
 
       - name: Install uv
