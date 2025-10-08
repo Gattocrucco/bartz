@@ -63,14 +63,14 @@ lock:
 
 .PHONY: setup
 setup:
-	$(SETUP_MICROMAMBA)
+	$(SETUP_MICROMAMBA) python=3.13  # to be changed to 3.14, remove when pyarrow switches to releasing in sync with python
 	cp config/uv-highest.lock uv.lock
 	$(UV_SYNC) --all-groups
 	$(UV_RUN) pre-commit install
 
 .PHONY: setup-ci
 setup-ci:
-	$(SETUP_MICROMAMBA)
+	$(SETUP_MICROMAMBA) python=3.13  # see above
 	cp config/uv-highest.lock uv.lock
 	$(UV_SYNC) --group ci
 

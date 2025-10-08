@@ -258,12 +258,16 @@ class TestJaxPatches:
 class TestTruncatedNormalOneSided:
     """Test `jaxext.truncated_normal_onesided`."""
 
-    def test_truncated_normal_inaccurate(self, keys):
-        """Check that `jax.random.truncated_normal` under/overshoots."""
-        x = random.truncated_normal(keys.pop(), -jnp.inf, -6)
-        assert x < -1e38
-        x = random.truncated_normal(keys.pop(), 6, jnp.inf)
-        assert x > 1e38
+    def test_truncated_normal_incorrect(self, keys):
+        """Check that `jax.random.truncated_normal` is wrong out of 5 sigma."""
+        nsamples = 1000
+        lower, upper = jnp.array([(-100.0, -5.0), (5.0, 100.0)]).T
+        x = random.truncated_normal(
+            keys.pop(), lower[:, None], upper[:, None], (*lower.shape, nsamples)
+        )
+        for sample, l, u in zip(x, lower, upper, strict=True):
+            test = ks_1samp(sample, truncnorm(l, u).cdf)
+            assert test.pvalue < 0.01
 
     def test_correct(self, keys):
         """Check the samples come from the right distribution."""
