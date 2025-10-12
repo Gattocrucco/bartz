@@ -27,9 +27,11 @@
 import pytest
 from jax import numpy as jnp
 from jax import random
+from numpy.testing import assert_allclose
 from scipy.stats import chi2, ks_1samp
 
 from bartz.mcmcstep import (
+    Precs,
     _sample_wishart_bartlett,
     compute_likelihood_ratio,
     compute_likelihood_ratio_mv,
@@ -121,8 +123,8 @@ class TestWishart:
         assert test.pvalue > 0.01
 
 
-class TestPrecomputeLikelihood:
-    """Test precompute_likelihood_terms_mv correctness and stability."""
+class TestPrecomputeTerms:
+    """Test precompute_likelihood_terms_mv and precompute_leaf_terms_mv correctness and stability."""
 
     @pytest.fixture(params=[1, 2, 5, 10])
     def k(self, request):
@@ -154,25 +156,20 @@ class TestPrecomputeLikelihood:
         error_cov_inv = jnp.array([[1.0 / sigma2]])
         leaf_prior_cov_inv = jnp.array([[1.0 / sigma_mu2]])
 
-        class DummyPrecs:
-            left = jnp.array(3.0)
-            right = jnp.array(4.0)
-            total = jnp.array(7.0)
+        precs = Precs(left=jnp.array(3.0), right=jnp.array(4.0), total=jnp.array(7.0))
 
         total_resid = random.normal(keys.pop(), (1,))
         left_resid = random.normal(keys.pop(), (1,))
         right_resid = random.normal(keys.pop(), (1,))
 
         prelkv_mv, prelk_mv = precompute_likelihood_terms_mv(
-            error_cov_inv, leaf_prior_cov_inv, DummyPrecs()
+            error_cov_inv, leaf_prior_cov_inv, precs
         )
         likelihood_mv = compute_likelihood_ratio_mv(
             total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
         )
 
-        prelkv_uv, prelk_uv = precompute_likelihood_terms(
-            sigma2, sigma_mu2, DummyPrecs()
-        )
+        prelkv_uv, prelk_uv = precompute_likelihood_terms(sigma2, sigma_mu2, precs)
         likelihood_uv = compute_likelihood_ratio(
             total_resid.item(),
             left_resid.item(),
@@ -181,10 +178,8 @@ class TestPrecomputeLikelihood:
             prelk_uv,
         )
 
-        assert jnp.allclose(
-            prelkv_mv.sqrt_term, prelkv_uv.sqrt_term, rtol=1e-6, atol=1e-6
-        )
-        assert jnp.allclose(likelihood_mv, likelihood_uv, rtol=1e-6, atol=1e-6)
+        assert_allclose(prelkv_mv.sqrt_term, prelkv_uv.sqrt_term, rtol=1e-6, atol=1e-6)
+        assert_allclose(likelihood_mv, likelihood_uv, rtol=1e-6, atol=1e-6)
 
     def test_leaf_terms_equiv(self, keys):
         """Check that precompute_leaf_terms and precompute_leaf_terms_mv agree when k = 1."""
@@ -205,15 +200,15 @@ class TestPrecomputeLikelihood:
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv, z_mv
         )
 
-        assert jnp.allclose(
+        assert_allclose(
             result_uv.mean_factor,
-            result_mv.mean_factor[..., 0, 0],
+            result_mv.mean_factor.squeeze((-1, -2)),
             rtol=1e-6,
             atol=1e-6,
         )
-        assert jnp.allclose(
+        assert_allclose(
             result_uv.centered_leaves,
-            result_mv.centered_leaves[..., 0],
+            result_mv.centered_leaves.squeeze(-1),
             rtol=1e-6,
             atol=1e-6,
         )

@@ -1467,6 +1467,10 @@ class PreLkV(Module):
 
     These terms can be computed in parallel across trees.
 
+    Supports both scalar and multivariate models:
+    - In the scalar case, variance terms are 1D arrays of shape (num_trees,).
+    - In the multivariate case, they are arrays of covariance matrices with shape (num_trees, k, k).
+
     Parameters
     ----------
     sigma2_left
@@ -1482,9 +1486,15 @@ class PreLkV(Module):
         The **logarithm** of the square root term of the likelihood ratio.
     """
 
-    sigma2_left: Float32[Array, ' num_trees']
-    sigma2_right: Float32[Array, ' num_trees']
-    sigma2_total: Float32[Array, ' num_trees']
+    sigma2_left: Float32[
+        Array, ' num_trees ...'
+    ]  # shape: (num_trees,) or (num_trees, k, k)
+    sigma2_right: Float32[
+        Array, ' num_trees ...'
+    ]  # shape: (num_trees,) or (num_trees, k, k)
+    sigma2_total: Float32[
+        Array, ' num_trees ...'
+    ]  # shape: (num_trees,) or (num_trees, k, k)
     sqrt_term: Float32[Array, ' num_trees']
 
 
@@ -1507,6 +1517,11 @@ class PreLf(Module):
 
     These terms can be computed in parallel across trees.
 
+    Supports both scalar and multivariate models:
+    - Scalar: arrays of shape (num_trees, 2**d)
+    - Multivariate: arrays of shape (num_trees, 2**d, k, k) for
+      mean_factor and (num_trees, 2**d, k) for centered_leaves.
+
     Parameters
     ----------
     mean_factor
@@ -1517,8 +1532,8 @@ class PreLf(Module):
         obtain the posterior leaf samples.
     """
 
-    mean_factor: Float32[Array, 'num_trees 2**d']
-    centered_leaves: Float32[Array, 'num_trees 2**d']
+    mean_factor: Float32[Array, 'num_trees 2**d ...']  # scalar or (k, k)
+    centered_leaves: Float32[Array, 'num_trees 2**d ...']  # scalar or (k,)
 
 
 class ParallelStageOut(Module):
@@ -2030,24 +2045,13 @@ def precompute_likelihood_terms(
     return prelkv, PreLk(exp_factor=sigma_mu2 / (2 * sigma2))
 
 
-def _chol_with_gersh(A):
+@partial(jnp.vectorize, signature='(k,k)->(k,k)')
+def _chol_with_gersh(mat):
     """Cholesky with Gershgorin stabilization, supports batching."""
-
-    def _single(mat):
-        rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
-        u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
-        mat = mat.at[jnp.diag_indices_from(mat)].add(u)
-        return jnp.linalg.cholesky(mat)
-
-    if A.ndim == 2:
-        return _single(A)
-    elif A.ndim == 3:
-        return jax.vmap(_single)(A)
-    elif A.ndim == 4:
-        return jax.vmap(jax.vmap(_single))(A)
-    else:
-        msg = f'Unsupported ndim={A.ndim}'
-        raise ValueError(msg)
+    rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
+    u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
+    mat = mat.at[jnp.diag_indices_from(mat)].add(u)
+    return jnp.linalg.cholesky(mat)
 
 
 def _logdet_from_chol(L):
@@ -2058,16 +2062,19 @@ def _logdet_from_chol(L):
 def precompute_likelihood_terms_mv(
     error_cov_inv: Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, 'k k'],
-    move_precs: Precs | Counts,
+    move_precs: Counts,
 ) -> tuple[PreLkV, PreLk]:
     """
     Pre-compute terms used in the likelihood ratio of the acceptance step.
 
+    This implementation assumes a homoskedastic error model (i.e., the residual
+    covariance is the same for all observations). Support for heteroskedasticity
+    is planed for future updates.
+
     Parameters
     ----------
     error_cov_inv
-        The inverse of error variance, or the global error variance factor is `prec_scale`
-        is set.
+        The inverse of the error covariance matrix.
     leaf_prior_cov_inv
         The inverse of prior variance of each leaf.
     move_precs
@@ -2083,8 +2090,6 @@ def precompute_likelihood_terms_mv(
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
-    leaf_prior_cov_inv = jnp.atleast_2d(leaf_prior_cov_inv)
-
     nL = move_precs.left.astype(error_cov_inv.dtype)[..., None, None]
     nR = move_precs.right.astype(error_cov_inv.dtype)[..., None, None]
     nT = move_precs.total.astype(error_cov_inv.dtype)[..., None, None]
@@ -2119,7 +2124,7 @@ def precompute_leaf_terms(
     prec_trees: Float32[Array, 'num_trees 2**d'],
     sigma2: Float32[Array, ''],
     sigma_mu2: Float32[Array, ''],
-    z: Array | None = None,
+    z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
     """
     Pre-compute terms used to sample leaves from their posterior.
@@ -2137,6 +2142,7 @@ def precompute_leaf_terms(
         The prior variance of each leaf.
     z
         Optional standard normal noise to use for sampling the centered leaves.
+        This is intended for testing purposes only.
 
     Returns
     -------
@@ -2192,13 +2198,14 @@ def precompute_leaf_terms_mv(
     num_trees, num_leaves = prec_trees.shape
     k = error_cov_inv.shape[0]
     n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
+
+    # Only broadcast the inverse of error covariance matrix to satisfy JAX's batching rules
+    # for `lax.linalg.solve_triangular`, which does not support implicit broadcasting.
     error_cov_inv_batched = jnp.broadcast_to(
         error_cov_inv, (num_trees, num_leaves, k, k)
     )
-    leaf_prior_cov_inv_batched = jnp.broadcast_to(
-        leaf_prior_cov_inv, (num_trees, num_leaves, k, k)
-    )
-    posterior_precision = leaf_prior_cov_inv_batched + n_k * error_cov_inv_batched
+
+    posterior_precision = leaf_prior_cov_inv + n_k * error_cov_inv_batched
 
     L_prec = _chol_with_gersh(posterior_precision)
     Y = solve_triangular(L_prec, error_cov_inv_batched, lower=True)
@@ -2489,7 +2496,7 @@ def compute_likelihood_ratio(
 
     Returns
     -------
-    The likelihood ratio P(data | new tree) / P(data | old tree).
+    The log-likelihood ratio log P(data | new tree) - log P(data | old tree).
     """
     exp_term = prelk.exp_factor * (
         left_resid * left_resid / prelkv.sigma2_left
@@ -2504,7 +2511,7 @@ def compute_likelihood_ratio_mv(
     left_resid: Float32[Array, ' k'],
     right_resid: Float32[Array, ' k'],
     prelkv: PreLkV,
-    prelk: PreLk,
+    prelk: PreLk,  # noqa: ARG001
 ) -> Float32[Array, '']:
     """
     Compute the likelihood ratio of a grow move, for multivariate case.
@@ -2519,20 +2526,20 @@ def compute_likelihood_ratio_mv(
     prelkv
     prelk
         The pre-computed terms of the likelihood ratio, see
-        `precompute_likelihood_terms`.
+        `precompute_likelihood_terms_mv`.
 
     Returns
     -------
-    The likelihood ratio P(data | new tree) / P(data | old tree).
+    The log-likelihood ratio log P(data | new tree) - log P(data | old tree).
     """
 
     def _quadratic_form(r, cov):
-        return r.T @ cov @ r
+        return r @ cov @ r
 
     qf_left = _quadratic_form(left_resid, prelkv.sigma2_left)
     qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
     qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
-    exp_term = prelk.exp_factor * (qf_left + qf_right - qf_total)
+    exp_term = 0.5 * (qf_left + qf_right - qf_total)
     return prelkv.sqrt_term + exp_term
 
 
