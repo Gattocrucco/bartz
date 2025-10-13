@@ -1467,26 +1467,26 @@ class PreLkV(Module):
 
     These terms can be computed in parallel across trees.
 
-    Supports both scalar and multivariate models:
-    - In the scalar case, variance terms are 1D arrays of shape (num_trees,).
-    - In the multivariate case, they are arrays of covariance matrices with shape (num_trees, k, k).
+    Supports both scalar and multivariate models. In the scalar case, variance
+    terms are 1D arrays of shape (num_trees,); In the multivariate case, they are
+    arrays of covariance matrices with shape (num_trees, k, k).
 
     Parameters
     ----------
     sigma2_left
-        - In the scalar case, this is the noise variance in the left child of the leaves
+        In the scalar case, this is the noise variance in the left child of the leaves
         grown or pruned by the moves.
-        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the left child to the exponential term.
     sigma2_right
-        - In the scalar case, this is the noise variance in the right child of the leaves
+        In the scalar case, this is the noise variance in the right child of the leaves
         grown or pruned by the moves.
-        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the right child to the exponential term.
     sigma2_total
-        - In the scalar case, this is the noise variance in the total of the leaves
+        In the scalar case, this is the noise variance in the total of the leaves
         grown or pruned by the moves.
-        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the parent node to the exponential term.
     sqrt_term
         The **logarithm** of the square root term of the likelihood ratio.
@@ -1517,10 +1517,9 @@ class PreLf(Module):
 
     These terms can be computed in parallel across trees.
 
-    Supports both scalar and multivariate models:
-    - Scalar: arrays of shape (num_trees, 2**d)
-    - Multivariate: arrays of shape (num_trees, 2**d, k, k) for
-      mean_factor and (num_trees, 2**d, k) for centered_leaves.
+    Supports both scalar and multivariate models. In the scalara case, the arrays have
+    shape (num_trees, 2**d); In the multivariate case, mean_factor has shape (num_trees, 2**d, k, k) and
+    centered_leaves has shape (num_trees, 2**d, k).
 
     Parameters
     ----------
