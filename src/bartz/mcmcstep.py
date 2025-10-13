@@ -1474,27 +1474,27 @@ class PreLkV(Module):
     Parameters
     ----------
     sigma2_left
-        The noise variance in the left child of the leaves grown or pruned by
-        the moves.
+        - In the scalar case, this is the noise variance in the left child of the leaves
+        grown or pruned by the moves.
+        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        representing the contribution of the left child to the exponential term.
     sigma2_right
-        The noise variance in the right child of the leaves grown or pruned by
-        the moves.
+        - In the scalar case, this is the noise variance in the right child of the leaves
+        grown or pruned by the moves.
+        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        representing the contribution of the right child to the exponential term.
     sigma2_total
-        The noise variance in the total of the leaves grown or pruned by the
-        moves.
+        - In the scalar case, this is the noise variance in the total of the leaves
+        grown or pruned by the moves.
+        - In the multivariate case, this is the intermediate matrix in the quadratic form
+        representing the contribution of the parent node to the exponential term.
     sqrt_term
         The **logarithm** of the square root term of the likelihood ratio.
     """
 
-    sigma2_left: Float32[
-        Array, ' num_trees ...'
-    ]  # shape: (num_trees,) or (num_trees, k, k)
-    sigma2_right: Float32[
-        Array, ' num_trees ...'
-    ]  # shape: (num_trees,) or (num_trees, k, k)
-    sigma2_total: Float32[
-        Array, ' num_trees ...'
-    ]  # shape: (num_trees,) or (num_trees, k, k)
+    sigma2_left: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
+    sigma2_right: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
+    sigma2_total: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
     sqrt_term: Float32[Array, ' num_trees']
 
 
@@ -1532,8 +1532,10 @@ class PreLf(Module):
         obtain the posterior leaf samples.
     """
 
-    mean_factor: Float32[Array, 'num_trees 2**d ...']  # scalar or (k, k)
-    centered_leaves: Float32[Array, 'num_trees 2**d ...']  # scalar or (k,)
+    mean_factor: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees 2**d k k']
+    centered_leaves: (
+        Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees 2**d k']
+    )
 
 
 class ParallelStageOut(Module):
@@ -2046,7 +2048,7 @@ def precompute_likelihood_terms(
 
 
 @partial(jnp.vectorize, signature='(k,k)->(k,k)')
-def _chol_with_gersh(mat):
+def _chol_with_gersh(mat: Float32[Array, '... k k']) -> Float32[Array, '... k k']:
     """Cholesky with Gershgorin stabilization, supports batching."""
     rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
     u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
@@ -2076,7 +2078,7 @@ def precompute_likelihood_terms_mv(
     error_cov_inv
         The inverse of the error covariance matrix.
     leaf_prior_cov_inv
-        The inverse of prior variance of each leaf.
+        The inverse of prior covariance matrix of each leaf.
     move_precs
         The likelihood precision scale in the leaves grown or pruned by the
         moves, under keys 'left', 'right', and 'total' (left + right).
@@ -2090,9 +2092,9 @@ def precompute_likelihood_terms_mv(
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
-    nL = move_precs.left.astype(error_cov_inv.dtype)[..., None, None]
-    nR = move_precs.right.astype(error_cov_inv.dtype)[..., None, None]
-    nT = move_precs.total.astype(error_cov_inv.dtype)[..., None, None]
+    nL = move_precs.left[..., None, None]
+    nR = move_precs.right[..., None, None]
+    nT = move_precs.total[..., None, None]
 
     L_left = _chol_with_gersh(error_cov_inv * nL + leaf_prior_cov_inv)
     L_right = _chol_with_gersh(error_cov_inv * nR + leaf_prior_cov_inv)
@@ -2172,7 +2174,7 @@ def precompute_leaf_terms_mv(
     prec_trees: Float32[Array, 'num_trees 2**d'],
     error_cov_inv: Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, 'k k'],
-    z: Array | None = None,
+    z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
     """
     Pre-compute terms used to sample leaves from their posterior.
@@ -2190,6 +2192,7 @@ def precompute_leaf_terms_mv(
         The inverse of prior variance of each leaf.
     z
         Optional standard normal noise to use for sampling the centered leaves.
+        This is intended for testing purposes only.
 
     Returns
     -------
