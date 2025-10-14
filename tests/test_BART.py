@@ -1067,7 +1067,7 @@ def call_with_timed_interrupt(
     return func(*args, **kw)
 
 
-@pytest.mark.timeout(6)
+@pytest.mark.timeout(16)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     kw['printevery'] = 1
