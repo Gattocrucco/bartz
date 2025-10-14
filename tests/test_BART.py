@@ -31,7 +31,8 @@ import os
 import signal
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from contextlib import contextmanager
 from functools import partial
 from typing import Any, Literal
 
@@ -1027,44 +1028,81 @@ def test_jit(kw):
     assert_close_matrices(pred1, pred2, rtol=1e-5)
 
 
-def call_with_timed_interrupt(
-    time_to_sigint: float, func: Callable, *args: Any, **kw: Any
-):
-    """
-    Call a function and send SIGINT after a certain time.
-
-    This simulates a user pressing ^C during the function execution.
+class PeriodicSigintTimer:
+    """Periodically send SIGINT (^C) to the main thread.
 
     Parameters
     ----------
-    time_to_sigint
-        Time in seconds after which to send SIGINT.
-    func
-        An arbitrary callable.
-    *args
-    **kw
-        Arguments to pass to `func`.
-
-    Returns
-    -------
-    result : any
-        The return value of `func`.
-
-    Notes
-    -----
-    This function does not disable the SIGINT timer if `func` returns before
-    the signal is triggered. This is intentional to prevent silently ignoring a
-    case in which the signal is not triggered while the function is running.
+    first_after
+        Time in seconds to wait before sending the first SIGINT.
+    interval
+        Time in seconds between subsequent SIGINTs.
+    announce
+        Whether to print messages when sending SIGINTs and when stopping.
     """
-    pid = os.getpid()
 
-    def send_sigint():
-        time.sleep(time_to_sigint)
-        os.kill(pid, signal.SIGINT)
+    def __init__(self, *, first_after: float, interval: float, announce: bool):
+        self.first_after = max(0.0, float(first_after))
+        self.interval = max(0.001, float(interval))
+        self.pid = os.getpid()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.sent = 0
+        self.announce = announce
 
-    timer = threading.Thread(target=send_sigint, daemon=True)
+    def _run(self) -> None:
+        """Run the main loop of the timer."""
+        t0 = time.monotonic()
+        # Wait initial delay (cancellable)
+        if self._stop.wait(self.first_after):
+            return
+        # Periodically send SIGINT until stopped
+        while not self._stop.is_set():
+            os.kill(self.pid, signal.SIGINT)
+            self.sent += 1
+            if self.announce:
+                elapsed = time.monotonic() - t0
+                print(
+                    f'[PeriodicSigintTimer] sent SIGINT #{self.sent} at t={elapsed:.2f}s'
+                )
+            if self._stop.wait(self.interval):
+                break
+
+    def start(self) -> None:
+        """Start the timer."""
+        assert self._thread is None, 'Timer already started'
+        self._thread = threading.Thread(
+            target=self._run, name='PeriodicSigintTimer', daemon=True
+        )
+        self._thread.start()
+
+    def cancel(self) -> None:
+        """Stop the timer."""
+        assert self._thread is not None, 'Timer not started'
+
+        # Guard against a stray ^C arriving during teardown
+        prev = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+        try:
+            self._stop.set()
+            if self.announce:
+                print(f'[PeriodicSigintTimer] stopped after {self.sent} SIGINT(s)')
+        finally:
+            signal.signal(signal.SIGINT, prev)
+
+
+@contextmanager
+def periodic_sigint(*, first_after: float, interval: float, announce: bool):
+    """Context manager to periodically send SIGINT to the main thread."""
+    timer = PeriodicSigintTimer(
+        first_after=first_after, interval=interval, announce=announce
+    )
     timer.start()
-    return func(*args, **kw)
+    try:
+        yield timer
+    finally:
+        timer.cancel()
 
 
 @pytest.mark.timeout(16)
@@ -1072,8 +1110,18 @@ def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     kw['printevery'] = 1
     kw.update(ndpost=0, nskip=10000)
-    with pytest.raises(KeyboardInterrupt):
-        call_with_timed_interrupt(3, mc_gbart, **kw)
+
+    # Send the first ^C after 3 s, if the time was too short, it would interrupt
+    # a first interruptible phase of jax compilation. Then send ^C every second,
+    # in case the first ^C landed during a second non-interruptible compilation phase
+    # that eats ^C and ignores it.
+    with periodic_sigint(first_after=3.0, interval=1.0, announce=True):
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                mc_gbart(**kw)
+        except KeyboardInterrupt:
+            # Stray ^C during/after __exit__; treat as expected.
+            pass
 
 
 def test_polars(kw):
