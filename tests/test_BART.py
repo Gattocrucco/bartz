@@ -1070,8 +1070,7 @@ def call_with_timed_interrupt(
 @pytest.mark.timeout(6)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
-    if kw['printevery'] is None:
-        kw['printevery'] = 50
+    kw['printevery'] = 1
     kw.update(ndpost=0, nskip=10000)
     with pytest.raises(KeyboardInterrupt):
         call_with_timed_interrupt(3, mc_gbart, **kw)
