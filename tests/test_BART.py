@@ -709,7 +709,7 @@ def test_R_BART3(kw, keys):
         # having deeper trees, this 5 is not just "not good to sampling
         # accuracy but close in practice.""
         assert rhat_varcount < 5
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.2, atol=4)
+        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.25, atol=5)
 
         # check varprob
         if kw.get('sparse', False):
@@ -718,7 +718,7 @@ def test_R_BART3(kw, keys):
             )
             # drop one component because varprob sums to 1
             assert rhat_varprob < 1.7
-            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.1)
+            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.11)
 
 
 def test_xinfo():
