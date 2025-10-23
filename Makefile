@@ -58,22 +58,23 @@ TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUF
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
 
-UV_RUN = uv run --group ci
+UV_RUN_CI = uv run --group ci
+UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
 
 .PHONY: tests
 tests:
-	$(UV_RUN) $(TESTS_COMMAND)
+	$(UV_RUN_CI) $(TESTS_COMMAND)
 
 .PHONY: tests-old
 tests-old:
-	$(UV_RUN) --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE) $(TESTS_COMMAND)
+	$(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
 
 
 ################# DOCS #################
 
 .PHONY: docs
 docs:
-	$(UV_RUN) make -C docs html
+	$(UV_RUN_CI) make -C docs html
 	test ! -d _site/docs-dev || rm -r _site/docs-dev
 	mv docs/_build/html _site/docs-dev
 	@echo
@@ -81,7 +82,7 @@ docs:
 
 .PHONY: docs-latest
 docs-latest:
-	BARTZ_DOC_VARIANT=latest $(UV_RUN) make -C docs html
+	BARTZ_DOC_VARIANT=latest $(UV_RUN_CI) make -C docs html
 	git switch - || git switch main
 	test ! -d _site/docs || rm -r _site/docs
 	mv docs/_build/html _site/docs
@@ -90,13 +91,18 @@ docs-latest:
 
 .PHONY: covreport
 covreport:
-	$(UV_RUN) coverage combine
-	$(UV_RUN) coverage html
+	$(UV_RUN_CI) coverage combine
+	$(UV_RUN_CI) coverage html
 	@echo
 	@echo "Now open _site/index.html"
 
 
 ################# RELEASE #################
+
+.PHONY: update-deps
+update-deps:
+	test ! -d .venv || rm -r .venv
+	uv lock --upgrade
 
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
@@ -109,9 +115,7 @@ check-committed:
 	git diff --quiet --staged
 
 .PHONY: release
-release: copy-version check-committed
-	test ! -d .venv || rm -r .venv
-	uv lock --upgrade
+release: update-deps copy-version check-committed
 	@$(MAKE) tests
 	@$(MAKE) tests-old
 	@$(MAKE) docs
@@ -147,7 +151,7 @@ upload-test: check-committed
 
 ################# BENCHMARKS #################
 
-ASV = $(UV_RUN) python -m asv
+ASV = $(UV_RUN_CI) python -m asv
 
 .PHONY: asv-all-tags
 asv-all-tags:
@@ -175,3 +179,7 @@ asv-quick:
 .PHONY: ipython
 ipython:
 	IPYTHONDIR=config/ipython uv run --all-groups ipython $(ARGS)
+
+.PHONY: ipython-old
+ipython-old:
+	IPYTHONDIR=config/ipython uv run --all-groups $(UV_OPTS_OLD) ipython $(ARGS)
