@@ -35,22 +35,19 @@ Initial setup
     git clone git@github.com:YourGithubUserName/bartz.git
     cd bartz
 
-Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_. My favorite installation route on macOS would be to install `brew <https://brew.sh/>`_ and then :literal:`brew install uv`.
-
-Then install `micromamba <https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html>`_; for example with Homebrew:
+`Install R <https://cran.r-project.org>`_, then run
 
 .. code-block:: shell
 
-    brew install micromamba
-    micromamba shell init
+    Rscript install-r-packages.R
 
-Finally, run
+Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ if it's not already available in your system. Run
 
 .. code-block:: shell
 
-    make setup
+    uv run --all-groups pre-commit install
 
-This creates a micromamba virtual environment in :literal:`./.venv`, which is then managed by :literal:`uv`. To run commands that involve the python installation, do :literal:`uv run --no-sync <command>`. For example, to start an IPython shell, do :literal:`uv run --no-sync ipython`.
+The python environment is managed by uv. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
 
 Pre-defined commands
 --------------------

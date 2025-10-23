@@ -31,16 +31,15 @@ OLD_DATE = 2025-05-15
 .PHONY: all
 all:
 	@echo "Available targets:"
-	@echo "- lock: determine versions of dependencies and pin them"
-	@echo "- setup: create a python environment and install everything"
-	@echo "- lock-old, setup-old: the same with lowest supported versions"
 	@echo "- tests: run unit tests, saving coverage information"
+	@echo "- tests-old: run unit tests with oldest supported python and dependencies"
 	@echo "- docs: build html documentation"
+	@echo "- docs-latest: build html documentation for latest release"
 	@echo "- covreport: build html coverage report"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
 	@echo
-	@echo "Release instructions:"
+	@echo "Release workflow:"
 	@echo "- $$ uv version --bump major|minor|patch"
 	@echo "- describe release in docs/changelog.md"
 	@echo "- $$ make release (repeat until it goes smoothly)"
@@ -52,102 +51,82 @@ all:
 	@echo "- publish github release (updates zenodo automatically)"
 	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
 
-SETUP_MICROMAMBA = micromamba env create --file config/condaenv.yml --prefix ./.venv --yes
-UV_RUN = uv run --no-sync
-UV_SYNC = uv sync --frozen --inexact
 
-.PHONY: lock
-lock:
+################# TESTS #################
+
+TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
+# I did not manage to make parallel pytest (pytest -n<processes>) work with
+# coverage
+
+UV_RUN_CI = uv run --group ci
+UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
+UV_VARS_OLD = UV_PROJECT_ENVIRONMENT=.venv-old
+
+.PHONY: tests
+tests:
+	$(UV_RUN_CI) $(TESTS_COMMAND)
+
+.PHONY: tests-old
+tests-old:
+	$(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
+
+
+################# DOCS #################
+
+.PHONY: docs
+docs:
+	$(UV_RUN_CI) make -C docs html
+	test ! -d _site/docs-dev || rm -r _site/docs-dev
+	mv docs/_build/html _site/docs-dev
+	@echo
+	@echo "Now open _site/index.html"
+
+.PHONY: docs-latest
+docs-latest:
+	BARTZ_DOC_VARIANT=latest $(UV_RUN_CI) make -C docs html
+	git switch - || git switch main
+	test ! -d _site/docs || rm -r _site/docs
+	mv docs/_build/html _site/docs
+	@echo
+	@echo "Now open _site/index.html"
+
+.PHONY: covreport
+covreport:
+	$(UV_RUN_CI) coverage combine
+	$(UV_RUN_CI) coverage html
+	@echo
+	@echo "Now open _site/index.html"
+
+
+################# RELEASE #################
+
+.PHONY: update-deps
+update-deps:
+	test ! -d .venv || rm -r .venv
 	uv lock --upgrade
-	mv uv.lock config/uv-highest.lock
 
-.PHONY: setup
-setup:
-	$(SETUP_MICROMAMBA) python=3.13  # to be changed to 3.14, remove when pyarrow switches to releasing in sync with python
-	cp config/uv-highest.lock uv.lock
-	$(UV_SYNC) --all-groups
-	$(UV_RUN) pre-commit install
-
-.PHONY: setup-ci
-setup-ci:
-	$(SETUP_MICROMAMBA) python=3.13  # see above
-	cp config/uv-highest.lock uv.lock
-	$(UV_SYNC) --group ci
-
-.PHONY: lock-old
-lock-old:
-	uv lock --upgrade --resolution lowest-direct --exclude-newer $(OLD_DATE)
-	mv uv.lock config/uv-lowest-direct.lock
-
-.PHONY: setup-old
-setup-old:
-	$(SETUP_MICROMAMBA) python=$(OLD_PYTHON)
-	cp config/uv-lowest-direct.lock uv.lock
-	$(UV_SYNC) --all-groups
-	$(UV_RUN) pre-commit install
-
-.PHONY: setup-ci-old
-setup-ci-old:
-	$(SETUP_MICROMAMBA) python=$(OLD_PYTHON)
-	cp config/uv-lowest-direct.lock uv.lock
-	$(UV_SYNC) --group ci
-
-.PHONY: release
-release: copy-version lock lock-old check-committed
-	@$(MAKE) setup-old
-	@$(MAKE) tests
-	@$(MAKE) setup
-	@$(MAKE) tests
-	@$(MAKE) docs
-	test ! -d dist || rm -r dist
-	uv build
+.PHONY: copy-version
+copy-version: src/bartz/_version.py
+src/bartz/_version.py: pyproject.toml
+	uv run --group only-local python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 .PHONY: check-committed
 check-committed:
 	git diff --quiet
 	git diff --quiet --staged
 
-.PHONY: copy-version
-copy-version: src/bartz/_version.py
-src/bartz/_version.py: pyproject.toml
-	$(UV_RUN) python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
-
-.PHONY: tests
-tests:
-	$(UV_RUN) python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
-
-# I did not manage to make parallel pytest (pytest -n<processes>) work with
-# coverage
-
-.PHONY: docs-latest
-docs-latest:
-	BARTZ_DOC_VARIANT=latest $(UV_RUN) make -C docs html
-	git switch - || git switch main
-	test ! -d _site/docs || rm -r _site/docs
-	mv docs/_build/html _site/docs
-
-.PHONY: docs
-docs:
-	$(UV_RUN) make -C docs html
-	test ! -d _site/docs-dev || rm -r _site/docs-dev
-	mv docs/_build/html _site/docs-dev
-
-.PHONY: docs-all
-docs-all: copy-version docs-latest docs
-	@echo
-	@echo "Now open _site/index.html"
-
-.PHONY: covreport
-covreport:
-	$(UV_RUN) coverage combine
-	$(UV_RUN) coverage html
-	@echo
-	@echo "Now open _site/index.html"
+.PHONY: release
+release: update-deps copy-version check-committed
+	@$(MAKE) tests
+	@$(MAKE) tests-old
+	@$(MAKE) docs
+	test ! -d dist || rm -r dist
+	uv build
 
 .PHONY: version-tag
 version-tag: copy-version check-committed
 	git fetch --tags
-	git tag v$(shell $(UV_RUN) python -c 'import bartz; print(bartz.__version__)')
+	git tag v$(shell uv run python -c 'import bartz; print(bartz.__version__)')
 	git push --tags
 
 .PHONY: upload
@@ -156,7 +135,7 @@ upload: version-tag
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish
-	@VERSION=$$($(UV_RUN) python -c 'import bartz; print(bartz.__version__)') && \
+	@VERSION=$$(uv run python -c 'import bartz; print(bartz.__version__)') && \
 	echo "Try to install bartz $$VERSION from PyPI" && \
 	uv tool run --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
@@ -166,38 +145,42 @@ upload-test: check-committed
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish --check-url https://test.pypi.org/simple/ --publish-url https://test.pypi.org/legacy/
-	@VERSION=$$($(UV_RUN) python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	@VERSION=$$(uv run --group only-local python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
 	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 
-ASV = $(UV_RUN) python -m asv
+################# BENCHMARKS #################
 
-.PHONY: benchmark-tags
-benchmark-tags:
+ASV = $(UV_RUN_CI) python -m asv
+
+.PHONY: asv-all-tags
+asv-all-tags:
 	git tag | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
-.PHONY: benchmark-site
-benchmark-site:
+.PHONY: asv-publish
+asv-publish:
 	$(ASV) publish $(ARGS)
 
-.PHONY: benchmark-server
-benchmark-server: benchmark-site
+.PHONY: asv-preview
+asv-preview: asv-publish
 	$(ASV) preview $(ARGS)
 
-.PHONY: benchmark-main
-benchmark-main:
+.PHONY: asv-main
+asv-main:
 	$(ASV) run --show-stderr main^! $(ARGS)
 
-.PHONY: benchmark-quick
-benchmark-quick:
+.PHONY: asv-quick
+asv-quick:
 	$(ASV) run --python=same --quick --dry-run --show-stderr $(ARGS)
 
 
-.PHONY: python
-python:
-	$(UV_RUN) python $(ARGS)
+################# IPYTHON SHELL #################
 
 .PHONY: ipython
 ipython:
-	IPYTHONDIR=config/ipython $(UV_RUN) ipython $(ARGS)
+	IPYTHONDIR=config/ipython uv run --all-groups ipython $(ARGS)
+
+.PHONY: ipython-old
+ipython-old:
+	IPYTHONDIR=config/ipython $(UV_VARS_OLD) uv run --all-groups $(UV_OPTS_OLD) ipython $(ARGS)

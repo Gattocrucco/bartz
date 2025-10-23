@@ -252,7 +252,7 @@ class TestJaxPatches:
         with debug_infs(False):
             y1 = ndtri(x)
         y2 = patched_ndtri(x)
-        assert jnp.all(y1 == y2)
+        assert_allclose(y2, y1, rtol=2e-7, atol=0)  # no atol because in (-∞, ∞)
 
 
 class TestTruncatedNormalOneSided:
