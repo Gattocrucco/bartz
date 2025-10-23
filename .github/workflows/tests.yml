@@ -88,6 +88,8 @@ jobs:
 
       - name: Install R dependencies
         run: Rscript install-r-packages.R
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}  # for remotes::install_github
 
       - name: Run unit tests
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
