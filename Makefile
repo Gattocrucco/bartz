@@ -60,6 +60,7 @@ TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUF
 
 UV_RUN_CI = uv run --group ci
 UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
+UV_VARS_OLD = UV_PROJECT_ENVIRONMENT=.venv-old
 
 .PHONY: tests
 tests:
@@ -67,7 +68,7 @@ tests:
 
 .PHONY: tests-old
 tests-old:
-	$(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
+	$(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
 
 
 ################# DOCS #################
@@ -182,4 +183,4 @@ ipython:
 
 .PHONY: ipython-old
 ipython-old:
-	IPYTHONDIR=config/ipython uv run --all-groups $(UV_OPTS_OLD) ipython $(ARGS)
+	IPYTHONDIR=config/ipython $(UV_VARS_OLD) uv run --all-groups $(UV_OPTS_OLD) ipython $(ARGS)
