@@ -168,9 +168,9 @@ jobs:
 
       - name: Print coverage debug
         run: |
-          uv run coverage debug config
-          uv run coverage debug sys
-          uv run coverage debug data
+          uv run --group ci coverage debug config
+          uv run --group ci coverage debug sys
+          uv run --group ci coverage debug data
 
       - name: Generate coverage report
         run: make covreport
