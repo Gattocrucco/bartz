@@ -24,12 +24,11 @@
 
 """Wrapper for the R package BART3."""
 
-from typing import NamedTuple, TypedDict, cast
+from typing import NamedTuple, TypedDict
 
 import numpy as np
-from jaxtyping import AbstractDtype, Bool, Float64, Int32
+from jaxtyping import AbstractDtype, Float64, Int32
 from numpy import ndarray
-from rpy2.rlike.container import NamedList
 
 from tests.rbartpackages._base import RObjectBase, rmethod
 
@@ -60,7 +59,9 @@ class ProcTime(NamedTuple):
 class mc_gbart(RObjectBase):  # noqa: D101 because the R doc is added automatically
     _rfuncname = 'BART3::mc.gbart'
 
-    hostname: Bool[ndarray, ' mc_cores'] | String[ndarray, ' mc_cores']
+    accept: Float64[ndarray, 'nskip+ndpost/mc_cores mc_cores']
+    chains: int
+    grp: Float64[ndarray, ' p']  # what's this?
     ndpost: int
     offset: float
     prob_test: None | Float64[ndarray, 'ndpost m'] = None
@@ -68,30 +69,38 @@ class mc_gbart(RObjectBase):  # noqa: D101 because the R doc is added automatica
     prob_train: None | Float64[ndarray, 'ndpost n'] = None
     prob_train_mean: None | Float64[ndarray, ' n'] = None
     proc_time: ProcTime
+    rho: float  # what's this?
     rm_const: Int32[ndarray, '<=p']
+    sigest: bool | None = None  # not sure about this
     sigma: (
         Float64[ndarray, ' nskip+ndpost']
         | Float64[ndarray, 'nskip+ndpost/mc_cores mc_cores']
         | None
     ) = None
+    sigma_: Float64[ndarray, ' ndpost'] | None = None
     sigma_mean: float | None = None
     treedraws: TreeDraws
     varcount: Int32[ndarray, 'ndpost p']
     varcount_mean: Float64[ndarray, ' p']
     varprob: Float64[ndarray, 'ndpost p']
     varprob_mean: Float64[ndarray, ' p']
+    x_train: Float64[ndarray, ' n p']  # original, not binned
     yhat_test: Float64[ndarray, 'ndpost m'] | None = None
     yhat_test_mean: Float64[ndarray, ' m'] | None = None
     yhat_train: Float64[ndarray, 'ndpost n']
+    yhat_train_lower: Float64[ndarray, ' n'] | None = None
     yhat_train_mean: Float64[ndarray, ' n'] | None = None
+    yhat_train_upper: Float64[ndarray, ' n'] | None = None
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
 
         # fix up attributes
+        self.chains = self.chains.item()
         self.ndpost = self.ndpost.astype(int).item()
         self.offset = self.offset.item()
         self.proc_time = ProcTime(*map(float, self.proc_time))
+        self.rho = self.rho.item()
 
         if np.all(self.rm_const < 0):
             _, p = self.varcount.shape
@@ -104,18 +113,31 @@ class mc_gbart(RObjectBase):  # noqa: D101 because the R doc is added automatica
             msg = 'failed to parse rm.const because indices change sign'
             raise ValueError(msg)
 
+        if self.sigest is not None:
+            self.sigest = self.sigest.item()
         if self.sigma_mean is not None:
             self.sigma_mean = self.sigma_mean.item()
 
-        r_treedraws = cast(NamedList, self.treedraws)
-        cutpoints: NamedList = r_treedraws.getbyname('cutpoints')
-        self.treedraws = {
-            'cutpoints': {
-                i if it.name is None else it.name.item(): it.value
-                for i, it in enumerate(cutpoints.items())
-            },
-            'trees': r_treedraws.getbyname('trees').item(),
-        }
+        if hasattr(self.treedraws, 'getbyname'):
+            # it's a NamedList
+            self.treedraws = {
+                'cutpoints': {
+                    i if it.name is None else it.name.item(): it.value
+                    for i, it in enumerate(
+                        self.treedraws.getbyname('cutpoints').items()
+                    )
+                },
+                'trees': self.treedraws.getbyname('trees').item(),
+            }
+        else:
+            # it's an OrdDict
+            self.treedraws = {
+                'cutpoints': {
+                    i if k is None else k.item(): v
+                    for i, (k, v) in enumerate(self.treedraws['cutpoints'].items())
+                },
+                'trees': self.treedraws['trees'].item(),
+            }
 
     @rmethod
     def predict(
