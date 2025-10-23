@@ -67,7 +67,7 @@ from bartz.mcmcloop import (
     evaluate_trace,
 )
 from bartz.mcmcstep import State
-from tests.rbartpackages import BART
+from tests.rbartpackages import BART3
 from tests.util import assert_close_matrices
 
 
@@ -582,8 +582,8 @@ def test_few_datapoints(kw):
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
 
 
-def kw_bartz_to_BART(key: Key[Array, ''], kw: dict, bart: mc_gbart) -> dict:
-    """Convert bartz keyword arguments to R BART keyword arguments."""
+def kw_bartz_to_BART3(key: Key[Array, ''], kw: dict, bart: mc_gbart) -> dict:
+    """Convert bartz keyword arguments to R BART3 keyword arguments."""
     kw_BART = dict(**kw, rm_const=False)
     kw_BART.pop('init_kw')
     kw_BART.pop('maxdepth', None)
@@ -638,8 +638,8 @@ def check_rbart(kw, bart, rbart):
         assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
 
 
-def test_rbart(kw, keys):
-    """Check `bartz.BART` gives the same results as the R package BART."""
+def test_R_BART3(kw, keys):
+    """Check `bartz.BART` gives the same results as the R package BART3."""
     p, n = kw['x_train'].shape
     kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1, mc_cores=1)
     # R BART can't change the min_points_per_leaf per leaf setting
@@ -647,8 +647,8 @@ def test_rbart(kw, keys):
 
     # run bart with both packages
     bart = mc_gbart(**kw)
-    kw_BART = kw_bartz_to_BART(keys.pop(), kw, bart)
-    rbart = BART.mc_gbart(**kw_BART)
+    kw_BART = kw_bartz_to_BART3(keys.pop(), kw, bart)
+    rbart = BART3.mc_gbart(**kw_BART)
     # use mc_gbart instead of gbart because gbart does not use the seed
 
     # first cross-check the outputs of R BART alone
