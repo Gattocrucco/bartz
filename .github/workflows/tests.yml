@@ -87,6 +87,19 @@ jobs:
 
       - name: Install R dependencies
         uses: r-lib/actions/setup-renv@v2
+        env:
+          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure R PATHS for rpy2 (Linux only)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          echo "R_HOME=$(R RHOME)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(R RHOME)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Debug info
+        run: |
+          ldd "$(R RHOME)/library/methods/libs/methods.so" || true
+          uv run python -c "import rpy2.situation as s; print('\n'.join(map(str, s.iter_info())))"
 
       - name: Run unit tests
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
