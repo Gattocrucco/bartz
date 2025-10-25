@@ -22,7 +22,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Implement classes `mc_gbart` and `gbart` that mimic the R BART package."""
+"""Implement classes `mc_gbart` and `gbart` that mimic the R BART3 package."""
 
 import math
 from collections.abc import Sequence
@@ -256,12 +256,12 @@ class mc_gbart(Module):
 
     Notes
     -----
-    This interface imitates the function ``mc_gbart`` from the R package `BART
-    <https://cran.r-project.org/package=BART>`_, but with these differences:
+    This interface imitates the function ``mc_gbart`` from the R package `BART3
+    <https://github.com/rsparapa/bnptools>`_, but with these differences:
 
     - If `x_train` and `x_test` are matrices, they have one predictor per row
       instead of per column.
-    - If ``usequants=False``, R BART switches to quantiles anyway if there are
+    - If ``usequants=False``, R BART3 switches to quantiles anyway if there are
       less predictor values than the required number of bins, while bartz
       always follows the specification.
     - Some functionality is missing.
