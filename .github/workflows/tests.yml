@@ -85,6 +85,9 @@ jobs:
         with:
           r-version: 'renv'
 
+      - name: Install R dependencies
+        uses: r-lib/actions/setup-renv@v2
+
       - name: Run unit tests
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
 
