@@ -33,12 +33,12 @@ from scipy.stats import chi2, ks_1samp
 from bartz.mcmcstep import (
     Precs,
     _sample_wishart_bartlett,
-    compute_likelihood_ratio,
     compute_likelihood_ratio_mv,
-    precompute_leaf_terms,
+    compute_likelihood_ratio_uv,
     precompute_leaf_terms_mv,
-    precompute_likelihood_terms,
+    precompute_leaf_terms_uv,
     precompute_likelihood_terms_mv,
+    precompute_likelihood_terms_uv,
 )
 from tests.util import assert_close_matrices
 
@@ -169,8 +169,8 @@ class TestPrecomputeTerms:
             total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
         )
 
-        prelkv_uv, prelk_uv = precompute_likelihood_terms(sigma2, sigma_mu2, precs)
-        likelihood_uv = compute_likelihood_ratio(
+        prelkv_uv, prelk_uv = precompute_likelihood_terms_uv(sigma2, sigma_mu2, precs)
+        likelihood_uv = compute_likelihood_ratio_uv(
             total_resid.item(),
             left_resid.item(),
             right_resid.item(),
@@ -193,7 +193,7 @@ class TestPrecomputeTerms:
         z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
         z_uv = z_mv.squeeze(axis=-1)
 
-        result_uv = precompute_leaf_terms(
+        result_uv = precompute_leaf_terms_uv(
             keys.pop(), prec_trees, sigma2, sigma_mu2, z_uv
         )
         result_mv = precompute_leaf_terms_mv(
