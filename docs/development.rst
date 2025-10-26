@@ -35,19 +35,17 @@ Initial setup
     git clone git@github.com:YourGithubUserName/bartz.git
     cd bartz
 
-`Install R <https://cran.r-project.org>`_, then run
+Install `R <https://cran.r-project.org>`_ and `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ (for example, with `Homebrew <https://brew.sh>`_ do :literal:`brew install r uv`). Then run
 
 .. code-block:: shell
 
-    Rscript install-r-packages.R
+    make setup
 
-Install `uv <https://docs.astral.sh/uv/getting-started/installation/>`_ if it's not already available in your system. Run
+to set up the Python and R environments.
 
-.. code-block:: shell
+The Python environment is managed by uv. To run commands that involve the Python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`. Alternatively, do :literal:`source .venv/bin/activate` to activate the virtual environment in the current shell.
 
-    uv run --all-groups pre-commit install
-
-The python environment is managed by uv. To run commands that involve the python installation, do :literal:`uv run <command>`. For example, to start an IPython shell, do :literal:`uv run ipython`.
+The R environment is automatically active when you use :literal:`R` in the project directory.
 
 Pre-defined commands
 --------------------
@@ -57,15 +55,23 @@ Development commands are defined in a makefile. Run :literal:`make` without argu
 Benchmarks
 ----------
 
-The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. Basic workflow:
+The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. The basic asv workflow is:
 
 .. code-block:: shell
 
-    uv run asv run
-    uv run asv publish
-    uv run asv preview
+    uv run asv run      # run and save benchmarks on main branch
+    uv run asv publish  # create html report
+    uv run asv preview  # start a local server to view the report
 
 :literal:`asv run` writes the results into files saved in :literal:`./benchmarks`. These files are tracked by git; consider deliberately not committing all results generated while developing.
+
+There are a few make targets for common asv commands. The most useful command during development is
+
+.. code-block:: shell
+
+    make asv-quick ARGS='--bench <pattern>'
+
+This runs only benchmarks whose name matches <pattern>, only once, within the working copy and current Python environment.
 
 Documentation
 -------------
