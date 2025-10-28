@@ -1,0 +1,22 @@
+name: GPU test workflow
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  gpu-job:
+    name: GPU-Accelerated Job
+    runs-on:
+      - machine
+      - gpu=T4G  # Choose your GPU type
+      - tenancy=spot  # Use spot instances for cost savings
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run GPU task
+        run: |
+          # Your GPU-accelerated commands
+          nvidia-smi
+          # Additional commands...
