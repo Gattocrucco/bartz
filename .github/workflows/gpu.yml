@@ -8,10 +8,11 @@ on:
 jobs:
   gpu-job:
     name: GPU-Accelerated Job
-    runs-on:
-      - machine
-      - gpu=T4G  # Choose your GPU type
-      - tenancy=spot  # Use spot instances for cost savings
+    # runs-on:
+    #   - machine
+    #   - gpu=T4G  # Choose your GPU type
+    #   - tenancy=spot  # Use spot instances for cost savings
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
