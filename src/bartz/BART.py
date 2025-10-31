@@ -828,7 +828,7 @@ class mc_gbart(Module):
         if isinstance(seed, jax.Array) and jnp.issubdtype(
             seed.dtype, jax.dtypes.prng_key
         ):
-            key = seed
+            key = jnp.copy(seed)
         else:
             key = jax.random.key(seed)
 
