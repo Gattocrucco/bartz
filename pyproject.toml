@@ -57,6 +57,7 @@ only-local = [
     "pydoclint>=0.6.6",
     "ruff>=0.11.9",
     "scikit-learn>=1.6.1",
+    "snakeviz>=2.2.2",
     "tomli>=2.2.1",
     "virtualenv>=20.31.2",
     "xgboost>=3.0.0",
