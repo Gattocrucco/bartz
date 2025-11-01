@@ -46,7 +46,7 @@ jobs:
     - uses: actions/checkout@v5
       with:
         fetch-depth: 0
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version-file: '.python-version'
     - name: Find base ref for diff on failure
@@ -117,7 +117,7 @@ jobs:
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
 
       - name: Save coverage information
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
           path: .coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
@@ -144,16 +144,15 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
-          cache-suffix: -${{ matrix.os }}${{ matrix.target-suffix }}
 
       - name: Generate benchmarks visualization
-        run: make asv-publish
+        run: RPY2_CFFI_MODE=ABI make asv-publish
 
       - name: Generate documentation
         run: make docs docs-latest
 
       - name: Save documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: docs
           path: |
@@ -176,7 +175,6 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
-          cache-suffix: -${{ matrix.os }}${{ matrix.target-suffix }}
 
       - name: Get coverage files
         uses: actions/download-artifact@v6
@@ -200,7 +198,7 @@ jobs:
         run: make covreport
 
       - name: Save coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: covreport
           path: _site/coverage
