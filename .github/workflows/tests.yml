@@ -249,5 +249,5 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
-      - run: uv run --group ci python -m asv machine --yes
+      - run: RPY2_CFFI_MODE=ABI uv run --group ci python -m asv machine --yes
       - run: make asv-quick
