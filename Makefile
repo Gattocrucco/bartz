@@ -40,7 +40,7 @@ all:
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
 	@echo "- upload-test: upload release to TestPyPI"
-	@echo "- asv-all-tags: run benchmarks on all unbenchmarked tagged releases"
+	@echo "- asv-run: run benchmarks on all unbenchmarked tagged releases and main"
 	@echo "- asv-publish: create html benchmark report"
 	@echo "- asv-preview: create html report and start server"
 	@echo "- asv-main: run benchmarks on main branch"
@@ -166,9 +166,9 @@ upload-test: check-committed
 
 ASV = $(UV_RUN_CI) python -m asv
 
-.PHONY: asv-all-tags
-asv-all-tags:
-	git tag | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
+.PHONY: asv-run
+asv-run:
+	$(UV_RUN_CI) python config/refs-for-asv.py | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
 .PHONY: asv-publish
 asv-publish:
