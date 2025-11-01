@@ -49,14 +49,25 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version-file: '.python-version'
-    - uses: pre-commit/action@v3.0.1
-      if: github.event_name == 'pull_request'
+    - name: Find base ref for diff on failure
+      id: refs
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "from=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "from=HEAD^" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Save last commit message
+      run: |
+        git log -1 --pretty=%B > .git/COMMIT_EDITMSG
+    - name: Run pre-commit
+      uses: pre-commit/action@v3.0.1
       with:
-        extra_args: --verbose --show-diff-on-failure --from-ref ${{ github.event.pull_request.base.sha }} --to-ref HEAD
-    - uses: pre-commit/action@v3.0.1
-      if: github.event_name == 'push'
+        extra_args: --verbose --show-diff-on-failure --from-ref ${{ steps.refs.outputs.from }} --to-ref HEAD
+    - name: Run commit-msg hooks
+      uses: pre-commit/action@v3.0.1
       with:
-        extra_args: --verbose --show-diff-on-failure --from-ref HEAD^ --to-ref HEAD
+        extra_args: --hook-stage commit-msg --commit-msg-filename .git/COMMIT_EDITMSG
 
   tests:
 
