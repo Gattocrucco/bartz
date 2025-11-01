@@ -106,7 +106,7 @@ jobs:
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
 
       - name: Save coverage information
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
           path: .coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
@@ -141,7 +141,7 @@ jobs:
         run: make docs docs-latest
 
       - name: Save documentation
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: docs
           path: |
@@ -187,7 +187,7 @@ jobs:
         run: make covreport
 
       - name: Save coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: covreport
           path: _site/coverage
