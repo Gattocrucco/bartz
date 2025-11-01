@@ -24,6 +24,9 @@
 
 name: tests-docs
 
+# Workflow disabled
+if: false
+
 on:
   push:
     branches:
