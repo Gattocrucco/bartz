@@ -6,6 +6,7 @@ repos:
   rev: v3.2.0
   hooks:
     - id: trailing-whitespace
+      exclude: '^renv/activate\.R$'  # because renv edits it automatically, with trailing whitespace
     - id: end-of-file-fixer
     - id: check-yaml
     - id: check-added-large-files
