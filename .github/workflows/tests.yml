@@ -59,10 +59,14 @@ jobs:
       - name: Save last commit message
         run: |
           git log -1 --pretty=%B > .git/COMMIT_EDITMSG
-      - name: Run pre-commit
+      - name: Run pre-commit hooks
         uses: pre-commit/action@v3.0.1
         with:
           extra_args: --verbose --show-diff-on-failure --from-ref ${{ steps.refs.outputs.from }} --to-ref HEAD
+      - name: Configure git for commit-msg hook
+        run: |
+          git config user.name "DUMMY"
+          git config user.email "DUMMY"
       - name: Run commit-msg hooks
         uses: pre-commit/action@v3.0.1
         with:
