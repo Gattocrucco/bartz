@@ -58,7 +58,7 @@ jobs:
       - name: gitlint
         run: |
           python -m pip install gitlint
-          gitlint --commits ${{ steps.refs.outputs.from }}^..HEAD --fail-without-commits
+          gitlint --commits ${{ steps.refs.outputs.from }}..HEAD --fail-without-commits
 
   tests:
     runs-on: ${{ matrix.os }}
