@@ -227,9 +227,9 @@ class TestJaxPatches:
     def test_invgamma_missing(self):
         """Check that jax does not implement the inverse gamma distribution."""
         with pytest.raises(ImportError, match=r'gammainccinv'):
-            from jax.scipy.special import gammainccinv  # noqa: F401
+            from jax.scipy.special import gammainccinv  # noqa: F401, PLC0415
         with pytest.raises(ImportError, match=r'invgamma'):
-            from jax.scipy.stats import invgamma  # noqa: F401
+            from jax.scipy.stats import invgamma  # noqa: F401, PLC0415
 
     def test_invgamma_correct(self, keys):
         """Compare my implementation of invgamma against scipy's."""

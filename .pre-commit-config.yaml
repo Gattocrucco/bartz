@@ -15,7 +15,6 @@ repos:
       - id: check-docstring-first
       - id: check-executables-have-shebangs
       - id: check-illegal-windows-names
-      - id: check-json
       - id: check-merge-conflict
       - id: check-shebang-scripts-are-executable
       - id: check-symlinks
@@ -29,7 +28,7 @@ repos:
         args: [--fix=lf]
       - id: name-tests-test
         args: [--pytest-test-first]
-      - id: no-commit-to-branch # not sure, will this allow merge commits?
+        exclude: tests/(rbartpackages/.+\.py|util\.py)$
       - id: trailing-whitespace
         exclude: '^renv/activate\.R$' # because renv edits it automatically, with trailing whitespace
   - repo: https://github.com/sbrunner/hooks
@@ -38,6 +37,7 @@ repos:
       - id: copyright
       - id: copyright-required
         files: \.(py|rst)$
+        exclude: src/bartz/_version\.py$
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.3
     hooks:
