@@ -62,7 +62,6 @@ all:
 setup:
 	Rscript -e "renv::restore()"
 	uv run --all-groups pre-commit install
-	uv run pre-commit install --hook-type commit-msg
 
 
 ################# TESTS #################

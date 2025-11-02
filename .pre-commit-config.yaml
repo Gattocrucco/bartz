@@ -1,6 +1,10 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
+
 exclude: '^\.asv/results/.+\.json$'
+default_stages: [pre-commit]
+default_install_hook_types: [pre-commit, commit-msg]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -54,4 +58,6 @@ repos:
     rev: v0.19.1
     hooks:
       - id: gitlint
+        stages: [commit-msg]
       - id: gitlint-ci
+        stages: [commit-msg]
