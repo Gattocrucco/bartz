@@ -29,17 +29,17 @@ repos:
       - id: trailing-whitespace
         exclude: '^renv/activate\.R$' # because renv edits it automatically, with trailing whitespace
   - repo: https://github.com/sbrunner/hooks
-    rev: 1.4.1
+    rev: 1.6.1
     hooks:
       - id: copyright
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.9
+    rev: v0.14.3
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/jsh9/pydoclint
-    rev: 0.6.6
+    rev: 0.7.6
     hooks:
       - id: pydoclint
   - repo: https://github.com/abravalheri/validate-pyproject
