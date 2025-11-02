@@ -57,7 +57,4 @@ repos:
   - repo: https://github.com/jorisroovers/gitlint
     rev: v0.19.1
     hooks:
-      - id: gitlint
-        stages: [commit-msg]
-      - id: gitlint-ci
-        stages: [commit-msg]
+      - id: gitlint # this is already defined on stage commit-msg
