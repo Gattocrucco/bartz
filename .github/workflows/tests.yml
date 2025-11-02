@@ -255,5 +255,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.UV_VERSION }}
-      - run: RPY2_CFFI_MODE=ABI uv run --group ci python -m asv machine --yes
-      - run: make asv-quick
+      - name: Get machine information for asv
+        run: RPY2_CFFI_MODE=ABI uv run --group ci python -m asv machine --yes
+      - name: Run asv in quick mode
+        run: make asv-quick ARGS='--attribute timeout=120' # long timeout because CI runners are slow
