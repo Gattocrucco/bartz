@@ -1582,11 +1582,11 @@ def accept_moves_parallel_stage(
 
     Parameters
     ----------
-    key : jax.dtypes.prng_key array
+    key
         A jax random key.
-    bart : dict
+    bart
         A BART mcmc state.
-    moves : dict
+    moves
         The proposed moves, see `propose_moves`.
 
     Returns

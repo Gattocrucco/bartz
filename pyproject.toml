@@ -229,11 +229,6 @@ banned-module-level-imports = ["bartz.debug"]
 ban-relative-imports = "all"
 
 [tool.pydoclint]
-baseline = "config/pydoclint-baseline.txt"
-auto-regenerate-baseline = false
-# auto-regenerate = false because in pre-commit pydoclint does not see the
-# unmodified files, thinks those errors are gone, and removes them from the
-# baseline.
 arg-type-hints-in-signature = true
 arg-type-hints-in-docstring = false
 check-return-types = false
