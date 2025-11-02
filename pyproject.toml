@@ -190,7 +190,6 @@ ignore = [
     "RET505",  # Unnecessary `{branch}` after `return` statement. I ignore this because I like to keep branches for readability.
     "RET506",  # Unnecessary `else` after `raise` statement. I ignore this because I like to keep branches for readability.
     "S101",    # Use of `assert` detected. Too annoying.
-    "S603",    # `subprocess` call: check for execution of untrusted input. Too many false positives.
     "SIM108",  # SIM108 Use ternary operator `*` instead of `if`-`else`-block, I find blocks more readable
     "UP037",   # Remove quotes from type annotation. Ignore because jaxtyping.
 ]
