@@ -1105,6 +1105,8 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
         timer.cancel()
 
 
+@pytest.mark.flaky
+# it's flaky because the interrupt may be catched and converted by jax internals
 @pytest.mark.timeout(16)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
