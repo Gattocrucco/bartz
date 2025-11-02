@@ -28,6 +28,7 @@ repos:
         args: [--fix=lf]
       - id: name-tests-test
         args: [--pytest-test-first]
+        exclude: tests/(rbartpackages/.+\.py|util\.py)$
       - id: no-commit-to-branch # not sure, will this allow merge commits?
       - id: trailing-whitespace
         exclude: '^renv/activate\.R$' # because renv edits it automatically, with trailing whitespace
