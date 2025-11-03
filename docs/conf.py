@@ -115,10 +115,8 @@ extensions = [
 ext = 'viewcode'  # copy source code in static website
 if not uncommitted_stuff:
     commit = repo.head.commit.hexsha
-    commit_on_github = any(
-        commit in (c.hexsha for c in repo.iter_commits(branch))
-        for branch in repo.remote().refs
-    )
+    branches = repo.git.branch('--remotes', '--contains', commit)
+    commit_on_github = bool(branches.strip())
     if commit_on_github:
         ext = 'linkcode'  # links to code on github
 extensions.append(f'sphinx.ext.{ext}')
