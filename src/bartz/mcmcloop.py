@@ -35,7 +35,7 @@ from typing import Any, Protocol
 import jax
 import numpy
 from equinox import Module
-from jax import debug, lax, tree
+from jax import debug, jit, lax, tree
 from jax import numpy as jnp
 from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
@@ -316,15 +316,13 @@ def _run_mcmc_inner_loop(
         # update state
         carry = replace(carry, bart=mcmcstep.step(keys.pop(), carry.bart))
 
-        burnin = carry.i_total < n_burn
-
         # invoke callback
         if callback is not None:
             i_skip = _compute_i_skip(carry.i_total, n_burn, n_skip)
             rt = callback(
                 key=keys.pop(),
                 bart=carry.bart,
-                burnin=burnin,
+                burnin=carry.i_total < n_burn,
                 i_total=carry.i_total,
                 i_skip=i_skip,
                 callback_state=carry.callback_state,
@@ -338,21 +336,18 @@ def _run_mcmc_inner_loop(
                 bart, callback_state = rt
                 carry = replace(carry, bart=bart, callback_state=callback_state)
 
-        def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
-            return _pytree_at_set(
-                carry.burnin_trace, carry.i_total, burnin_extractor(carry.bart)
-            ), carry.main_trace
-
-        def save_to_main_trace() -> tuple[PyTree, PyTree]:
-            idx = (carry.i_total - n_burn) // n_skip
-            return carry.burnin_trace, _pytree_at_set(
-                carry.main_trace, idx, main_extractor(carry.bart)
-            )
-
-        # save state to trace
-        burnin_trace, main_trace = lax.cond(
-            burnin, save_to_burnin_trace, save_to_main_trace
+        # save to trace
+        burnin_trace, main_trace = _save_state_to_trace(
+            carry.burnin_trace,
+            carry.main_trace,
+            burnin_extractor,
+            main_extractor,
+            carry.bart,
+            carry.i_total,
+            n_burn,
+            n_skip,
         )
+
         return replace(
             carry,
             i_total=carry.i_total + 1,
@@ -370,6 +365,30 @@ def _run_mcmc_inner_loop(
 
     carry, _ = scan_if_not_profiling(loop, carry, None, inner_loop_length)
     return carry
+
+
+@partial(jit, donate_argnums=(0, 1), static_argnums=(2, 3))
+# this is jitted because under profiling _run_mcmc_inner_loop and the loop
+# within it are not, so I need the donate_argnums feature of jit to avoid
+# creating copies of the traces
+def _save_state_to_trace(
+    burnin_trace: PyTree,
+    main_trace: PyTree,
+    burnin_extractor: Callable[[State], PyTree],
+    main_extractor: Callable[[State], PyTree],
+    bart: State,
+    i_total: Int32[Array, ''],
+    n_burn: Int32[Array, ''],
+    n_skip: Int32[Array, ''],
+) -> tuple[PyTree, PyTree]:
+    def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
+        return _pytree_at_set(burnin_trace, i_total, burnin_extractor(bart)), main_trace
+
+    def save_to_main_trace() -> tuple[PyTree, PyTree]:
+        idx = (i_total - n_burn) // n_skip
+        return burnin_trace, _pytree_at_set(main_trace, idx, main_extractor(bart))
+
+    return lax.cond(i_total < n_burn, save_to_burnin_trace, save_to_main_trace)
 
 
 def _pytree_at_set(
