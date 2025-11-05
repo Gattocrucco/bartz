@@ -88,16 +88,19 @@ def profile_mode(value: bool, /) -> Iterator[None]:
 
 
 @contextmanager
-def trace(outfile: Path | str) -> Iterator[None]:
-    """Enable profiling and save results to a file.
+def trace(outfile: Path | str | None = None) -> Iterator[None]:
+    """Enable profiling and optionally save results to a file.
 
-    This activates both `profile_mode` and `cProfile`, and saves the profiling
-    statistics to the specified file.
+    This context manager puts bartz into a special "profiling mode". Performance
+    may be lower.
 
     Parameters
     ----------
     outfile
-        Path to the output file where profiling statistics will be saved.
+        Path to the output file where Python profiling statistics will be saved.
+        The file convenionally has extension `.prof` and can be read by standard
+        Python tooling. If `None`, profiling is left to the user, and the
+        context manager only puts `bartz` in profiling mode.
 
     Examples
     --------
@@ -105,17 +108,31 @@ def trace(outfile: Path | str) -> Iterator[None]:
     ...     # Code runs with profiling enabled
     ...     pass
     >>> # Analyze with: python -m pstats profile_output.prof
-    """
-    outfile = Path(outfile)
-    profiler = Profile()
 
+    Notes
+    -----
+    In profiling mode, the MCMC loop is not compiled into a single function, but
+    instead compiled in smaller pieces that are instrumented to show up in the
+    jax tracer and Python profiling statistics.
+
+    Python profiling is activated within the context, and the results are saved
+    to a specified output file. Jax tracing is not enabled by this context
+    manager and if used must be handled separately by the user; this context
+    manager only makes sure that the execution flow will be more interpretable
+    in the traces.
+    """
     with profile_mode(True):
-        profiler.enable()
-        try:
+        if outfile is None:
             yield
-        finally:
-            profiler.disable()
-            profiler.dump_stats(outfile)
+        else:
+            outfile = Path(outfile)
+            profiler = Profile()
+            profiler.enable()
+            try:
+                yield
+            finally:
+                profiler.disable()
+                profiler.dump_stats(outfile)
 
 
 def jit_and_block_if_profiling(
