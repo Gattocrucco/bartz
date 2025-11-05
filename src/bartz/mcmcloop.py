@@ -41,6 +41,7 @@ from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
 
 from bartz import grove, jaxext, mcmcstep
+from bartz._profiler import jit_if_not_profiling, scan_if_not_profiling
 from bartz.mcmcstep import State
 
 
@@ -293,7 +294,7 @@ def _compute_i_skip(
     )
 
 
-@partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
+@partial(jit_if_not_profiling, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
 def _run_mcmc_inner_loop(
     carry: _Carry,
     inner_loop_length: int,
@@ -367,7 +368,7 @@ def _run_mcmc_inner_loop(
         carry = lax.cond(carry.i_total < n_iters, loop_impl, loop_noop, carry)
         return carry, None
 
-    carry, _ = lax.scan(loop, carry, None, inner_loop_length)
+    carry, _ = scan_if_not_profiling(loop, carry, None, inner_loop_length)
     return carry
 
 

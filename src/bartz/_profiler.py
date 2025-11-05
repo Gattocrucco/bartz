@@ -33,6 +33,8 @@ from typing import Any, TypeVar
 
 from jax import block_until_ready, jit
 from jax.lax import scan
+from jax.profiler import TraceAnnotation
+from jax.stages import Compiled, Wrapped
 
 PROFILE_MODE: bool = False
 
@@ -116,7 +118,9 @@ def trace(outfile: Path | str) -> Iterator[None]:
             profiler.dump_stats(outfile)
 
 
-def jit_and_block_if_profiling(func: Callable[..., T]) -> Callable[..., T]:
+def jit_and_block_if_profiling(
+    func: Callable[..., T], *args, **kwargs
+) -> Callable[..., T]:
     """Apply JIT compilation and block if profiling is enabled.
 
     When profile mode is off, the function runs without JIT.
@@ -127,26 +131,60 @@ def jit_and_block_if_profiling(func: Callable[..., T]) -> Callable[..., T]:
     ----------
     func
         Function to wrap.
+    *args
+    **kwargs
+        Additional arguments to pass to `jax.jit`.
 
     Returns
     -------
     Wrapped function.
+
+    Notes
+    -----
+    Under profiling mode, the function invocation is handled such that custom
+    jax trace events and pstats dummy functions with names `jab_compile[func_name]`
+    and `jab_run[func_name]` are created.
     """
-    jitted_func = jit(func)
+    jitted_func = jit(func, *args, **kwargs)
+
+    compile_event_name = f'jab_compile[{func.__name__}]'
+
+    def compile_wrapper(func: Wrapped, *args, **kwargs) -> Compiled:
+        with TraceAnnotation(compile_event_name):
+            return func.lower(*args, **kwargs).compile()
+
+    compile_wrapper.__code__.replace(
+        co_name=compile_event_name,
+        co_filename=func.__code__.co_filename,
+        co_firstlineno=func.__code__.co_firstlineno,
+    )
+
+    run_event_name = f'jab_run[{func.__name__}]'
+
+    def run_wrapper(func: Compiled, *args, **kwargs) -> T:
+        with TraceAnnotation(run_event_name):
+            result = func(*args, **kwargs)
+            return block_until_ready(result)
+
+    run_wrapper.__code__.replace(
+        co_name=run_event_name,
+        co_filename=func.__code__.co_filename,
+        co_firstlineno=func.__code__.co_firstlineno,
+    )
 
     @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> T:
+    def jab_wrapper(*args: Any, **kwargs: Any) -> T:
         if get_profile_mode():
             args, kwargs = block_until_ready((args, kwargs))
-            result = jitted_func(*args, **kwargs)
-            return block_until_ready(result)
+            compiled_func = compile_wrapper(jitted_func, *args, **kwargs)
+            return run_wrapper(compiled_func, *args, **kwargs)
         else:
             return func(*args, **kwargs)
 
-    return wrapper
+    return jab_wrapper
 
 
-def jit_if_not_profiling(func: Callable[..., T]) -> Callable[..., T]:
+def jit_if_not_profiling(func: Callable[..., T], *args, **kwargs) -> Callable[..., T]:
     """Apply JIT compilation only when not profiling.
 
     When profile mode is off, the function is JIT compiled for performance.
@@ -156,12 +194,15 @@ def jit_if_not_profiling(func: Callable[..., T]) -> Callable[..., T]:
     ----------
     func
         Function to wrap.
+    *args
+    **kwargs
+        Additional arguments to pass to `jax.jit`.
 
     Returns
     -------
     Wrapped function.
     """
-    jitted_func = jit(func)
+    jitted_func = jit(func, *args, **kwargs)
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> T:
