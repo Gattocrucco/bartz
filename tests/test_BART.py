@@ -44,10 +44,11 @@ from jax import debug_nans, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jax.tree_util import tree_map
+from jax.tree_util import tree_map, tree_map_with_path
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
+from bartz._profiler import profile_mode
 from bartz.debug import (
     TraceWithOffset,
     check_trace,
@@ -1310,3 +1311,19 @@ def merge_mcmc_state(ref_state: State, *states: State):
         *states,
         is_leaf=lambda x: x is None,
     )
+
+
+class TestProfile:
+    """Test the behavior of `mc_gbart` in profiling mode."""
+
+    def test_same_result(self, kw: dict):
+        """Check that the result is the same in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_array_equal(x, xp)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
