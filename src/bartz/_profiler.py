@@ -32,9 +32,10 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from jax import block_until_ready, jit
-from jax.lax import scan
+from jax.lax import cond, scan
 from jax.profiler import TraceAnnotation
 from jax.stages import Compiled, Wrapped
+from jaxtyping import Array, Bool
 
 PROFILE_MODE: bool = False
 
@@ -251,9 +252,6 @@ def scan_if_not_profiling(
 ) -> tuple[Carry, None]:
     """Restricted replacement for `jax.lax.scan` that uses a Python loop when profiling.
 
-    When profile mode is off, uses `jax.lax.scan` for efficiency.
-    When profile mode is on, uses a Python for loop for better profiling visibility.
-
     Parameters
     ----------
     f
@@ -278,3 +276,36 @@ def scan_if_not_profiling(
 
     else:
         return scan(f, init, None, length)
+
+
+def cond_if_not_profiling(
+    pred: bool | Bool[Array, ''],
+    true_fun: Callable[..., T],
+    false_fun: Callable[..., T],
+    /,
+    *operands,
+) -> T:
+    """Restricted replacement for `jax.lax.cond` that uses a Python if when profiling.
+
+    Parameters
+    ----------
+    pred
+        Boolean predicate to choose which function to execute.
+    true_fun
+        Function to execute if `pred` is True.
+    false_fun
+        Function to execute if `pred` is False.
+    *operands
+        Arguments passed to `true_fun` and `false_fun`.
+
+    Returns
+    -------
+    Result of either `true_fun()` or `false_fun()`.
+    """
+    if get_profile_mode():
+        if pred:
+            return true_fun(*operands)
+        else:
+            return false_fun(*operands)
+    else:
+        return cond(pred, true_fun, false_fun, *operands)

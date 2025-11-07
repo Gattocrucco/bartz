@@ -36,6 +36,7 @@ from jax import numpy as jnp
 from numpy.testing import assert_array_equal
 
 from bartz._profiler import (
+    cond_if_not_profiling,
     get_profile_mode,
     jit_and_block_if_profiling,
     jit_if_not_profiling,
@@ -110,6 +111,40 @@ class TestScanIfNotProfiling:
             match='DynamicJaxprTracer has no attribute block_until_ready',
         ):
             scan_if_not_profiling(body, 0, None, 5)
+
+
+class TestCondIfNotProfiling:
+    """Test `cond_if_not_profiling`."""
+
+    @pytest.mark.parametrize('mode', [True, False])
+    def test_result(self, mode: bool):
+        """Test that `cond_if_not_profiling` has the right output on a simple example."""
+        with profile_mode(mode):
+            out = cond_if_not_profiling(
+                True, lambda x: x - 1, lambda x: x + 1, jnp.int32(5)
+            )
+            assert out == 4
+
+    def test_does_not_jit(self):
+        """Check that `cond_if_not_profiling` does not jit the function in profiling mode."""
+        with profile_mode(True):
+            cond_if_not_profiling(
+                True,
+                lambda x: x.block_until_ready(),
+                lambda x: x.block_until_ready(),
+                jnp.int32(5),
+            )
+
+        with pytest.raises(
+            AttributeError,
+            match='DynamicJaxprTracer has no attribute block_until_ready',
+        ):
+            cond_if_not_profiling(
+                True,
+                lambda x: x.block_until_ready(),
+                lambda x: x.block_until_ready(),
+                jnp.int32(5),
+            )
 
 
 class TestJitIfNotProfiling:
@@ -293,4 +328,5 @@ def test_profile(tmp_path: Path, use_file: bool):
         assert runtime < p_run.cumtime < 1.5 * runtime  # execution
 
     check_profile(prof)
-    check_profile(str(outfile))
+    if outfile is not None:
+        check_profile(str(outfile))

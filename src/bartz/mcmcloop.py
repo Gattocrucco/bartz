@@ -41,7 +41,11 @@ from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
 
 from bartz import grove, jaxext, mcmcstep
-from bartz._profiler import jit_if_not_profiling, scan_if_not_profiling
+from bartz._profiler import (
+    cond_if_not_profiling,
+    jit_if_not_profiling,
+    scan_if_not_profiling,
+)
 from bartz.mcmcstep import State
 
 
@@ -360,7 +364,9 @@ def _run_mcmc_inner_loop(
         return carry
 
     def loop(carry: _Carry, _) -> tuple[_Carry, None]:
-        carry = lax.cond(carry.i_total < n_iters, loop_impl, loop_noop, carry)
+        carry = cond_if_not_profiling(
+            carry.i_total < n_iters, loop_impl, loop_noop, carry
+        )
         return carry, None
 
     carry, _ = scan_if_not_profiling(loop, carry, None, inner_loop_length)
