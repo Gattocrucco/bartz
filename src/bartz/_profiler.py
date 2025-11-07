@@ -88,50 +88,46 @@ def profile_mode(value: bool, /) -> Iterator[None]:
 
 
 @contextmanager
-def trace(outfile: Path | str | None = None) -> Iterator[None]:
-    """Enable profiling and optionally save results to a file.
-
-    This context manager puts bartz into a special "profiling mode". Performance
-    may be lower.
+def profile(outfile: Path | str | None = None) -> Iterator[Profile]:
+    """Run the Python profiler with bartz in profiling mode.
 
     Parameters
     ----------
     outfile
-        Path to the output file where Python profiling statistics will be saved.
-        The file convenionally has extension `.prof` and can be read by standard
-        Python tooling. If `None`, profiling is left to the user, and the
-        context manager only puts `bartz` in profiling mode.
+        If specified, the profile is also saved in this file. The file
+        convenionally has extension '.prof'.
+
+    Yields
+    ------
+    A `cProfile.Profile` object with the profiling results.
 
     Examples
     --------
-    >>> with trace('profile_output.prof'):
+    >>> with profile('output.prof'):
     ...     # Code runs with profiling enabled
     ...     pass
-    >>> # Analyze with: python -m pstats profile_output.prof
+    >>> # Analyze with: python -m pstats output.prof
 
     Notes
     -----
     In profiling mode, the MCMC loop is not compiled into a single function, but
     instead compiled in smaller pieces that are instrumented to show up in the
-    jax tracer and Python profiling statistics.
+    jax tracer and Python profiling statistics. Search for function names
+    starting with 'jab_' (see `jit_and_block_if_not_profiling`).
 
-    Python profiling is activated within the context, and the results are saved
-    to a specified output file. Jax tracing is not enabled by this context
-    manager and if used must be handled separately by the user; this context
-    manager only makes sure that the execution flow will be more interpretable
-    in the traces.
+    Jax tracing is not enabled by this context manager and if used must be
+    handled separately by the user; this context manager only makes sure that
+    the execution flow will be more interpretable in the traces if the tracer is
+    used.
     """
     with profile_mode(True):
-        if outfile is None:
-            yield
-        else:
-            outfile = Path(outfile)
-            profiler = Profile()
-            profiler.enable()
-            try:
-                yield
-            finally:
-                profiler.disable()
+        profiler = Profile()
+        profiler.enable()
+        try:
+            yield profiler
+        finally:
+            profiler.disable()
+            if outfile is not None:
                 profiler.dump_stats(outfile)
 
 

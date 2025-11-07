@@ -29,5 +29,5 @@ See the manual at https://gattocrucco.github.io/bartz/docs
 """
 
 from bartz import BART, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
-from bartz._profiler import trace  # noqa: F401
+from bartz._profiler import profile  # noqa: F401
 from bartz._version import __version__  # noqa: F401

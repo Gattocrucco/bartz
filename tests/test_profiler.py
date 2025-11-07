@@ -24,6 +24,7 @@
 
 """Test `bartz._profiler`."""
 
+from cProfile import Profile
 from functools import partial
 from pathlib import Path
 from pstats import Stats
@@ -38,10 +39,10 @@ from bartz._profiler import (
     get_profile_mode,
     jit_and_block_if_profiling,
     jit_if_not_profiling,
+    profile,
     profile_mode,
     scan_if_not_profiling,
     set_profile_mode,
-    trace,
 )
 
 
@@ -259,9 +260,10 @@ def idle(steps: int):
     return x
 
 
-def test_trace(tmp_path: Path):
-    """Test the context manager `trace`."""
-    outfile = tmp_path / 'profile.prof'
+@pytest.mark.parametrize('use_file', [True, False])
+def test_profile(tmp_path: Path, use_file: bool):
+    """Test the context manager `profile`."""
+    outfile = tmp_path / 'profile.prof' if use_file else None
     runtime = 0.1
     tracetime = 0.05
 
@@ -276,15 +278,19 @@ def test_trace(tmp_path: Path):
 
         return pure_callback(sleeper, x, x)
 
-    with trace(outfile):
+    with profile(outfile) as prof:
         func()
 
-    stats = Stats(str(outfile)).get_stats_profile()
+    def check_profile(profile: Profile | str):
+        stats = Stats(profile).get_stats_profile()
 
-    p_func = stats.func_profiles['func']
-    p_compile = stats.func_profiles['jab_compile[func]']
-    p_run = stats.func_profiles['jab_run[func]']
+        p_func = stats.func_profiles['func']
+        p_compile = stats.func_profiles['jab_compile[func]']
+        p_run = stats.func_profiles['jab_run[func]']
 
-    assert tracetime < p_func.cumtime < 1.5 * tracetime  # tracing
-    assert p_func.cumtime < p_compile.cumtime < 2 * tracetime  # full compilation
-    assert runtime < p_run.cumtime < 1.5 * runtime  # execution
+        assert tracetime < p_func.cumtime < 1.5 * tracetime  # tracing
+        assert p_func.cumtime < p_compile.cumtime < 2 * tracetime  # full compilation
+        assert runtime < p_run.cumtime < 1.5 * runtime  # execution
+
+    check_profile(prof)
+    check_profile(str(outfile))
