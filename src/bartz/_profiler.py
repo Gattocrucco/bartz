@@ -24,7 +24,7 @@
 
 """Module with utilities related to profiling bartz."""
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from cProfile import Profile
 from functools import wraps
@@ -34,7 +34,6 @@ from typing import Any, TypeVar
 from jax import block_until_ready, jit
 from jax.lax import cond, scan
 from jax.profiler import TraceAnnotation
-from jax.stages import Compiled, Wrapped
 from jaxtyping import Array, Bool
 
 PROFILE_MODE: bool = False
@@ -132,27 +131,17 @@ def profile(outfile: Path | str | None = None) -> Iterator[Profile]:
                 profiler.dump_stats(outfile)
 
 
-def jit_and_block_if_profiling(
-    func: Callable[..., T],
-    *,
-    static_argnums: int | Sequence[int] | None = None,
-    static_argnames: None = None,
-    **kwargs,
-) -> Callable[..., T]:
+def jit_and_block_if_profiling(func: Callable[..., T], **kwargs) -> Callable[..., T]:
     """Apply JIT compilation and block if profiling is enabled.
 
-    When profile mode is off, the function runs without JIT.
-    When profile mode is on, the function is JIT compiled and blocks inputs and
-    outputs to ensure proper profiling.
+    When profile mode is off, the function runs without JIT. When profile mode
+    is on, the function is JIT compiled and blocks inputs and outputs to ensure
+    proper profiling.
 
     Parameters
     ----------
     func
         Function to wrap.
-    static_argnums
-        Positional arguments that are folded into the compiled function.
-    static_argnames
-        This argument is not supported.
     **kwargs
         Additional arguments to pass to `jax.jit`.
 
@@ -162,41 +151,24 @@ def jit_and_block_if_profiling(
 
     Notes
     -----
-    Under profiling mode, the function invocation is handled such that custom
-    jax trace events and pstats dummy functions with names `jab_compile[func_name]`
-    and `jab_run[func_name]` are created.
+    Under profiling mode, the function invocation is handled such that a custom
+    jax trace event and pstats dummy function with name `jab[<func_name>]` is
+    created. The statistics on the actual Python function will be off.
     """
-    assert static_argnames is None, 'static_argnames is not supported'
+    jitted_func = jit(func, **kwargs)
 
-    jitted_func = jit(func, static_argnums=static_argnums, **kwargs)
+    event_name = f'jab[{func.__name__}]'
 
-    compile_event_name = f'jab_compile[{func.__name__}]'
-
-    def compile_wrapper(func: Wrapped, *args, **kwargs) -> Compiled:
-        with TraceAnnotation(compile_event_name):
-            return func.lower(*args, **kwargs).compile()
-
-    compile_wrapper.__code__ = compile_wrapper.__code__.replace(
-        co_name=compile_event_name,
-        co_filename=func.__code__.co_filename,
-        co_firstlineno=func.__code__.co_firstlineno,
-    )
-
-    run_event_name = f'jab_run[{func.__name__}]'
-
-    if static_argnums is None:
-        static_argnums = ()
-    if isinstance(static_argnums, int):
-        static_argnums = (static_argnums,)
-
-    def run_wrapper(func: Compiled, *args, **kwargs) -> T:
-        runtime_args = [a for i, a in enumerate(args) if i not in static_argnums]
-        with TraceAnnotation(run_event_name):
-            result = func(*runtime_args, **kwargs)
+    # this wrapper is meant to measure the time spent executing the function
+    def wrapper(*args, **kwargs) -> T:
+        with TraceAnnotation(event_name):  # pragma: no cover
+            # coverage does not see these lines because of the code object trick below
+            result = jitted_func(*args, **kwargs)
             return block_until_ready(result)
 
-    run_wrapper.__code__ = run_wrapper.__code__.replace(
-        co_name=run_event_name,
+    # replace the code object because cProfile uses that to identify the function
+    wrapper.__code__ = wrapper.__code__.replace(
+        co_name=event_name,
         co_filename=func.__code__.co_filename,
         co_firstlineno=func.__code__.co_firstlineno,
     )
@@ -205,8 +177,7 @@ def jit_and_block_if_profiling(
     def jab_wrapper(*args: Any, **kwargs: Any) -> T:
         if get_profile_mode():
             args, kwargs = block_until_ready((args, kwargs))
-            compiled_func = compile_wrapper(jitted_func, *args, **kwargs)
-            return run_wrapper(compiled_func, *args, **kwargs)
+            return wrapper(*args, **kwargs)
         else:
             return func(*args, **kwargs)
 

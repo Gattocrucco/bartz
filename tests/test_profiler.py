@@ -117,13 +117,14 @@ class TestCondIfNotProfiling:
     """Test `cond_if_not_profiling`."""
 
     @pytest.mark.parametrize('mode', [True, False])
-    def test_result(self, mode: bool):
+    @pytest.mark.parametrize('pred', [True, False])
+    def test_result(self, mode: bool, pred: bool):
         """Test that `cond_if_not_profiling` has the right output on a simple example."""
         with profile_mode(mode):
             out = cond_if_not_profiling(
-                True, lambda x: x - 1, lambda x: x + 1, jnp.int32(5)
+                pred, lambda x: x - 1, lambda x: x + 1, jnp.int32(5)
             )
-            assert out == 4
+            assert out == (4 if pred else 6)
 
     def test_does_not_jit(self):
         """Check that `cond_if_not_profiling` does not jit the function in profiling mode."""
@@ -140,7 +141,7 @@ class TestCondIfNotProfiling:
             match='DynamicJaxprTracer has no attribute block_until_ready',
         ):
             cond_if_not_profiling(
-                True,
+                False,
                 lambda x: x.block_until_ready(),
                 lambda x: x.block_until_ready(),
                 jnp.int32(5),
@@ -236,7 +237,7 @@ class TestJitAndBlockIfProfiling:
 
     @pytest.mark.xfail(
         reason='This test does not work when run under pytest, but works in isolation,'
-        ' so I invoke it separately in the Makefile.'
+        " so it's invoked separately in the Makefile."
     )
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
@@ -256,7 +257,7 @@ class TestJitAndBlockIfProfiling:
         result = jit_func()
         elapsed = perf_counter() - start
         result.block_until_ready()  # Ensure completion
-        assert elapsed < expected / 2
+        assert elapsed < expected / 2  # Note: fails here in pytest
 
         # Test profiling mode first (should block and wait >= expected)
         with profile_mode(True):
@@ -303,7 +304,7 @@ def test_profile(tmp_path: Path, use_file: bool):
     tracetime = 0.05
 
     @jit_and_block_if_profiling
-    def func():
+    def awlkugh():  # weird name to make sure identifiers are legit
         x = jnp.int32(0)
         sleep(tracetime)
 
@@ -313,19 +314,21 @@ def test_profile(tmp_path: Path, use_file: bool):
 
         return pure_callback(sleeper, x, x)
 
+    with profile():
+        awlkugh()  # warm-up
+
     with profile(outfile) as prof:
-        func()
+        awlkugh()
 
     def check_profile(profile: Profile | str):
         stats = Stats(profile).get_stats_profile()
 
-        p_func = stats.func_profiles['func']
-        p_compile = stats.func_profiles['jab_compile[func]']
-        p_run = stats.func_profiles['jab_run[func]']
+        assert 'awlkugh' not in stats.func_profiles
+        # it's not there because it was traced during warm-up
 
-        assert tracetime < p_func.cumtime < 1.5 * tracetime  # tracing
-        assert p_func.cumtime < p_compile.cumtime < 2 * tracetime  # full compilation
-        assert runtime < p_run.cumtime < 1.5 * runtime  # execution
+        p_run = stats.func_profiles['jab[awlkugh]']
+
+        assert runtime < p_run.cumtime < 1.5 * runtime
 
     check_profile(prof)
     if outfile is not None:
