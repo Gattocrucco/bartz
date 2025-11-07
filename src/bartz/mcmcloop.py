@@ -613,7 +613,7 @@ def sparse_callback(
 ):
     """Perform variable selection, see `mcmcstep.step_sparse`."""
     if callback_state.sparse_on_at is not None:
-        bart = lax.cond(
+        bart = cond_if_not_profiling(
             i_total < callback_state.sparse_on_at,
             lambda: bart,
             lambda: mcmcstep.step_sparse(key, bart),
