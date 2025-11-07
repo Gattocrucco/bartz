@@ -34,6 +34,7 @@ import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from functools import partial
+from pstats import Stats
 from typing import Any, Literal
 
 import jax
@@ -44,10 +45,11 @@ from jax import debug_nans, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jax.tree_util import tree_map
+from jax.tree_util import tree_map, tree_map_with_path
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
+from bartz import profile
 from bartz.debug import (
     TraceWithOffset,
     check_trace,
@@ -1106,7 +1108,7 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
 
 
 @pytest.mark.flaky
-# it's flaky because the interrupt may be caught and converted by jax internals
+# it's flaky because the interrupt may be caught and converted by jax internals (#33054)
 @pytest.mark.timeout(16)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
@@ -1310,3 +1312,45 @@ def merge_mcmc_state(ref_state: State, *states: State):
         *states,
         is_leaf=lambda x: x is None,
     )
+
+
+class TestProfile:
+    """Test the behavior of `mc_gbart` in profiling mode."""
+
+    def test_same_result(self, kw: dict):
+        """Check that the result is the same in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile():
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_array_equal(x, xp)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
+
+    def test_mcmc_stages(self, kw: dict):
+        """Check that all pieces of the MCMC are profiled."""
+        with profile() as prof:
+            mc_gbart(**kw)
+        stats = Stats(prof).get_stats_profile()
+
+        # prepare list of functions expected in the profile
+        names = (
+            'propose_moves',
+            'accept_moves_parallel_stage',
+            'accept_moves_sequential_stage',
+            'accept_moves_final_stage',
+        )
+        if kw.get('type', 'wbart') == 'pbart':
+            names += ('step_z',)
+        else:
+            names += ('step_sigma',)
+        if kw.get('sparse', False):
+            names += ('step_s',)
+            if kw.get('theta') is None:
+                names += ('step_theta',)
+
+        # check that all expected functions are in the profile
+        for name in names:
+            assert f'jab[{name}]' in stats.func_profiles

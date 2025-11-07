@@ -28,7 +28,7 @@ repos:
         args: [--fix=lf]
       - id: name-tests-test
         args: [--pytest-test-first]
-        exclude: tests/(rbartpackages/.+\.py|util\.py)$
+        exclude: tests/(rbartpackages/.+\.py|util\.py|aux_tests\.py)$
       - id: trailing-whitespace
         exclude: '^renv/activate\.R$' # because renv edits it automatically, with trailing whitespace
   - repo: https://github.com/sbrunner/hooks

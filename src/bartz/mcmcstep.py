@@ -50,6 +50,7 @@ from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
 from bartz import grove
+from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import (
     minimal_unsigned_dtype,
     split,
@@ -452,7 +453,7 @@ def _choose_suffstat_batch_size(
     return resid_batch_size, count_batch_size
 
 
-@jax.jit
+@jit_if_not_profiling
 def step(key: Key[Array, ''], bart: State) -> State:
     """
     Do one MCMC step.
@@ -576,6 +577,7 @@ class Moves(Module):
     to_prune: None | Bool[Array, ' num_trees']
 
 
+@jit_and_block_if_profiling
 def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     """
     Propose moves for all the trees.
@@ -1574,6 +1576,7 @@ class ParallelStageOut(Module):
     prelf: PreLf
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def accept_moves_parallel_stage(
     key: Key[Array, ''], bart: State, moves: Moves
 ) -> ParallelStageOut:
@@ -2223,6 +2226,11 @@ def precompute_leaf_terms_mv(
     )
 
 
+@jit_and_block_if_profiling
+# it would make sense to donate the `bart` attribute of `pso`, but I would have
+# to keep the state out of ParallelStageOut; I can do that but I leave it alone
+# now to avoid potential merge conflicts with other work. The same holds for
+# `pso.moves`.
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
@@ -2545,6 +2553,7 @@ def compute_likelihood_ratio_mv(
     return prelkv.sqrt_term + exp_term
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(0,))
 def accept_moves_final_stage(bart: State, moves: Moves) -> State:
     """
     Post-process the mcmc state after accepting/rejecting the moves.
@@ -2631,6 +2640,7 @@ def apply_moves_to_split_trees(
     )
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_sigma(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the error variance (factor).
@@ -2706,6 +2716,7 @@ def _sample_wishart_bartlett(
     return T @ T.T
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_z(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the latent variable for binary regression.
@@ -2728,6 +2739,7 @@ def step_z(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, z=z, resid=resid)
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_s(key: Key[Array, ''], bart: State) -> State:
     """
     Update `log_s` using Dirichlet sampling.
@@ -2767,6 +2779,7 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, forest=replace(bart.forest, log_s=log_s))
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> State:
     """
     Update `theta`.

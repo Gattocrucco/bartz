@@ -1,6 +1,6 @@
-# bartz/src/bartz/__init__.py
+# bartz/tests/aux_tests.py
 #
-# Copyright (c) 2024-2025, The Bartz Contributors
+# Copyright (c) 2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -22,12 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""
-Super-fast BART (Bayesian Additive Regression Trees) in Python.
+"""Tests that for some reason don't fit in pytest."""
 
-See the manual at https://gattocrucco.github.io/bartz/docs
-"""
+from tests.test_profiler import TestJitAndBlockIfProfiling
 
-from bartz import BART, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
-from bartz._profiler import profile  # noqa: F401
-from bartz._version import __version__  # noqa: F401
+TestJitAndBlockIfProfiling().test_blocks_execution()
