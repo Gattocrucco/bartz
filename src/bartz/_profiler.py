@@ -24,7 +24,7 @@
 
 """Module with utilities related to profiling bartz."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from cProfile import Profile
 from functools import wraps
@@ -136,7 +136,11 @@ def trace(outfile: Path | str | None = None) -> Iterator[None]:
 
 
 def jit_and_block_if_profiling(
-    func: Callable[..., T], *args, **kwargs
+    func: Callable[..., T],
+    *,
+    static_argnums: int | Sequence[int] | None = None,
+    static_argnames: None = None,
+    **kwargs,
 ) -> Callable[..., T]:
     """Apply JIT compilation and block if profiling is enabled.
 
@@ -148,7 +152,10 @@ def jit_and_block_if_profiling(
     ----------
     func
         Function to wrap.
-    *args
+    static_argnums
+        Positional arguments that are folded into the compiled function.
+    static_argnames
+        This argument is not supported.
     **kwargs
         Additional arguments to pass to `jax.jit`.
 
@@ -162,7 +169,9 @@ def jit_and_block_if_profiling(
     jax trace events and pstats dummy functions with names `jab_compile[func_name]`
     and `jab_run[func_name]` are created.
     """
-    jitted_func = jit(func, *args, **kwargs)
+    assert static_argnames is None, 'static_argnames is not supported'
+
+    jitted_func = jit(func, static_argnums=static_argnums, **kwargs)
 
     compile_event_name = f'jab_compile[{func.__name__}]'
 
@@ -170,7 +179,7 @@ def jit_and_block_if_profiling(
         with TraceAnnotation(compile_event_name):
             return func.lower(*args, **kwargs).compile()
 
-    compile_wrapper.__code__.replace(
+    compile_wrapper.__code__ = compile_wrapper.__code__.replace(
         co_name=compile_event_name,
         co_filename=func.__code__.co_filename,
         co_firstlineno=func.__code__.co_firstlineno,
@@ -178,12 +187,18 @@ def jit_and_block_if_profiling(
 
     run_event_name = f'jab_run[{func.__name__}]'
 
+    if static_argnums is None:
+        static_argnums = ()
+    if isinstance(static_argnums, int):
+        static_argnums = (static_argnums,)
+
     def run_wrapper(func: Compiled, *args, **kwargs) -> T:
+        runtime_args = [a for i, a in enumerate(args) if i not in static_argnums]
         with TraceAnnotation(run_event_name):
-            result = func(*args, **kwargs)
+            result = func(*runtime_args, **kwargs)
             return block_until_ready(result)
 
-    run_wrapper.__code__.replace(
+    run_wrapper.__code__ = run_wrapper.__code__.replace(
         co_name=run_event_name,
         co_filename=func.__code__.co_filename,
         co_firstlineno=func.__code__.co_firstlineno,
