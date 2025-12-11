@@ -1662,11 +1662,11 @@ def accept_moves_parallel_stage(
 
     Parameters
     ----------
-    key : jax.dtypes.prng_key array
+    key
         A jax random key.
-    bart : dict
+    bart
         A BART mcmc state.
-    moves : dict
+    moves
         The proposed moves, see `propose_moves`.
 
     Returns
@@ -2861,7 +2861,7 @@ def step_sigma2_prec(key: Key[Array, ''], bart: State) -> State:
     -------
     The new BART MCMC state with an updated `error_cov_inv` (precision).
     """
-    k, n = bart.resid.shape
+    n = bart.resid.shape[-1]
     df_post = bart.error_cov_inv_df + n
     scale_post = bart.error_cov_inv_scale + bart.resid @ bart.resid.T
 

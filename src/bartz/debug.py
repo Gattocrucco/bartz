@@ -1029,7 +1029,7 @@ class SamplePriorX(Module):
         assert len(seq) == 2**p_nonterminal.size - 1
         node = [node for node, depth in seq]
         depth = [depth for node, depth in seq]
-        next_depth = depth[1:] + [p_nonterminal.size]
+        next_depth = [*depth[1:], p_nonterminal.size]
         return cls(
             node=jnp.array(node),
             depth=jnp.array(depth),

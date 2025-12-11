@@ -93,7 +93,7 @@ class TestQuantilizer:
     def test_one_value(self):
         """Check there's only 1 bin (0 splits) if there is 1 datapoint."""
         x = jnp.arange(10)[:, None]
-        splits, max_split = quantilized_splits_from_matrix(x, 100)
+        _, max_split = quantilized_splits_from_matrix(x, 100)
         assert_array_equal(max_split, jnp.full(len(x), 0))
 
     def test_zero_values(self):

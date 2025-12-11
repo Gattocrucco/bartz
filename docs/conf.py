@@ -32,28 +32,26 @@ import datetime
 import inspect
 import os
 import pathlib
-import subprocess
 import sys
 from functools import cached_property
 
+import git
 from packaging import version as pkgversion
 
 # -- Doc variant -------------------------------------------------------------
 
+repo = git.Repo(search_parent_directories=True)
+
 variant = os.environ.get('BARTZ_DOC_VARIANT', 'dev')
 
 if variant == 'dev':
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    modif = subprocess.run(['git', 'diff', '--quiet'], check=False).returncode
-    modif_staged = subprocess.run(
-        ['git', 'diff', '--quiet', '--staged'], check=False
-    ).returncode
-    uncommitted_stuff = modif or modif_staged
+    commit = repo.head.commit.hexsha
+    uncommitted_stuff = repo.is_dirty()
     version = f'{commit[:7]}{"+" if uncommitted_stuff else ""}'
 
 elif variant == 'latest':
     # list git tags
-    tags = subprocess.check_output(['git', 'tag'], text=True).splitlines()
+    tags = [t.name for t in repo.tags]
     print(f'git tags: {tags}')
 
     # find final versions in tags
@@ -73,7 +71,7 @@ elif variant == 'latest':
     version, tag = versions[-1]
 
     # check it out and check it matches the version in the package
-    subprocess.run(['git', 'checkout', tag], check=True)
+    repo.git.checkout(tag)
     import bartz
 
     assert pkgversion.parse(bartz.__version__) == version
@@ -116,11 +114,10 @@ extensions = [
 # decide whether to use viewcode or linkcode extension
 ext = 'viewcode'  # copy source code in static website
 if not uncommitted_stuff:
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-    commit_on_github = subprocess.check_output(
-        ['git', 'branch', '--remotes', '--contains', commit], text=True
-    )
-    if commit_on_github.strip():
+    commit = repo.head.commit.hexsha
+    branches = repo.git.branch('--remotes', '--contains', commit)
+    commit_on_github = bool(branches.strip())
+    if commit_on_github:
         ext = 'linkcode'  # links to code on github
 extensions.append(f'sphinx.ext.{ext}')
 

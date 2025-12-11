@@ -422,15 +422,8 @@ def make_default_callback(
     def asarray_or_none(val: None | Any) -> None | Array:
         return None if val is None else jnp.asarray(val)
 
-    def callback(*, bart, callback_state, **kwargs):
-        print_state, sparse_state = callback_state
-        bart, _ = sparse_callback(callback_state=sparse_state, bart=bart, **kwargs)
-        print_callback(callback_state=print_state, bart=bart, **kwargs)
-        return bart, callback_state
-        # here I assume that the callbacks don't update their states
-
     return dict(
-        callback=callback,
+        callback=_default_callback,
         callback_state=(
             PrintCallbackState(
                 asarray_or_none(dot_every), asarray_or_none(report_every)
@@ -438,6 +431,14 @@ def make_default_callback(
             SparseCallbackState(asarray_or_none(sparse_on_at)),
         ),
     )
+
+
+def _default_callback(*, bart, callback_state, **kwargs):
+    print_state, sparse_state = callback_state
+    bart, _ = sparse_callback(callback_state=sparse_state, bart=bart, **kwargs)
+    print_callback(callback_state=print_state, bart=bart, **kwargs)
+    return bart, callback_state
+    # here I assume that the callbacks don't update their states
 
 
 class PrintCallbackState(Module):

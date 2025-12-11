@@ -31,6 +31,7 @@ OLD_DATE = 2025-05-15
 .PHONY: all
 all:
 	@echo "Available targets:"
+	@echo "- setup: create R and Python environments for development"
 	@echo "- tests: run unit tests, saving coverage information"
 	@echo "- tests-old: run unit tests with oldest supported python and dependencies"
 	@echo "- docs: build html documentation"
@@ -38,6 +39,14 @@ all:
 	@echo "- covreport: build html coverage report"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
+	@echo "- upload-test: upload release to TestPyPI"
+	@echo "- asv-run: run benchmarks on all unbenchmarked tagged releases and main"
+	@echo "- asv-publish: create html benchmark report"
+	@echo "- asv-preview: create html report and start server"
+	@echo "- asv-main: run benchmarks on main branch"
+	@echo "- asv-quick: run quick benchmarks on current code, no saving"
+	@echo "- ipython: start an ipython shell with stuff pre-imported"
+	@echo "- ipython-old: start an ipython shell with oldest supported python and dependencies"
 	@echo
 	@echo "Release workflow:"
 	@echo "- $$ uv version --bump major|minor|patch"
@@ -45,11 +54,14 @@ all:
 	@echo "- $$ make release (repeat until it goes smoothly)"
 	@echo "- push and check CI completes (if it doesn't, go to previous step)"
 	@echo "- $$ make upload"
-	## make upload should also update the docs automatically because it pushes
-	## a tag which triggers a workflow, however last time it didn't work. I made
-	## a change to try to fix it, see if it works on the next release.
 	@echo "- publish github release (updates zenodo automatically)"
-	@echo "- press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml"
+	@echo "- if the online docs are not up-to-date, press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml, and try to understand why 'make upload' didn't do it"
+
+
+.PHONY: setup
+setup:
+	Rscript -e "renv::restore()"
+	uv run --all-groups pre-commit install
 
 
 ################# TESTS #################
@@ -154,9 +166,9 @@ upload-test: check-committed
 
 ASV = $(UV_RUN_CI) python -m asv
 
-.PHONY: asv-all-tags
-asv-all-tags:
-	git tag | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
+.PHONY: asv-run
+asv-run:
+	$(UV_RUN_CI) python config/refs-for-asv.py | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
 .PHONY: asv-publish
 asv-publish:

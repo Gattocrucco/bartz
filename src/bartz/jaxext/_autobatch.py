@@ -133,14 +133,14 @@ def move_axes_in(axes, tree):
 
 def batch(tree, nbatches):
     def batch(x):
-        return x.reshape((nbatches, x.shape[0] // nbatches) + x.shape[1:])
+        return x.reshape(nbatches, x.shape[0] // nbatches, *x.shape[1:])
 
     return tree_map(batch, tree)
 
 
 def unbatch(tree):
     def unbatch(x):
-        return x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:])
+        return x.reshape(x.shape[0] * x.shape[1], *x.shape[2:])
 
     return tree_map(unbatch, tree)
 

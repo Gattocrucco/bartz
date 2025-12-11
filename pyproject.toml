@@ -54,9 +54,8 @@ only-local = [
     "matplotlib>=3.10.3",
     "matplotlib-label-lines>=0.8.1",
     "pre-commit>=4.2.0",
-    "pydoclint>=0.6.6",
-    "ruff>=0.11.9",
     "scikit-learn>=1.6.1",
+    "snakeviz>=2.2.2",
     "tomli>=2.2.1",
     "virtualenv>=20.31.2",
     "xgboost>=3.0.0",
@@ -64,6 +63,8 @@ only-local = [
 ci = [
     "asv>=0.6.4",
     "coverage>=7.8.0",
+    "flaky>=3.8.1",
+    "gitpython>=3.1.43",
     "myst-parser>=4.0.1",
     "packaging>=25.0",
     "polars[pandas,pyarrow]>=1.29.0",
@@ -190,7 +191,6 @@ ignore = [
     "RET505",  # Unnecessary `{branch}` after `return` statement. I ignore this because I like to keep branches for readability.
     "RET506",  # Unnecessary `else` after `raise` statement. I ignore this because I like to keep branches for readability.
     "S101",    # Use of `assert` detected. Too annoying.
-    "S603",    # `subprocess` call: check for execution of untrusted input. Too many false positives.
     "SIM108",  # SIM108 Use ternary operator `*` instead of `if`-`else`-block, I find blocks more readable
     "UP037",   # Remove quotes from type annotation. Ignore because jaxtyping.
 ]
@@ -229,11 +229,6 @@ banned-module-level-imports = ["bartz.debug"]
 ban-relative-imports = "all"
 
 [tool.pydoclint]
-baseline = "config/pydoclint-baseline.txt"
-auto-regenerate-baseline = false
-# auto-regenerate = false because in pre-commit pydoclint does not see the
-# unmodified files, thinks those errors are gone, and removes them from the
-# baseline.
 arg-type-hints-in-signature = true
 arg-type-hints-in-docstring = false
 check-return-types = false

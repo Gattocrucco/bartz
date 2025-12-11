@@ -10,13 +10,14 @@
         "version": "afd40ad3255f218a76e6833332dc91afa0d19ac0f6daf1b7b9c75664c4586d28"
     },
     "speed.TimeGbart.time_gbart": {
-        "code": "class TimeGbart:\n    def time_gbart(self, *_):\n        \"\"\"Time instantiating the class.\"\"\"\n        with redirect_stdout(StringIO()):\n            bart = gbart(**self.kw)\n            block_until_ready((bart._mcmc_state, bart._main_trace))\n\n    def setup(self, niters: int, cache: Cache):\n        \"\"\"Prepare the arguments and run once to warm-up.\"\"\"\n        key = random.key(2025_06_24_14_55)\n        keys = list(random.split(key, 3))\n    \n        # generate simulated data\n        sigma = 0.1\n        T = 2\n        X = random.uniform(keys.pop(), (P, N), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (N,))\n    \n        # arguments\n        self.kw = dict(\n            x_train=X, y_train=y, nskip=niters // 2, ndpost=niters // 2, seed=keys.pop()\n        )\n    \n        # decide how much to cold-start\n        match cache:\n            case 'cold':\n                clear_caches()\n            case 'warm':\n                self.time_gbart()",
+        "code": "class TimeGbart:\n    def time_gbart(self, *_):\n        \"\"\"Time instantiating the class.\"\"\"\n        with redirect_stdout(StringIO()):\n            bart = gbart(**self.kw)\n            block_until_ready((bart._mcmc_state, bart._main_trace))\n\n    def setup(self, niters: int, cache: Cache, nchains: int):\n        \"\"\"Prepare the arguments and run once to warm-up.\"\"\"\n        # check support for multiple chains\n        if (niters == 0 or cache == 'cold') and nchains > 1:\n            msg = 'skip multi-chain with 0 iterations or cold cache'\n            raise NotImplementedError(msg)\n    \n        sig = signature(gbart)\n        support_multichain = 'mc_cores' in sig.parameters\n        if nchains != 1 and not support_multichain:\n            msg = 'multi-chain not supported'\n            raise NotImplementedError(msg)\n    \n        # random seed\n        key = random.key(2025_06_24_14_55)\n        keys = list(random.split(key, 3))\n    \n        # generate simulated data\n        sigma = 0.1\n        T = 2\n        X = random.uniform(keys.pop(), (P, N), float, -2, 2)\n        f = lambda X: jnp.sum(jnp.cos(2 * jnp.pi / T * X), axis=0)\n        y = f(X) + sigma * random.normal(keys.pop(), (N,))\n    \n        # arguments\n        self.kw = dict(\n            x_train=X,\n            y_train=y,\n            nskip=niters // 2,\n            ndpost=(niters - niters // 2) * nchains,\n            seed=keys.pop(),\n        )\n        if support_multichain:\n            self.kw.update(mc_cores=nchains)\n    \n        # decide how much to cold-start\n        match cache:\n            case 'cold':\n                clear_caches()\n            case 'warm':\n                self.time_gbart()",
         "min_run_count": 2,
         "name": "speed.TimeGbart.time_gbart",
         "number": 1,
         "param_names": [
             "niters",
-            "cache"
+            "cache",
+            "nchains"
         ],
         "params": [
             [
@@ -26,6 +27,12 @@
             [
                 "'cold'",
                 "'warm'"
+            ],
+            [
+                "1",
+                "2",
+                "8",
+                "32"
             ]
         ],
         "repeat": 0,
@@ -34,7 +41,7 @@
         "timeout": 30.0,
         "type": "time",
         "unit": "seconds",
-        "version": "1fe5943941f41dee62eb4fb1c3edc876b9b67f248bf23df9a206f775040e3b18",
+        "version": "127118a7023d5587f25f10a56bbccd86f8200efd5a4c22fe60fa246df36599a4",
         "warmup_time": 0.0
     },
     "speed.TimeRunMcmc.time_run_mcmc": {
@@ -71,7 +78,7 @@
         "warmup_time": 0.0
     },
     "speed.TimeStep.time_step": {
-        "code": "class TimeStep:\n    def time_step(self, mode: Mode, _):\n        \"\"\"Time running compiling `step` or running it a few times.\"\"\"\n        match mode:\n            case 'compile':\n    \n                @jit\n                def f(*args):\n                    return self.func(*args)\n    \n                f.lower(*self.args).compile()\n    \n            case 'run':\n                block_until_ready(self.compiled_func(*self.args))\n\n    def setup(self, mode: Mode, kind: Kind):\n        \"\"\"Create an initial MCMC state and random seed, compile & warm-up.\"\"\"\n        key = random.key(2025_06_24_12_07)\n        keys = list(random.split(key, 3))\n        self.args = (keys, simple_init(P, N, NTREE, kind))\n    \n        def func(keys, bart):\n            bart = step(key=keys.pop(), bart=bart)\n            if kind == 'sparse':\n                bart = mcmcstep.step_s(keys.pop(), bart)\n                bart = mcmcstep.step_theta(keys.pop(), bart)\n            return bart\n    \n        self.func = func\n        self.compiled_func = jit(func).lower(*self.args).compile()\n        if mode == 'run':\n            block_until_ready(self.compiled_func(*self.args))",
+        "code": "class TimeStep:\n    def time_step(self, mode: Mode, _):\n        \"\"\"Time running compiling `step` or running it a few times.\"\"\"\n        match mode:\n            case 'compile':\n    \n                @jit\n                def f(*args):\n                    return self.func(*args)\n    \n                f.lower(*self.args).compile()\n    \n            case 'run':\n                block_until_ready(self.compiled_func(*self.args))\n\n    def setup(self, mode: Mode, kind: Kind):\n        \"\"\"Create an initial MCMC state and random seed, compile & warm-up.\"\"\"\n        key = random.key(2025_06_24_12_07)\n        if kind.startswith('vmap-'):\n            length = int(kind.split('-')[1])\n            keys = list(random.split(key, (2, length)))\n        else:\n            keys = list(random.split(key))\n    \n        self.args = (keys, simple_init(P, N, NTREE, kind))\n    \n        def func(keys, bart):\n            bart = step(key=keys.pop(), bart=bart)\n            if kind == 'sparse':\n                bart = mcmcstep.step_sparse(keys.pop(), bart)\n            return bart\n    \n        if kind.startswith('vmap-'):\n            axes = vmap_axes_for_state(self.args[1])\n            func = vmap(func, in_axes=(0, axes), out_axes=axes)\n    \n        self.func = func\n        self.compiled_func = jit(func).lower(*self.args).compile()\n        if mode == 'run':\n            block_until_ready(self.compiled_func(*self.args))",
         "min_run_count": 2,
         "name": "speed.TimeStep.time_step",
         "number": 0,
@@ -88,7 +95,9 @@
                 "'plain'",
                 "'binary'",
                 "'weights'",
-                "'sparse'"
+                "'sparse'",
+                "'vmap-1'",
+                "'vmap-2'"
             ]
         ],
         "repeat": 0,
@@ -97,7 +106,7 @@
         "timeout": 30.0,
         "type": "time",
         "unit": "seconds",
-        "version": "016855713b9e67a97a9217ad7a428d0b61edcbe3508e1bac4118933127fbfb4b",
+        "version": "fed013a2153c474f5396625e7a319060a4a7d94e98d92dbd9b48f275c7a082e7",
         "warmup_time": -1
     },
     "version": 2
