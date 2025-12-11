@@ -113,7 +113,7 @@ def profile(outfile: Path | str | None = None) -> Iterator[Profile]:
     In profiling mode, the MCMC loop is not compiled into a single function, but
     instead compiled in smaller pieces that are instrumented to show up in the
     jax tracer and Python profiling statistics. Search for function names
-    starting with 'jab_' (see `jit_and_block_if_not_profiling`).
+    starting with 'jab' (see `jit_and_block_if_not_profiling`).
 
     Jax tracing is not enabled by this context manager and if used must be
     handled separately by the user; this context manager only makes sure that
