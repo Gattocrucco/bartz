@@ -123,7 +123,7 @@ class Forest(Module):
         See `step_theta`.
     """
 
-    leaf_tree: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees 2**d k']
+    leaf_tree: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k 2**d']
     var_tree: UInt[Array, 'num_trees 2**(d-1)']
     split_tree: UInt[Array, 'num_trees 2**(d-1)']
     affluence_tree: Bool[Array, 'num_trees 2**(d-1)']
@@ -181,7 +181,7 @@ class State(Module):
         variance. `None` in binary regression.
     error_cov_inv_df
     error_cov_inv_scale
-        The df and scale parameters of the inverse Wishard prior on the noise covariance matrix.
+        The df and scale parameters of the inverse Wishart prior on the noise covariance matrix.
     kind
         Inidicator of regression type.
     forest
@@ -189,10 +189,10 @@ class State(Module):
     """
 
     X: UInt[Array, 'p n']
-    y: Float32[Array, ' n'] | Float32[Array, ' n k'] | Bool[Array, ' n']
+    y: Float32[Array, ' n'] | Float32[Array, ' k n'] | Bool[Array, ' n']
     z: None | Float32[Array, ' n']
     offset: Float32[Array, ''] | Float32[Array, ' k']
-    resid: Float32[Array, ' n'] | Float32[Array, ' n k']
+    resid: Float32[Array, ' n'] | Float32[Array, ' k n']
     sigma2: Float32[Array, ''] | None
     error_cov_inv: Float32[Array, 'k k'] | None
     prec_scale: Float32[Array, ' n'] | None
@@ -207,7 +207,7 @@ class State(Module):
 def _init_kind_parameters(
     kind: Literal['binary', 'uv', 'mv'] | None,
     y: Float32[Any, ' n'] | Bool[Any, ' n'],
-    k: int,
+    k: int | None,
     error_scale: Float32[Any, ' n'] | None,
     sigma2_alpha: float | Float32[Any, ''] | None,
     sigma2_beta: float | Float32[Any, ''] | None,
@@ -218,7 +218,7 @@ def _init_kind_parameters(
     if kind is None:
         if y.dtype == bool:
             kind = 'binary'
-        elif k == 1:
+        elif k == None:
             kind = 'uv'
         else:
             kind = 'mv'
@@ -246,12 +246,12 @@ def _init_kind_parameters(
 def init(
     *,
     X: UInt[Any, 'p n'],
-    y: Float32[Any, ' n'] | Bool[Any, ' n'],
-    offset: float | Float32[Any, ''] = 0.0,
+    y: Float32[Any, ' n'] | Float32[Array, ' k n'] | Bool[Any, ' n'],
+    offset: float | Float32[Any, ''] | Float32[Any, ' k'] = 0.0,
     max_split: UInt[Any, ' p'],
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
-    sigma_mu2: float | Float32[Any, ''],
+    sigma_mu2: float | Float32[Any, ''] | None,
     leaf_prior_cov_inv: Float32[Array, 'k k'] | None = None,
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
@@ -373,20 +373,15 @@ def init(
     def make_forest(max_depth, dtype):
         return grove.make_tree(max_depth, dtype)
 
-    @partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
-    def make_vector_leaf_forest(max_depth, k, dtype):
-        return grove.make_vector_leaf_tree(max_depth, k, dtype)
-
     y = jnp.asarray(y)
-    n = int(y.shape[0]) if y.ndim > 0 else int(y.size)
+    n = y.shape[-1]
+    is_binary = y.dtype == bool
+    k = None if (is_binary or y.ndim == 1) else y.shape[0]
     offset = jnp.asarray(offset)
 
     resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
-
-    is_binary = y.dtype == bool
-    k = 1 if (is_binary or y.ndim == 1) else int(y.shape[1])
 
     kind, sigma2, error_cov_inv, sigma2_alpha, sigma2_beta = _init_kind_parameters(
         kind,
@@ -418,7 +413,9 @@ def init(
         log_s = jnp.zeros(max_split.size)
 
     if kind == 'mv':
-        leaf_tree = make_vector_leaf_forest(max_depth, k, jnp.float32)
+        leaf_tree = jax.vmap(
+            make_forest, in_axes=(None, None), out_axes=1, axis_size=k
+        )(max_depth, jnp.float32)
     else:
         leaf_tree = make_forest(max_depth, jnp.float32)
 
@@ -549,7 +546,6 @@ def step(key: Key[Array, ''], bart: State) -> State:
     """
     keys = split(key)
 
-    # if bart.y.dtype == bool:  # binary regression
     if bart.kind == 'binary':
         bart = replace(bart, sigma2=jnp.float32(1))
         bart = step_trees(keys.pop(), bart)
@@ -1745,10 +1741,8 @@ def accept_moves_parallel_stage(
         ),
     )
 
-    # pre-compute some likelihood ratio & posterior terms
-    sigma = bart.error_cov_inv if bart.kind == 'mv' else bart.sigma2
-    assert sigma is not None
     if bart.kind == 'mv':
+        assert bart.error_cov_inv is not None
         prelkv, prelk = precompute_likelihood_terms_mv(
             bart.error_cov_inv, bart.forest.leaf_prior_cov_inv, move_precs
         )
@@ -1756,6 +1750,7 @@ def accept_moves_parallel_stage(
             key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
         )
     else:
+        assert bart.sigma2 is not None
         prelkv, prelk = precompute_likelihood_terms_uv(
             bart.sigma2, bart.forest.sigma_mu2, move_precs
         )
@@ -2337,41 +2332,20 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     moves : Moves
         The accepted/rejected moves, with `acc` and `to_prune` set.
     """
-    if pso.bart.kind == 'mv':
 
-        def loop_mv(resid, pt):
-            resid, leaf_tree, acc, to_prune, lkratio = accept_move_and_sample_leaves_mv(
-                resid,
-                SeqStageInAllTrees(
-                    pso.bart.X,
-                    pso.bart.forest.resid_batch_size,
-                    pso.bart.prec_scale,  # This will be None for MV
-                    pso.bart.forest.log_likelihood is not None,
-                    pso.prelk,
-                ),
-                pt,
-            )
-            return resid, (leaf_tree, acc, to_prune, lkratio)
-
-        loop_func = loop_mv
-
-    else:
-
-        def loop_uv(resid, pt):
-            resid, leaf_tree, acc, to_prune, lkratio = accept_move_and_sample_leaves_uv(
-                resid,
-                SeqStageInAllTrees(
-                    pso.bart.X,
-                    pso.bart.forest.resid_batch_size,
-                    pso.bart.prec_scale,
-                    pso.bart.forest.log_likelihood is not None,
-                    pso.prelk,
-                ),
-                pt,
-            )
-            return resid, (leaf_tree, acc, to_prune, lkratio)
-
-        loop_func = loop_uv
+    def loop(resid, pt):
+        resid, leaf_tree, acc, to_prune, lkratio = accept_move_and_sample_leaves(
+            resid,
+            SeqStageInAllTrees(
+                pso.bart.X,
+                pso.bart.forest.resid_batch_size,
+                pso.bart.prec_scale,
+                pso.bart.forest.log_likelihood is not None,
+                pso.prelk,
+            ),
+            pt,
+        )
+        return resid, (leaf_tree, acc, to_prune, lkratio)
 
     pts = SeqStageInPerTree(
         pso.bart.forest.leaf_tree,
@@ -2382,9 +2356,7 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
         pso.prelkv,
         pso.prelf,
     )
-    resid, (leaf_trees, acc, to_prune, lkratio) = lax.scan(
-        loop_func, pso.bart.resid, pts
-    )
+    resid, (leaf_trees, acc, to_prune, lkratio) = lax.scan(loop, pso.bart.resid, pts)
 
     bart = replace(
         pso.bart,
@@ -2446,7 +2418,7 @@ class SeqStageInPerTree(Module):
         are specific to the tree.
     """
 
-    leaf_tree: Float32[Array, ' 2**d'] | Float32[Array, ' 2**d k']
+    leaf_tree: Float32[Array, ' 2**d'] | Float32[Array, ' k 2**d']
     prec_tree: Float32[Array, ' 2**d']
     move: Moves
     move_precs: Precs | Counts
@@ -2455,11 +2427,13 @@ class SeqStageInPerTree(Module):
     prelf: PreLf
 
 
-def accept_move_and_sample_leaves_uv(
-    resid: Float32[Array, ' n'], at: SeqStageInAllTrees, pt: SeqStageInPerTree
+def accept_move_and_sample_leaves(
+    resid: Float32[Array, ' n'] | Float32[Array, ' k n'],
+    at: SeqStageInAllTrees,
+    pt: SeqStageInPerTree,
 ) -> tuple[
-    Float32[Array, ' n'],
-    Float32[Array, ' 2**d'],
+    Float32[Array, ' n'] | Float32[Array, ' k n'],
+    Float32[Array, ' 2**d'] | Float32[Array, ' 2**d k'],
     Bool[Array, ''],
     Bool[Array, ''],
     Float32[Array, ''] | None,
@@ -2478,9 +2452,9 @@ def accept_move_and_sample_leaves_uv(
 
     Returns
     -------
-    resid : Float32[Array, 'n']
+    resid : Float32[Array, 'n'] | Float32[Array, ' k n']
         The updated residuals (data minus forest value).
-    leaf_tree : Float32[Array, '2**d']
+    leaf_tree : Float32[Array, '2**d'] | Float32[Array, ' k 2**d']
         The new leaf values of the tree.
     acc : Bool[Array, '']
         Whether the move was accepted.
@@ -2496,24 +2470,38 @@ def accept_move_and_sample_leaves_uv(
         scaled_resid = resid
     else:
         scaled_resid = resid * at.prec_scale
-    resid_tree = sum_resid(
-        scaled_resid, pt.leaf_indices, pt.leaf_tree.size, at.resid_batch_size
-    )
+
+    tree_size = pt.leaf_tree.shape[-1]  # 2**d
+
+    if resid.ndim > 1:
+        resid_tree = sum_resid_vec(
+            scaled_resid, pt.leaf_indices, tree_size, at.resid_batch_size
+        )
+    else:
+        resid_tree = sum_resid(
+            scaled_resid, pt.leaf_indices, pt.leaf_tree.size, at.resid_batch_size
+        )
 
     # subtract starting tree from function
     resid_tree += pt.prec_tree * pt.leaf_tree
 
-    # sum residuals in parent node modified by move
-    resid_left = resid_tree[pt.move.left]
-    resid_right = resid_tree[pt.move.right]
+    # sum residuals in parent node modified by move and compute likelihood
+    resid_left = resid_tree[..., pt.move.left]
+    resid_right = resid_tree[..., pt.move.right]
     resid_total = resid_left + resid_right
     assert pt.move.node.dtype == jnp.int32
-    resid_tree = resid_tree.at[pt.move.node].set(resid_total)
+    resid_tree = resid_tree.at[..., pt.move.node].set(resid_total)
 
-    # compute acceptance ratio
-    log_lk_ratio = compute_likelihood_ratio_uv(
-        resid_total, resid_left, resid_right, pt.prelkv, at.prelk
-    )
+    if resid.ndim > 1:
+        log_lk_ratio = compute_likelihood_ratio_mv(
+            resid_total, resid_left, resid_right, pt.prelkv, at.prelk
+        )
+    else:
+        log_lk_ratio = compute_likelihood_ratio_uv(
+            resid_total, resid_left, resid_right, pt.prelkv, at.prelk
+        )
+
+    # calculate accept/reject ratio
     log_ratio = pt.move.log_trans_prior_ratio + log_lk_ratio
     log_ratio = jnp.where(pt.move.grow, log_ratio, -log_ratio)
     if not at.save_ratios:
@@ -2523,20 +2511,22 @@ def accept_move_and_sample_leaves_uv(
     acc = pt.move.allowed & (pt.move.logu <= log_ratio)
 
     # compute leaves posterior and sample leaves
-    mean_post = resid_tree * pt.prelf.mean_factor
+    if resid.ndim > 1:
+        mean_post = jnp.einsum('nij,jn->in', pt.prelf.mean_factor, resid_tree)
+    else:
+        mean_post = resid_tree * pt.prelf.mean_factor
     leaf_tree = mean_post + pt.prelf.centered_leaves
 
     # copy leaves around such that the leaf indices point to the correct leaf
     to_prune = acc ^ pt.move.grow
     leaf_tree = (
-        leaf_tree.at[jnp.where(to_prune, pt.move.left, leaf_tree.size)]
-        .set(leaf_tree[pt.move.node])
-        .at[jnp.where(to_prune, pt.move.right, leaf_tree.size)]
-        .set(leaf_tree[pt.move.node])
+        leaf_tree.at[..., jnp.where(to_prune, pt.move.left, tree_size)]
+        .set(leaf_tree[..., pt.move.node])
+        .at[..., jnp.where(to_prune, pt.move.right, tree_size)]
+        .set(leaf_tree[..., pt.move.node])
     )
-
     # replace old tree with new tree in function values
-    resid += (pt.leaf_tree - leaf_tree)[pt.leaf_indices]
+    resid += (pt.leaf_tree - leaf_tree)[..., pt.leaf_indices]
 
     return resid, leaf_tree, acc, to_prune, log_lk_ratio
 
@@ -2574,40 +2564,13 @@ def sum_resid(
     return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32)
 
 
-def _aggregate_scatter_vec(
-    values: Float32[Array, '*'],
-    indices: Integer[Array, '*'],
-    size: int,
-    dtype: jnp.dtype,
-) -> Float32[Array, '{size} k']:
-    """Unbatched scatter-add for (n,k) values."""
-    return jnp.zeros((size, values.shape[1]), dtype).at[indices, :].add(values)
-
-
-def _aggregate_batched_onetree_vec(
-    values: Float32[Array, '*'],
-    indices: Integer[Array, '*'],
-    size: int,
-    dtype: jnp.dtype,
-    batch_size: int,
-) -> Float32[Array, '{size} k']:
-    n = indices.shape[0]
-    nbatches = n // batch_size + bool(n % batch_size)
-    batch_indices = jnp.arange(n) % nbatches
-    return (
-        jnp.zeros((size, values.shape[1], nbatches), dtype)
-        .at[indices, :, batch_indices]
-        .add(values)
-        .sum(axis=2)
-    )
-
-
+@partial(vmap_nodoc, in_axes=(0, None, None, None))
 def sum_resid_vec(
-    scaled_resid: Float32[Array, ' n k'],
+    scaled_resid: Float32[Array, ' k n'],
     leaf_indices: UInt[Array, ' n'],
     tree_size: int,
     batch_size: int | None,
-) -> Float32[Array, ' {tree_size} k']:
+) -> Float32[Array, ' k {tree_size}']:
     """
     Sum the residuals in each leaf.
 
@@ -2629,14 +2592,7 @@ def sum_resid_vec(
     Per-leaf sums of residual vectors; equivalent to applying `sum_resid` to
     each of the ``k`` outcome columns.
     """
-    if batch_size is None:
-        return _aggregate_scatter_vec(
-            scaled_resid, leaf_indices, tree_size, jnp.float32
-        )
-    else:
-        return _aggregate_batched_onetree_vec(
-            scaled_resid, leaf_indices, tree_size, jnp.float32, batch_size
-        )
+    return sum_resid(scaled_resid, leaf_indices, tree_size, batch_size)
 
 
 def _aggregate_batched_onetree(
@@ -2655,92 +2611,6 @@ def _aggregate_batched_onetree(
         .add(values)
         .sum(axis=1)
     )
-
-
-def accept_move_and_sample_leaves_mv(
-    resid: Float32[Array, ' n k'], at: SeqStageInAllTrees, pt: SeqStageInPerTree
-) -> tuple[
-    Float32[Array, ' n k'],
-    Float32[Array, ' 2**d k'],
-    Bool[Array, ''],
-    Bool[Array, ''],
-    Float32[Array, ''] | None,
-]:
-    """
-    Accept or reject a proposed move and sample the new leaf values, for vector leaf nodes.
-
-    Parameters
-    ----------
-    resid
-        The residuals (data minus forest value).
-    at
-        The inputs that are the same for all trees.
-    pt
-        The inputs that are separate for each tree.
-
-    Returns
-    -------
-    resid : Float32[Array, 'n k']
-        The updated residuals (data minus forest value).
-    leaf_tree : Float32[Array, '2**d k']
-        The new leaf values of the tree.
-    acc : Bool[Array, '']
-        Whether the move was accepted.
-    to_prune : Bool[Array, '']
-        Whether, to reflect the acceptance status of the move, the state should
-        be updated by pruning the leaves involved in the move.
-    log_lk_ratio : Float32[Array, ''] | None
-        The logarithm of the likelihood ratio for the move. `None` if not to be
-        saved.
-    """
-    # sum residuals in each leaf, in tree proposed by grow move
-    if at.prec_scale is None:
-        scaled_resid = resid
-    else:
-        scaled_resid = resid * at.prec_scale[:, None]
-    resid_tree = sum_resid_vec(
-        scaled_resid, pt.leaf_indices, pt.leaf_tree.shape[0], at.resid_batch_size
-    )
-
-    # subtract starting tree from function
-    resid_tree += pt.prec_tree[..., None] * pt.leaf_tree
-
-    # sum residuals in parent node modified by move
-    resid_left = resid_tree[pt.move.left, :]
-    resid_right = resid_tree[pt.move.right, :]
-    resid_total = resid_left + resid_right
-    assert pt.move.node.dtype == jnp.int32
-    resid_tree = resid_tree.at[pt.move.node, :].set(resid_total)
-
-    # compute acceptance ratio
-    log_lk_ratio = compute_likelihood_ratio_mv(
-        resid_total, resid_left, resid_right, pt.prelkv, at.prelk
-    )
-    log_ratio = pt.move.log_trans_prior_ratio + log_lk_ratio
-    log_ratio = jnp.where(pt.move.grow, log_ratio, -log_ratio)
-    if not at.save_ratios:
-        log_lk_ratio = None
-
-    # determine whether to accept the move
-    acc = pt.move.allowed & (pt.move.logu <= log_ratio)
-
-    # compute leaves posterior and sample leaves
-    mean_post = (pt.prelf.mean_factor @ resid_tree[..., None]).squeeze(-1)
-    leaf_tree = mean_post + pt.prelf.centered_leaves
-
-    # copy leaves around such that the leaf indices point to the correct leaf
-    to_prune = acc ^ pt.move.grow
-    leaf_tree = (
-        leaf_tree.at[jnp.where(to_prune, pt.move.left, leaf_tree.shape[0])]
-        .set(leaf_tree[pt.move.node])
-        .at[jnp.where(to_prune, pt.move.right, leaf_tree.shape[0])]
-        .set(leaf_tree[pt.move.node])
-    )
-
-    # replace old tree with new tree in function values
-    resid += (pt.leaf_tree - leaf_tree)[pt.leaf_indices]
-
-    return resid, leaf_tree, acc, to_prune, log_lk_ratio
 
 
 def compute_likelihood_ratio_uv(
@@ -2991,9 +2861,9 @@ def step_sigma2_prec(key: Key[Array, ''], bart: State) -> State:
     -------
     The new BART MCMC state with an updated `error_cov_inv` (precision).
     """
-    n, k = bart.resid.shape
+    k, n = bart.resid.shape
     df_post = bart.error_cov_inv_df + n
-    scale_post = bart.error_cov_inv_scale + bart.resid.T @ bart.resid
+    scale_post = bart.error_cov_inv_scale + bart.resid @ bart.resid.T
 
     prec = _sample_wishart_bartlett(key, df_post, scale_post)
     return replace(bart, error_cov_inv=prec)
