@@ -220,6 +220,12 @@ def test_split(keys):
     assert not different_keys(key2, key23[0])
     assert not different_keys(key3, key23[1])
 
+    ks = jaxext.split(random.clone(key), 3)
+    key123 = ks.pop((1, 3, 1))
+    assert not different_keys(key1, key123[:, 0])
+    assert not different_keys(key2, key123[:, 1])
+    assert not different_keys(key3, key123[:, 2])
+
 
 class TestJaxPatches:
     """Check that some jax stuff I patch is correct and still to be patched."""

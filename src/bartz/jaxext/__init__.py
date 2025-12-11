@@ -31,9 +31,9 @@ from functools import partial
 import jax
 from jax import jit, random
 from jax import numpy as jnp
-from jax.lax import dynamic_slice_in_dim, scan
+from jax.lax import scan
 from jax.scipy.special import ndtr
-from jaxtyping import Array, Bool, Float32, Integer, Key, Scalar, Shaped
+from jaxtyping import Array, Bool, Float32, Key, Scalar, Shaped
 
 from bartz.jaxext._autobatch import autobatch  # noqa: F401
 from bartz.jaxext.scipy.special import ndtri
@@ -159,7 +159,15 @@ class split:
         if size_to_pop > len(self):
             msg = f'Cannot pop {size_to_pop} keys from {len(self)} keys'
             raise IndexError(msg)
-        popped_keys = _pop(self._keys, self._num_used, size_to_pop, shape)
+        # to make the following faster I tried to compile a helper function that
+        # used dynamic_slice_in_dim; it was faster, but it messed up key reuse
+        # checks
+        if shape == ():
+            popped_keys = self._keys[self._num_used]
+        else:
+            popped_keys = self._keys[self._num_used : self._num_used + size_to_pop]
+            if len(shape) > 1:
+                popped_keys = popped_keys.reshape(shape)
         self._num_used += size_to_pop
         return popped_keys
 
@@ -167,17 +175,6 @@ class split:
 @partial(jit, static_argnums=(1,))
 def _split(key: Key[Array, ''], num: int) -> Key[Array, ' {num}']:
     return random.split(key, num)
-
-
-@partial(jit, static_argnums=(2, 3))
-def _pop(
-    keys: Key[Array, ' total'],
-    num_used: Integer[Array, ''],
-    size_to_pop: int,
-    shape: tuple[int, ...],
-) -> Key[Array, '*']:
-    popped_keys = dynamic_slice_in_dim(keys, num_used, size_to_pop)
-    return popped_keys.reshape(shape)
 
 
 def truncated_normal_onesided(
