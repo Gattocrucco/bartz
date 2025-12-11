@@ -483,6 +483,8 @@ class PrintCallbackState(Module):
     report_every: Int32[Array, ''] | None
 
 
+@jit
+# this jit is for profiling mode, otherwise lax.cond would recompile every time
 def print_callback(
     *,
     bart: State,
@@ -528,7 +530,7 @@ def print_callback(
         if callback_state.dot_every is not None:
             lax.cond(
                 report_cond & dot_cond,
-                lambda: debug.callback(lambda: print(), ordered=True),  # noqa: T201
+                lambda: debug.callback(print, ordered=True),
                 lambda: None,
             )
 
