@@ -26,7 +26,7 @@
 
 from functools import wraps
 
-from jax import ShapeDtypeStruct, pure_callback
+from jax import ShapeDtypeStruct, jit, pure_callback
 from jax import numpy as jnp
 from scipy.special import gammainccinv as scipy_gammainccinv
 
@@ -45,10 +45,9 @@ def _castto(func, dtype):
     return newfunc
 
 
+@jit
 def gammainccinv(a, y):
     """Survival function inverse of the Gamma(a, 1) distribution."""
-    a = jnp.asarray(a)
-    y = jnp.asarray(y)
     shape = jnp.broadcast_shapes(a.shape, y.shape)
     dtype = _float_type(a.dtype, y.dtype)
     dummy = ShapeDtypeStruct(shape, dtype)
