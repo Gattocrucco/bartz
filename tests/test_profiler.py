@@ -24,9 +24,10 @@
 
 """Test `bartz._profiler`."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from cProfile import Profile
 from functools import partial
-from pathlib import Path
 from pstats import Stats
 from time import perf_counter, sleep
 
@@ -40,7 +41,6 @@ from bartz._profiler import (
     get_profile_mode,
     jit_and_block_if_profiling,
     jit_if_not_profiling,
-    profile,
     profile_mode,
     scan_if_not_profiling,
     set_profile_mode,
@@ -279,6 +279,37 @@ class TestJitAndBlockIfProfiling:
             f'Expected async execution << {expected:#.2g}s, got {elapsed:#.2g}s'
         )
 
+    def test_profile(self):
+        """Test `jit_and_block_if_profiling` under the Python profiler."""
+        runtime = 0.1
+        tracetime = 0.05
+
+        @jit_and_block_if_profiling
+        def awlkugh():  # weird name to make sure identifiers are legit
+            x = jnp.int32(0)
+            sleep(tracetime)
+
+            def sleeper(x):
+                sleep(runtime)
+                return x
+
+            return pure_callback(sleeper, x, x)
+
+        with profile_mode(True):
+            awlkugh()  # warm-up
+
+        with python_profile() as prof, profile_mode(True):
+            awlkugh()
+
+        stats = Stats(prof).get_stats_profile()
+
+        assert 'awlkugh' not in stats.func_profiles
+        # it's not there because it was traced during warm-up
+
+        p_run = stats.func_profiles['jab_inner_wrapper']
+
+        assert runtime < p_run.cumtime < 1.5 * runtime
+
 
 @partial(jit, static_argnums=(0,))
 def idle(steps: int):
@@ -296,40 +327,12 @@ def idle(steps: int):
     return x
 
 
-@pytest.mark.parametrize('use_file', [True, False])
-def test_profile(tmp_path: Path, use_file: bool):
-    """Test the context manager `profile`."""
-    outfile = tmp_path / 'profile.prof' if use_file else None
-    runtime = 0.1
-    tracetime = 0.05
-
-    @jit_and_block_if_profiling
-    def awlkugh():  # weird name to make sure identifiers are legit
-        x = jnp.int32(0)
-        sleep(tracetime)
-
-        def sleeper(x):
-            sleep(runtime)
-            return x
-
-        return pure_callback(sleeper, x, x)
-
-    with profile():
-        awlkugh()  # warm-up
-
-    with profile(outfile) as prof:
-        awlkugh()
-
-    def check_profile(profile: Profile | str):
-        stats = Stats(profile).get_stats_profile()
-
-        assert 'awlkugh' not in stats.func_profiles
-        # it's not there because it was traced during warm-up
-
-        p_run = stats.func_profiles['jab[awlkugh]']
-
-        assert runtime < p_run.cumtime < 1.5 * runtime
-
-    check_profile(prof)
-    if outfile is not None:
-        check_profile(str(outfile))
+@contextmanager
+def python_profile() -> Iterator[Profile]:
+    """Context manager to profile a block of code using cProfile."""
+    profiler = Profile()
+    profiler.enable()
+    try:
+        yield profiler
+    finally:
+        profiler.disable()
