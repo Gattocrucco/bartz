@@ -35,13 +35,14 @@ from typing import Any, Protocol
 import jax
 import numpy
 from equinox import Module
-from jax import debug, jit, lax, tree
+from jax import jit, lax, tree
 from jax import numpy as jnp
 from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
 
 from bartz import grove, jaxext, mcmcstep
 from bartz._profiler import (
+    callback_if_not_profiling,
     cond_if_not_profiling,
     jit_if_not_profiling,
     scan_if_not_profiling,
@@ -484,8 +485,10 @@ class PrintCallbackState(Module):
     report_every: Int32[Array, ''] | None
 
 
-@jit
-# this jit is for profiling mode, otherwise lax.cond would recompile every time
+# it would make sense to jit this for profiling mode, but for some reason it's
+# 2x slower than using cond_if_not_profiling and callback_if_not_profiling.
+# maybe jax is taking a lot of time to handle it because of inputs which are not
+# already arrays?
 def print_callback(
     *,
     bart: State,
@@ -500,9 +503,9 @@ def print_callback(
     """Print a dot and/or a report periodically during the MCMC."""
     if callback_state.dot_every is not None:
         dot_cond = (i_total + 1) % callback_state.dot_every == 0
-        lax.cond(
+        cond_if_not_profiling(
             dot_cond,
-            lambda: debug.callback(
+            lambda: callback_if_not_profiling(
                 lambda: print('.', end='', flush=True),  # noqa: T201
                 ordered=True,
             ),
@@ -513,7 +516,7 @@ def print_callback(
     if callback_state.report_every is not None:
 
         def print_report():
-            debug.callback(
+            callback_if_not_profiling(
                 _print_report,
                 burnin=burnin,
                 i_total=i_total,
@@ -529,13 +532,13 @@ def print_callback(
 
         # print a newline after dots
         if callback_state.dot_every is not None:
-            lax.cond(
+            cond_if_not_profiling(
                 report_cond & dot_cond,
-                lambda: debug.callback(print, ordered=True),
+                lambda: callback_if_not_profiling(print, ordered=True),
                 lambda: None,
             )
 
-        lax.cond(report_cond, print_report, lambda: None)
+        cond_if_not_profiling(report_cond, print_report, lambda: None)
 
 
 def _convert_jax_arrays_in_args(func: Callable) -> Callable:

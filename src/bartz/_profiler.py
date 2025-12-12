@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import Any, TypeVar
 
-from jax import block_until_ready, jit
+from jax import block_until_ready, debug, jit
 from jax.lax import cond, scan
 from jax.profiler import TraceAnnotation
 from jaxtyping import Array, Bool
@@ -239,3 +239,19 @@ def cond_if_not_profiling(
             return false_fun(*operands)
     else:
         return cond(pred, true_fun, false_fun, *operands)
+
+
+def callback_if_not_profiling(
+    callback: Callable[..., None],
+    *args: Any,
+    ordered: bool = False,
+    partitioned: bool = False,
+    **kwargs: Any,
+):
+    """Restricted replacement for `jax.debug.callback` that calls the callback directly in profiling mode."""
+    if get_profile_mode():
+        callback(*args, **kwargs)
+    else:
+        debug.callback(
+            callback, *args, ordered=ordered, partitioned=partitioned, **kwargs
+        )
