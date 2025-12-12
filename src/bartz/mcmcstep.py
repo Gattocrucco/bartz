@@ -1611,9 +1611,9 @@ class PreLf(Module):
         obtain the posterior leaf samples.
     """
 
-    mean_factor: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees 2**d k k']
+    mean_factor: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k k 2**d']
     centered_leaves: (
-        Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees 2**d k']
+        Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k 2**d']
     )
 
 
@@ -2433,7 +2433,7 @@ def accept_move_and_sample_leaves(
     pt: SeqStageInPerTree,
 ) -> tuple[
     Float32[Array, ' n'] | Float32[Array, ' k n'],
-    Float32[Array, ' 2**d'] | Float32[Array, ' 2**d k'],
+    Float32[Array, ' 2**d'] | Float32[Array, ' k 2**d'],
     Bool[Array, ''],
     Bool[Array, ''],
     Float32[Array, ''] | None,
