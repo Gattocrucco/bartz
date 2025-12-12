@@ -214,17 +214,20 @@ def test_split(keys):
 
     ks = jaxext.split(random.clone(key), 3)
     key1a = ks.pop()
-    key23 = ks.pop(2)
+    key2a = ks.pop(2)
+    key3a = ks.pop()
 
     assert not different_keys(key1, key1a)
-    assert not different_keys(key2, key23[0])
-    assert not different_keys(key3, key23[1])
+    assert not different_keys(random.split(key2), key2a)
+    assert not different_keys(key3, key3a)
 
-    ks = jaxext.split(random.clone(key), 3)
-    key123 = ks.pop((1, 3, 1))
-    assert not different_keys(key1, key123[:, 0])
-    assert not different_keys(key2, key123[:, 1])
-    assert not different_keys(key3, key123[:, 2])
+    ks = jaxext.split(keys.pop(), 1)
+    key = ks.pop((2, 3, 5))
+    assert key.shape == (2, 3, 5)
+    assert len(ks) == 0
+
+    ks = jaxext.split(keys.pop())
+    assert len(ks) == 2
 
 
 class TestJaxPatches:

@@ -598,7 +598,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     The proposed move for each tree.
     """
     num_trees, _ = forest.leaf_tree.shape
-    keys = split(key, 1 + 2 * num_trees)
+    keys = split(key, 3)
 
     # compute moves
     grow_moves = propose_grow_moves(

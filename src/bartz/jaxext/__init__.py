@@ -116,26 +116,26 @@ class split:
         The number of keys to split into.
     """
 
-    _keys: Key[Array, ' num']
+    _keys: tuple[Key[Array, ''], ...]
     _num_used: int
 
     def __init__(self, key: Key[Array, ''], num: int = 2):
-        self._keys = _split(key, num)
+        self._keys = _split_unpack(key, num)
         self._num_used = 0
 
     def __len__(self):
-        return self._keys.size - self._num_used
+        return len(self._keys) - self._num_used
 
-    def pop(self, shape: int | tuple[int, ...] | None = None) -> Key[Array, '*']:
+    def pop(self, shape: int | tuple[int, ...] = ()) -> Key[Array, '*']:
         """
         Pop one or more keys from the list.
 
         Parameters
         ----------
         shape
-            The shape of the keys to pop. If `None`, a single key is popped.
-            If an integer, that many keys are popped. If a tuple, the keys are
-            reshaped to that shape.
+            The shape of the keys to pop. If empty (default), a single key is
+            popped and returned. If not empty, the popped key is split and
+            reshaped to the target shape.
 
         Returns
         -------
@@ -144,37 +144,31 @@ class split:
         Raises
         ------
         IndexError
-            If `shape` is larger than the number of keys left in the list.
-
-        Notes
-        -----
-        The keys are popped from the beginning of the list, so for example
-        ``list(keys.pop(2))`` is equivalent to ``[keys.pop(), keys.pop()]``.
+            If the list is empty.
         """
-        if shape is None:
-            shape = ()
-        elif not isinstance(shape, tuple):
-            shape = (shape,)
-        size_to_pop = math.prod(shape)
-        if size_to_pop > len(self):
-            msg = f'Cannot pop {size_to_pop} keys from {len(self)} keys'
+        if len(self) == 0:
+            msg = 'No keys left to pop'
             raise IndexError(msg)
-        # to make the following faster I tried to compile a helper function that
-        # used dynamic_slice_in_dim; it was faster, but it messed up key reuse
-        # checks
-        if shape == ():
-            popped_keys = self._keys[self._num_used]
-        else:
-            popped_keys = self._keys[self._num_used : self._num_used + size_to_pop]
-            if len(shape) > 1:
-                popped_keys = popped_keys.reshape(shape)
-        self._num_used += size_to_pop
-        return popped_keys
+        if not isinstance(shape, tuple):
+            shape = (shape,)
+        key = self._keys[self._num_used]
+        self._num_used += 1
+        if shape:
+            key = _split_shaped(key, shape)
+        return key
 
 
 @partial(jit, static_argnums=(1,))
-def _split(key: Key[Array, ''], num: int) -> Key[Array, ' {num}']:
-    return random.split(key, num)
+def _split_unpack(key: Key[Array, ''], num: int) -> tuple[Key[Array, ''], ...]:
+    keys = random.split(key, num)
+    return tuple(keys)
+
+
+@partial(jit, static_argnums=(1,))
+def _split_shaped(key: Key[Array, ''], shape: tuple[int, ...]) -> Key[Array, '*']:
+    num = math.prod(shape)
+    keys = random.split(key, num)
+    return keys.reshape(shape)
 
 
 def truncated_normal_onesided(

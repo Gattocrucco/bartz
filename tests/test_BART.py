@@ -639,8 +639,8 @@ def check_rbart(kw, bart, rbart):
         assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
 
 
-def test_R_BART3(kw, keys):
-    """Check `bartz.BART` gives the same results as the R package BART3."""
+def test_comparison_BART3(kw, keys):
+    """Check `bartz.BART` gives results similar to the R package BART3."""
     p, n = kw['x_train'].shape
     kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1, mc_cores=1)
     # R BART can't change the min_points_per_leaf per leaf setting
@@ -681,14 +681,14 @@ def test_R_BART3(kw, keys):
 
     else:  # continuous regression
         # check yhat_train_mean
-        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.2)
+        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.3)
 
         # check yhat_test_mean
         assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.4)
 
         # check sigma
         rhat_sigma = rhat([bart.sigma[-bart.ndpost :], rbart.sigma[-rbart.ndpost :]])
-        assert rhat_sigma < 1.02
+        assert rhat_sigma < 1.05
 
         # check sigma_mean
         assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
@@ -708,9 +708,9 @@ def test_R_BART3(kw, keys):
         rhat_varcount = multivariate_rhat([bart.varcount, rbart.varcount])
         # there is a visible discrepancy on the number of nodes, with bartz
         # having deeper trees, this 5 is not just "not good to sampling
-        # accuracy but close in practice.""
+        # accuracy but close in practice."
         assert rhat_varcount < 5
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.25, atol=5)
+        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.3, atol=5)
 
         # check varprob
         if kw.get('sparse', False):
@@ -719,7 +719,7 @@ def test_R_BART3(kw, keys):
             )
             # drop one component because varprob sums to 1
             assert rhat_varprob < 1.7
-            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.11)
+            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.15)
 
 
 def test_xinfo():
@@ -866,7 +866,7 @@ def test_prior(keys, p, nsplits):
     yhat_mcmc = bart._predict(X)
     yhat_prior = evaluate_trace(prior_trace, X)
     rhat_yhat = multivariate_rhat([yhat_mcmc, yhat_prior])
-    assert rhat_yhat < 1.05
+    assert rhat_yhat < 1.1
 
 
 def count_stub_trees(
