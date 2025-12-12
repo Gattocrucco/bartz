@@ -35,7 +35,7 @@ from typing import Any, Protocol
 import jax
 import numpy
 from equinox import Module
-from jax import jit, lax, tree
+from jax import debug, jit, lax, tree
 from jax import numpy as jnp
 from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
@@ -487,10 +487,6 @@ class PrintCallbackState(Module):
     report_every: Int32[Array, ''] | None
 
 
-# it would make sense to jit this for profiling mode, but for some reason it's
-# 2x slower than using cond_if_not_profiling and callback_if_not_profiling.
-# maybe jax is taking a lot of time to handle it because of inputs which are not
-# already arrays?
 def print_callback(
     *,
     bart: State,
@@ -518,7 +514,7 @@ def print_callback(
     if callback_state.report_every is not None:
 
         def print_report():
-            callback_if_not_profiling(
+            debug.callback(
                 _print_report,
                 burnin=burnin,
                 i_total=i_total,
