@@ -856,11 +856,22 @@ class mc_gbart(Module):
     @classmethod
     def _single_run_mcmc(
         cls, key: Key[Array, ''], bart: mcmcstep.State, *args, **kwargs
-    ):
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
         out = mcmcloop.run_mcmc(key, bart, *args, **kwargs)
+        return cls._add_multichain_index(out)
+
+    @classmethod
+    @partial(jax.jit, static_argnums=(0,))
+    def _add_multichain_index(
+        cls,
+        run_mcmc_output: tuple[
+            mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace
+        ],
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
+        bart, _, _ = run_mcmc_output
         axes = cls._vmap_axes_for_state(bart)
         return jax.vmap(lambda x: x, in_axes=None, out_axes=(axes, 0, 0), axis_size=1)(
-            out
+            run_mcmc_output
         )
 
     @classmethod
