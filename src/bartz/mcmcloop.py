@@ -28,7 +28,7 @@ The entry points are `run_mcmc` and `make_default_callback`.
 """
 
 from collections.abc import Callable
-from dataclasses import fields, replace
+from dataclasses import fields
 from functools import partial, wraps
 from typing import Any, Protocol
 
@@ -317,21 +317,22 @@ def _run_mcmc_inner_loop(
         """Loop body to run if i_total < n_iters."""
         # split random key
         keys = jaxext.split(carry.key, 3)
-        carry = replace(carry, key=keys.pop())
+        key = keys.pop()
 
         # update state
-        carry = replace(carry, bart=mcmcstep.step(keys.pop(), carry.bart))
+        bart = mcmcstep.step(keys.pop(), carry.bart)
 
         # invoke callback
+        callback_state = carry.callback_state
         if callback is not None:
             i_skip = _compute_i_skip(carry.i_total, n_burn, n_skip)
             rt = callback(
                 key=keys.pop(),
-                bart=carry.bart,
+                bart=bart,
                 burnin=carry.i_total < n_burn,
                 i_total=carry.i_total,
                 i_skip=i_skip,
-                callback_state=carry.callback_state,
+                callback_state=callback_state,
                 n_burn=n_burn,
                 n_save=n_save,
                 n_skip=n_skip,
@@ -340,7 +341,6 @@ def _run_mcmc_inner_loop(
             )
             if rt is not None:
                 bart, callback_state = rt
-                carry = replace(carry, bart=bart, callback_state=callback_state)
 
         # save to trace
         burnin_trace, main_trace = _save_state_to_trace(
@@ -348,17 +348,19 @@ def _run_mcmc_inner_loop(
             carry.main_trace,
             burnin_extractor,
             main_extractor,
-            carry.bart,
+            bart,
             carry.i_total,
             n_burn,
             n_skip,
         )
 
-        return replace(
-            carry,
+        return _Carry(
+            bart=bart,
             i_total=carry.i_total + 1,
+            key=key,
             burnin_trace=burnin_trace,
             main_trace=main_trace,
+            callback_state=callback_state,
         )
 
     def loop_noop(carry: _Carry) -> _Carry:
