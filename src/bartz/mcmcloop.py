@@ -249,12 +249,8 @@ def run_mcmc(
     The number of MCMC updates is ``n_burn + n_skip * n_save``. The traces do
     not include the initial state, and include the final state.
     """
-
-    def empty_trace(length, bart, extractor):
-        return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
-
-    burnin_trace = empty_trace(n_burn, bart, burnin_extractor)
-    main_trace = empty_trace(n_save, bart, main_extractor)
+    burnin_trace = _empty_trace(n_burn, bart, burnin_extractor)
+    main_trace = _empty_trace(n_save, bart, main_extractor)
 
     # determine number of iterations for inner and outer loops
     n_iters = n_burn + n_skip * n_save
@@ -283,6 +279,11 @@ def run_mcmc(
         )
 
     return carry.bart, carry.burnin_trace, carry.main_trace
+
+
+@partial(jit, static_argnums=(0, 2))
+def _empty_trace(length: int, bart: State, extractor: Callable):
+    return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
 
 
 def _compute_i_skip(
