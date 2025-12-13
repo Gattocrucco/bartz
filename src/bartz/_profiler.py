@@ -97,17 +97,24 @@ def profile_mode(value: bool, /) -> Iterator[None]:
         set_profile_mode(old_value)
 
 
-def jit_and_block_if_profiling(func: Callable[..., T], **kwargs) -> Callable[..., T]:
+def jit_and_block_if_profiling(
+    func: Callable[..., T], block_before: bool = False, **kwargs
+) -> Callable[..., T]:
     """Apply JIT compilation and block if profiling is enabled.
 
     When profile mode is off, the function runs without JIT. When profile mode
-    is on, the function is JIT compiled and blocks inputs and outputs to ensure
-    proper profiling.
+    is on, the function is JIT compiled and blocks outputs to ensure proper
+    profiling.
 
     Parameters
     ----------
     func
         Function to wrap.
+    block_before
+        If True block inputs before passing them to the JIT-compiled function.
+        This ensures that any pending computations are completed before entering
+        the JIT-compiled function. This phase is not included in the trace
+        event.
     **kwargs
         Additional arguments to pass to `jax.jit`.
 
@@ -135,7 +142,8 @@ def jit_and_block_if_profiling(func: Callable[..., T], **kwargs) -> Callable[...
     @wraps(func)
     def jab_outer_wrapper(*args: Any, **kwargs: Any) -> T:
         if get_profile_mode():
-            args, kwargs = block_until_ready((args, kwargs))
+            if block_before:
+                args, kwargs = block_until_ready((args, kwargs))
             return jab_inner_wrapper(*args, **kwargs)
         else:
             return func(*args, **kwargs)
