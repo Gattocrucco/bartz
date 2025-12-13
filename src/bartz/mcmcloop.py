@@ -287,6 +287,7 @@ def _empty_trace(length: int, bart: State, extractor: Callable):
     return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
 
 
+@jit
 def _compute_i_skip(
     i_total: Int32[Array, ''], n_burn: Int32[Array, ''], n_skip: Int32[Array, '']
 ) -> Int32[Array, '']:
