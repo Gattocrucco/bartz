@@ -104,7 +104,7 @@ def jit_and_block_if_profiling(
 
     When profile mode is off, the function runs without JIT. When profile mode
     is on, the function is JIT compiled and blocks outputs to ensure proper
-    profiling.
+    timing.
 
     Parameters
     ----------
@@ -154,8 +154,8 @@ def jit_and_block_if_profiling(
 def jit_if_not_profiling(func: Callable[..., T], *args, **kwargs) -> Callable[..., T]:
     """Apply JIT compilation only when not profiling.
 
-    When profile mode is off, the function is JIT compiled for performance.
-    When profile mode is on, the function runs without JIT.
+    When profile mode is off, the function is JIT compiled. When profile mode is
+    on, the function runs as-is.
 
     Parameters
     ----------
