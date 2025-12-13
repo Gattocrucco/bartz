@@ -127,4 +127,4 @@ On the first run, the trace will show compilation operations, while subsequent r
 
 Open the provided URL in a browser. In the sidebar, select the tool "Trace Viewer".
 
-In "profile mode", the MCMC loop is split into a few chunks that are compiled separately, allowing to see at a glance how much time each phase of the MCMC cycle takes. This causes some overhead, so the timings are not equivalent to the normal mode ones. On some specific example on CPU, barts was 20% slower in profile mode with one chain, and 2x slower with multiple chains.
+In "profile mode", the MCMC loop is split into a few chunks that are compiled separately, allowing to see at a glance how much time each phase of the MCMC cycle takes. This causes some overhead, so the timings are not equivalent to the normal mode ones. On some specific example on CPU, Bartz was 20% slower in profile mode with one chain, and 2x slower with multiple chains.
