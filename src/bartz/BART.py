@@ -861,7 +861,7 @@ class mc_gbart(Module):
         return cls._add_multichain_index(out)
 
     @classmethod
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
     def _add_multichain_index(
         cls,
         run_mcmc_output: tuple[
