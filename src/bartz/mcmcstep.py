@@ -1576,7 +1576,7 @@ class ParallelStageOut(Module):
     prelf: PreLf
 
 
-@partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@partial(jit_and_block_if_profiling, donate_argnums=(1, 2))
 def accept_moves_parallel_stage(
     key: Key[Array, ''], bart: State, moves: Moves
 ) -> ParallelStageOut:
@@ -2226,11 +2226,6 @@ def precompute_leaf_terms_mv(
     )
 
 
-@jit_and_block_if_profiling
-# it would make sense to donate the `bart` attribute of `pso`, but I would have
-# to keep the state out of ParallelStageOut; I can do that but I leave it alone
-# now to avoid potential merge conflicts with other work. The same holds for
-# `pso.moves`.
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
@@ -2250,6 +2245,15 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     moves : Moves
         The accepted/rejected moves, with `acc` and `to_prune` set.
     """
+    return _accept_moves_sequential_stage(pso.bart, pso.moves, pso)
+
+
+@partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
+def _accept_moves_sequential_stage(
+    _bart: State, _moves: Moves, pso: ParallelStageOut
+) -> tuple[State, Moves]:
+    """Inner implementation with split arguments to allow buffer donation in profiling."""
+    pso = replace(pso, bart=_bart, moves=_moves)
 
     def loop(resid, pt):
         resid, leaf_tree, acc, to_prune, lkratio = accept_move_and_sample_leaves(
