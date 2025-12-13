@@ -29,6 +29,7 @@ This is the main suite of tests.
 
 import os
 import signal
+import sys
 import threading
 import time
 from collections.abc import Sequence
@@ -1316,6 +1317,10 @@ def merge_mcmc_state(ref_state: State, *states: State):
 class TestProfile:
     """Test the behavior of `mc_gbart` in profiling mode."""
 
+    @pytest.mark.xfail(
+        sys.version_info[:2] == (3, 10),
+        reason='With the old toolchain the results are similar but not exactly the same.',
+    )
     def test_same_result(self, kw: dict):
         """Check that the result is the same in profiling mode."""
         bart = mc_gbart(**kw)
@@ -1323,7 +1328,23 @@ class TestProfile:
             bartp = mc_gbart(**kw)
 
         def check_same(_path, x, xp):
-            assert_array_equal(x, xp)
+            assert_array_equal(xp, x)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
+
+    @pytest.mark.skipif(
+        sys.version_info[:2] != (3, 10),
+        reason='Redundant with the up-to-date toolchain.',
+    )
+    def test_similar_result(self, kw: dict):
+        """Check that the result is similar in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_allclose(xp, x, atol=1e-5, rtol=1e-5)
 
         tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)

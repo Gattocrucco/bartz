@@ -250,16 +250,10 @@ def cond_if_not_profiling(
 
 
 def callback_if_not_profiling(
-    callback: Callable[..., None],
-    *args: Any,
-    ordered: bool = False,
-    partitioned: bool = False,
-    **kwargs: Any,
+    callback: Callable[..., None], *args: Any, ordered: bool = False, **kwargs: Any
 ):
     """Restricted replacement for `jax.debug.callback` that calls the callback directly in profiling mode."""
     if get_profile_mode():
         callback(*args, **kwargs)
     else:
-        debug.callback(
-            callback, *args, ordered=ordered, partitioned=partitioned, **kwargs
-        )
+        debug.callback(callback, *args, ordered=ordered, **kwargs)
