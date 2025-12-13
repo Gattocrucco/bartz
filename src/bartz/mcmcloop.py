@@ -283,7 +283,9 @@ def run_mcmc(
 
 
 @partial(jit, static_argnums=(0, 2))
-def _empty_trace(length: int, bart: State, extractor: Callable):
+def _empty_trace(
+    length: int, bart: State, extractor: Callable[[State], PyTree]
+) -> PyTree:
     return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
 
 
