@@ -2245,7 +2245,11 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     moves : Moves
         The accepted/rejected moves, with `acc` and `to_prune` set.
     """
-    return _accept_moves_sequential_stage(pso.bart, pso.moves, pso)
+    return _accept_moves_sequential_stage(
+        pso.bart, pso.moves, replace(pso, bart=None, moves=None)
+    )
+    # note: if bart and moves are not elided from pso, jax *silently* does not
+    # donate the buffers, leading to redundant copies
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
@@ -2557,7 +2561,7 @@ def compute_likelihood_ratio_mv(
     return prelkv.sqrt_term + exp_term
 
 
-@partial(jit_and_block_if_profiling, donate_argnums=(0,))
+@partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
 def accept_moves_final_stage(bart: State, moves: Moves) -> State:
     """
     Post-process the mcmc state after accepting/rejecting the moves.
