@@ -24,8 +24,6 @@
 
 """Test `bartz._profiler`."""
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from cProfile import Profile
 from functools import partial
 from pstats import Stats
@@ -298,7 +296,7 @@ class TestJitAndBlockIfProfiling:
         with profile_mode(True):
             awlkugh()  # warm-up
 
-        with python_profile() as prof, profile_mode(True):
+        with Profile() as prof, profile_mode(True):
             awlkugh()
 
         stats = Stats(prof).get_stats_profile()
@@ -325,14 +323,3 @@ def idle(steps: int):
 
     x, _ = lax.scan(body, x, None, steps)
     return x
-
-
-@contextmanager
-def python_profile() -> Iterator[Profile]:
-    """Context manager to profile a block of code using cProfile."""
-    profiler = Profile()
-    profiler.enable()
-    try:
-        yield profiler
-    finally:
-        profiler.disable()
