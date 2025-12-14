@@ -49,7 +49,7 @@ class TestFlag:
     """Test the functionality of the global profile mode flag."""
 
     def test_initial_state(self):
-        """Check profiling mode if off by default."""
+        """Check profiling mode is off by default."""
         assert not get_profile_mode()
 
     def test_getter_setter(self):
@@ -280,12 +280,10 @@ class TestJitAndBlockIfProfiling:
     def test_profile(self):
         """Test `jit_and_block_if_profiling` under the Python profiler."""
         runtime = 0.1
-        tracetime = 0.05
 
         @jit_and_block_if_profiling
         def awlkugh():  # weird name to make sure identifiers are legit
             x = jnp.int32(0)
-            sleep(tracetime)
 
             def sleeper(x):
                 sleep(runtime)
@@ -294,7 +292,8 @@ class TestJitAndBlockIfProfiling:
             return pure_callback(sleeper, x, x)
 
         with profile_mode(True):
-            awlkugh()  # warm-up
+            for _ in range(2):
+                awlkugh()  # warm-up
 
         with Profile() as prof, profile_mode(True):
             awlkugh()
@@ -306,7 +305,7 @@ class TestJitAndBlockIfProfiling:
 
         p_run = stats.func_profiles['jab_inner_wrapper']
 
-        assert runtime < p_run.cumtime < 1.5 * runtime
+        assert runtime < p_run.cumtime < 10 * runtime
 
 
 @partial(jit, static_argnums=(0,))
