@@ -27,14 +27,14 @@
 This is the main suite of tests.
 """
 
-import os
-import signal
-import sys
-import threading
-import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from functools import partial
+from os import getpid, kill
+from signal import SIG_IGN, SIGINT, getsignal, signal
+from sys import version_info
+from threading import Event, Thread
+from time import monotonic
 from typing import Any, Literal
 
 import jax
@@ -1046,24 +1046,24 @@ class PeriodicSigintTimer:
     def __init__(self, *, first_after: float, interval: float, announce: bool):
         self.first_after = max(0.0, float(first_after))
         self.interval = max(0.001, float(interval))
-        self.pid = os.getpid()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.pid = getpid()
+        self._stop = Event()
+        self._thread: Thread | None = None
         self.sent = 0
         self.announce = announce
 
     def _run(self) -> None:
         """Run the main loop of the timer."""
-        t0 = time.monotonic()
+        t0 = monotonic()
         # Wait initial delay (cancellable)
         if self._stop.wait(self.first_after):
             return
         # Periodically send SIGINT until stopped
         while not self._stop.is_set():
-            os.kill(self.pid, signal.SIGINT)
+            kill(self.pid, SIGINT)
             self.sent += 1
             if self.announce:
-                elapsed = time.monotonic() - t0
+                elapsed = monotonic() - t0
                 print(
                     f'[PeriodicSigintTimer] sent SIGINT #{self.sent} at t={elapsed:.2f}s'
                 )
@@ -1073,9 +1073,7 @@ class PeriodicSigintTimer:
     def start(self) -> None:
         """Start the timer."""
         assert self._thread is None, 'Timer already started'
-        self._thread = threading.Thread(
-            target=self._run, name='PeriodicSigintTimer', daemon=True
-        )
+        self._thread = Thread(target=self._run, name='PeriodicSigintTimer', daemon=True)
         self._thread.start()
 
     def cancel(self) -> None:
@@ -1083,15 +1081,15 @@ class PeriodicSigintTimer:
         assert self._thread is not None, 'Timer not started'
 
         # Guard against a stray ^C arriving during teardown
-        prev = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        prev = getsignal(SIGINT)
+        signal(SIGINT, SIG_IGN)
 
         try:
             self._stop.set()
             if self.announce:
                 print(f'[PeriodicSigintTimer] stopped after {self.sent} SIGINT(s)')
         finally:
-            signal.signal(signal.SIGINT, prev)
+            signal(SIGINT, prev)
 
 
 @contextmanager
@@ -1318,7 +1316,7 @@ class TestProfile:
     """Test the behavior of `mc_gbart` in profiling mode."""
 
     @pytest.mark.xfail(
-        sys.version_info[:2] == (3, 10),
+        version_info[:2] == (3, 10),
         reason='With the old toolchain the results are similar but not exactly the same.',
     )
     def test_same_result(self, kw: dict):
@@ -1334,8 +1332,7 @@ class TestProfile:
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
 
     @pytest.mark.skipif(
-        sys.version_info[:2] != (3, 10),
-        reason='Redundant with the up-to-date toolchain.',
+        version_info[:2] != (3, 10), reason='Redundant with the up-to-date toolchain.'
     )
     def test_similar_result(self, kw: dict):
         """Check that the result is similar in profiling mode."""
