@@ -2787,7 +2787,7 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, forest=replace(bart.forest, log_s=log_s))
 
 
-@partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@partial(jit_and_block_if_profiling, donate_argnums=(1,), static_argnames=('num_grid',))
 def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> State:
     """
     Update `theta`.
