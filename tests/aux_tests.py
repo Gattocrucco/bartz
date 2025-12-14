@@ -1,4 +1,4 @@
-# bartz/src/bartz/jaxext/scipy/__init__.py
+# bartz/tests/aux_tests.py
 #
 # Copyright (c) 2025, The Bartz Contributors
 #
@@ -22,4 +22,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-"""Mockup of the :external:py:mod:`scipy` module."""
+"""Tests that for some reason don't fit in pytest."""
+
+from tests.test_profiler import TestJitAndBlockIfProfiling
+
+TestJitAndBlockIfProfiling().test_blocks_execution()

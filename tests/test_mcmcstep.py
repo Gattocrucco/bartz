@@ -1,6 +1,6 @@
 # bartz/tests/test_mcmcstep.py
 #
-# Copyright (c) 2025, Giacomo Petrillo
+# Copyright (c) 2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -39,7 +39,7 @@ def vmap_randint_masked(
 ) -> Int32[Array, '* n']:
     """Vectorized version of `randint_masked`."""
     vrm = vmap(randint_masked, in_axes=(0, None))
-    keys = split(key, size)
+    keys = split(key, 1)
     return vrm(keys.pop(size), mask)
 
 

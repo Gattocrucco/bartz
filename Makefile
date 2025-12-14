@@ -1,6 +1,6 @@
 # bartz/Makefile
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2024-2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -66,21 +66,26 @@ setup:
 
 ################# TESTS #################
 
-TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
+COVERAGE_RUN = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX)
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
+TESTS = -m pytest $(ARGS)
+AUX_TESTS = -m tests.aux_tests
 
 UV_RUN_CI = uv run --group ci
 UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
 UV_VARS_OLD = UV_PROJECT_ENVIRONMENT=.venv-old
+UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(UV_RUN_CI) $(TESTS_COMMAND)
+	$(UV_RUN_CI) $(COVERAGE_RUN) $(TESTS)
+	$(UV_RUN_CI) $(COVERAGE_RUN) --append $(AUX_TESTS)
 
 .PHONY: tests-old
 tests-old:
-	$(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
+	$(UV_RUN_CI_OLD) $(COVERAGE_RUN) $(TESTS)
+	$(UV_RUN_CI_OLD) $(COVERAGE_RUN) --append $(AUX_TESTS)
 
 
 ################# DOCS #################
