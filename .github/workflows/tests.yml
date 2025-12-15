@@ -81,7 +81,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target-suffix: ""
-          - os: macos-latest
+          - os: ubuntu-22.04
             target-suffix: "-old"
 
     steps:
@@ -127,7 +127,7 @@ jobs:
           if-no-files-found: error
 
   docs:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -163,7 +163,7 @@ jobs:
           if-no-files-found: error
 
   covreport:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     needs: [tests]
 
     steps:
