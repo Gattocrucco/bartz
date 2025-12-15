@@ -30,7 +30,7 @@ from pstats import Stats
 from time import perf_counter, sleep
 
 import pytest
-from jax import jit, lax, pure_callback, random
+from jax import debug_infs, debug_nans, jit, lax, pure_callback, random
 from jax import numpy as jnp
 from numpy.testing import assert_array_equal
 
@@ -233,49 +233,46 @@ class TestJitAndBlockIfProfiling:
             result = jitted_func(5)
             assert_array_equal(result, jnp.arange(5))
 
-    @pytest.mark.xfail(
-        reason='This test does not work when run under pytest, but works in isolation,'
-        " so it's invoked separately in the Makefile."
-    )
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
-        func = lambda: idle(100_000)  # 50 ms on my laptop
-        jit_func = jit(func)
-        jab_func = jit_and_block_if_profiling(func)
+        with debug_nans(False), debug_infs(False):
+            func = lambda: idle(100_000)  # 50 ms on my laptop
+            jit_func = jit(func)
+            jab_func = jit_and_block_if_profiling(func)
 
-        # Time the jitted function
-        for _ in range(2):
-            jit_func().block_until_ready()  # Warm-up
-        start = perf_counter()
-        jit_func().block_until_ready()
-        expected = perf_counter() - start
-
-        # Check execution is async
-        start = perf_counter()
-        result = jit_func()
-        elapsed = perf_counter() - start
-        result.block_until_ready()  # Ensure completion
-        assert elapsed < expected / 2  # Note: fails here in pytest
-
-        # Test profiling mode first (should block and wait >= expected)
-        with profile_mode(True):
-            jab_func()  # Warm-up
+            # Time the jitted function
+            for _ in range(2):
+                jit_func().block_until_ready()  # Warm-up
             start = perf_counter()
-            jab_func()
-            elapsed = perf_counter() - start
-            assert elapsed >= expected * 0.9, (
-                f'Expected blocking to wait >= {expected:#.2g}s, got {elapsed:#.2g}s'
-            )
+            jit_func().block_until_ready()
+            expected = perf_counter() - start
 
-        # Test non-profiling mode (should be async, < expected)
-        jab_func().block_until_ready()  # Warm-up
-        start = perf_counter()
-        result = jab_func()
-        elapsed = perf_counter() - start
-        result.block_until_ready()  # Ensure completion
-        assert elapsed < expected / 2, (
-            f'Expected async execution << {expected:#.2g}s, got {elapsed:#.2g}s'
-        )
+            # Check execution is async
+            start = perf_counter()
+            result = jit_func()
+            elapsed = perf_counter() - start
+            result.block_until_ready()  # Ensure completion
+            assert elapsed < expected / 2  # Note: fails here in pytest
+
+            # Test profiling mode first (should block and wait >= expected)
+            with profile_mode(True):
+                jab_func()  # Warm-up
+                start = perf_counter()
+                jab_func()
+                elapsed = perf_counter() - start
+                assert elapsed >= expected * 0.9, (
+                    f'Expected blocking to wait >= {expected:#.2g}s, got {elapsed:#.2g}s'
+                )
+
+            # Test non-profiling mode (should be async, < expected)
+            jab_func().block_until_ready()  # Warm-up
+            start = perf_counter()
+            result = jab_func()
+            elapsed = perf_counter() - start
+            result.block_until_ready()  # Ensure completion
+            assert elapsed < expected / 2, (
+                f'Expected async execution << {expected:#.2g}s, got {elapsed:#.2g}s'
+            )
 
     def test_profile(self):
         """Test `jit_and_block_if_profiling` under the Python profiler."""
