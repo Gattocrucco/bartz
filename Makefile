@@ -66,11 +66,9 @@ setup:
 
 ################# TESTS #################
 
-COVERAGE_RUN = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX)
+TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
 # I did not manage to make parallel pytest (pytest -n<processes>) work with
 # coverage
-TESTS = -m pytest $(ARGS)
-AUX_TESTS = -m tests.aux_tests
 
 UV_RUN_CI = uv run --group ci
 UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
@@ -79,13 +77,11 @@ UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(UV_RUN_CI) $(COVERAGE_RUN) $(TESTS)
-	$(UV_RUN_CI) $(COVERAGE_RUN) --append $(AUX_TESTS)
+	$(UV_RUN_CI) $(TESTS_COMMAND)
 
 .PHONY: tests-old
 tests-old:
-	$(UV_RUN_CI_OLD) $(COVERAGE_RUN) $(TESTS)
-	$(UV_RUN_CI_OLD) $(COVERAGE_RUN) --append $(AUX_TESTS)
+	$(UV_RUN_CI_OLD) $(TESTS_COMMAND)
 
 
 ################# DOCS #################
