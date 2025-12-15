@@ -145,6 +145,7 @@ ci = [
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "sphinx-autodoc-typehints", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "sphinx-autodoc-typehints", version = "3.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "tomli" },
 ]
 only-local = [
     { name = "appnope" },
@@ -155,7 +156,6 @@ only-local = [
     { name = "pre-commit" },
     { name = "scikit-learn" },
     { name = "snakeviz" },
-    { name = "tomli" },
     { name = "virtualenv" },
     { name = "xgboost" },
 ]
@@ -184,6 +184,7 @@ ci = [
     { name = "rpy2", specifier = ">=3.5.17" },
     { name = "sphinx", specifier = ">=8.1.3" },
     { name = "sphinx-autodoc-typehints", specifier = ">=3.0.1" },
+    { name = "tomli", specifier = ">=2.2.1" },
 ]
 only-local = [
     { name = "appnope", specifier = ">=0.1.4" },
@@ -193,7 +194,6 @@ only-local = [
     { name = "pre-commit", specifier = ">=4.2.0" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "snakeviz", specifier = ">=2.2.2" },
-    { name = "tomli", specifier = ">=2.2.1" },
     { name = "virtualenv", specifier = ">=20.31.2" },
     { name = "xgboost", specifier = ">=3.0.0" },
 ]
