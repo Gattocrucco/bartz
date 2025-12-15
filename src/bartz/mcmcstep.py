@@ -2226,6 +2226,7 @@ def precompute_leaf_terms_mv(
     )
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(0,))
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
@@ -2245,19 +2246,6 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     moves : Moves
         The accepted/rejected moves, with `acc` and `to_prune` set.
     """
-    return _accept_moves_sequential_stage(
-        pso.bart, pso.moves, replace(pso, bart=None, moves=None)
-    )
-    # note: if bart and moves are not elided from pso, jax *silently* does not
-    # donate the buffers, leading to redundant copies
-
-
-@partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
-def _accept_moves_sequential_stage(
-    _bart: State, _moves: Moves, pso: ParallelStageOut
-) -> tuple[State, Moves]:
-    """Inner implementation with split arguments to allow buffer donation in profiling."""
-    pso = replace(pso, bart=_bart, moves=_moves)
 
     def loop(resid, pt):
         resid, leaf_tree, acc, to_prune, lkratio = accept_move_and_sample_leaves(
