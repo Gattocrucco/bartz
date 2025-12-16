@@ -315,7 +315,7 @@ def _run_mcmc_inner_loop(
     n_skip: Int32[Array, ''],
     i_outer: Int32[Array, ''],
     n_iters: Int32[Array, ''],
-):
+) -> _Carry:
     def loop_impl(carry: _Carry) -> _Carry:
         """Loop body to run if i_total < n_iters."""
         # split random key
