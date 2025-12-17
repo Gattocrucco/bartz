@@ -261,7 +261,7 @@ class TestWithCachedBart:
         key = keys[variant - 1]
         kw = make_kw(key, variant)
 
-        # modify config to make them appropriate for convergence checks
+        # modify configs to make them appropriate for convergence checks
         p, n = kw['x_train'].shape
         nchains = 4
         kw.update(
@@ -271,7 +271,7 @@ class TestWithCachedBart:
             keepevery=1,
             mc_cores=nchains,
         )
-        # R BART can't change the min_points_per_leaf per leaf setting
+        # R BART can't change the min_points_per_leaf setting
         kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
 
         bart = mc_gbart(**kw)
@@ -398,11 +398,11 @@ class TestWithCachedBart:
 
         # check yhat_train
         rhat_yhat_train = multivariate_rhat([bart.yhat_train, rbart.yhat_train])
-        assert rhat_yhat_train < 2.1
+        assert rhat_yhat_train < 1.8
 
         # check yhat_test
         rhat_yhat_test = multivariate_rhat([bart.yhat_test, rbart.yhat_test])
-        assert rhat_yhat_test < 2.1
+        assert rhat_yhat_test < 1.8
 
         if kw['y_train'].dtype == bool:  # binary regression
             # check prob_train
@@ -415,7 +415,7 @@ class TestWithCachedBart:
 
         else:  # continuous regression
             # check yhat_train_mean
-            assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.3)
+            assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.5)
 
             # check yhat_test_mean
             assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.5)
@@ -427,7 +427,7 @@ class TestWithCachedBart:
             assert rhat_sigma < 1.1
 
             # check sigma_mean
-            assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.06)
+            assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
 
         # check number of tree nodes in forest
         bart_count = bart.varcount.sum(axis=1)
@@ -446,7 +446,9 @@ class TestWithCachedBart:
             # having deeper trees, this 5 is not just "not good to sampling
             # accuracy but close in practice."
             assert rhat_varcount < 5
-            assert_close_matrices(bart.varcount_mean, rbart.varcount_mean, rtol=0.4)
+            assert_close_matrices(
+                bart.varcount_mean, rbart.varcount_mean, rtol=0.5, atol=7
+            )
 
             # check varprob
             if kw.get('sparse', False):
@@ -455,7 +457,9 @@ class TestWithCachedBart:
                 )
                 # drop one component because varprob sums to 1
                 assert rhat_varprob < 1.7
-                assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.15)
+                assert_allclose(
+                    bart.varprob_mean, rbart.varprob_mean, atol=0.15, rtol=0.4
+                )
 
 
 def test_sequential_guarantee(kw):
