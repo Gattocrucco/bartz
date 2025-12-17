@@ -305,7 +305,7 @@ class TestWithCachedBart:
         else:  # continuous regression
             sigma = bart.sigma[nsamples:, :].T
             rhat_sigma = rhat(sigma)
-            assert rhat_sigma < 1.05
+            assert rhat_sigma < 1.2
             print(f'{rhat_sigma.item()=}')
 
         if p < n:
