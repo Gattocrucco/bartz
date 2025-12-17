@@ -383,7 +383,7 @@ class TimeGbart:
 class TimeRunMcmcVsTraceLength:
     """Timings of `run_mcmc` parametrized by length of the trace to save.
 
-    This benchmarks is intended to pin a bug where the whole trace is duplicated
+    This benchmark is intended to pin a bug where the whole trace is duplicated
     on every mcmc iteration.
     """
 

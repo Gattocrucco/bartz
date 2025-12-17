@@ -258,7 +258,7 @@ class TestWithCachedBart:
         # fixture is shared between multiple tests
         key = random.key(0x139CD0C0)
         keys = random.split(key, N_VARIANTS)
-        key = keys[variant]
+        key = keys[variant - 1]
         kw = make_kw(key, variant)
 
         # modify config to make them appropriate for convergence checks
@@ -357,7 +357,7 @@ class TestWithCachedBart:
         varcount = compute_varcount(meta.numcut.size, trace)
         assert jnp.all(varcount == rbart.varcount)
 
-        # chech yhat_train
+        # check yhat_train
         yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
         assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
 
