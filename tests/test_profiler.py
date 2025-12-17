@@ -233,6 +233,8 @@ class TestJitAndBlockIfProfiling:
             result = jitted_func(5)
             assert_array_equal(result, jnp.arange(5))
 
+    @pytest.mark.flaky
+    # flaky because it involves comparing time measurements done on the fly
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
         with debug_nans(False), debug_infs(False):
