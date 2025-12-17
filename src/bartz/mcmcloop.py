@@ -394,14 +394,16 @@ def _save_state_to_trace(
     n_burn: Int32[Array, ''],
     n_skip: Int32[Array, ''],
 ) -> tuple[PyTree, PyTree]:
-    def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
-        return _pytree_at_set(burnin_trace, i_total, burnin_extractor(bart)), main_trace
+    burnin_idx = i_total
+    main_idx = (i_total - n_burn) // n_skip
+    noop_idx = jnp.iinfo(jnp.int32).max
+    noop_cond = i_total < n_burn
+    main_idx = jnp.where(noop_cond, noop_idx, main_idx)
 
-    def save_to_main_trace() -> tuple[PyTree, PyTree]:
-        idx = (i_total - n_burn) // n_skip
-        return burnin_trace, _pytree_at_set(main_trace, idx, main_extractor(bart))
+    burnin_trace = _pytree_at_set(burnin_trace, burnin_idx, burnin_extractor(bart))
+    main_trace = _pytree_at_set(main_trace, main_idx, main_extractor(bart))
 
-    return lax.cond(i_total < n_burn, save_to_burnin_trace, save_to_main_trace)
+    return burnin_trace, main_trace
 
 
 def _pytree_at_set(
@@ -411,7 +413,7 @@ def _pytree_at_set(
 
     def at_set(dest, val):
         if dest.size:
-            return dest.at[index, ...].set(val)
+            return dest.at[index, ...].set(val, mode='drop')
         else:
             # this handles the case where an array is empty because jax refuses
             # to index into an array of length 0, even if just in the abstract
