@@ -131,7 +131,10 @@ def gen_y(
             return random.bernoulli(keys.pop(), prob, (n,))
 
 
-@pytest.fixture(params=[1, 2, 3])
+N_VARIANTS = 3
+
+
+@pytest.fixture(params=list(range(1, N_VARIANTS + 1)), scope='module')
 def variant(request) -> int:
     """Return a parametrized indicator to select different BART configurations."""
     return request.param
@@ -245,17 +248,16 @@ class CachedBart:
     bart: mc_gbart
 
 
-BART_CACHE: dict[int, CachedBart] = {}
+class TestWithCachedBart:
+    """Group of slow tests that check the same BART run, for efficiency."""
 
-
-@pytest.fixture
-def cachedbart(variant: int) -> CachedBart:
-    """Return a pre-computed BART."""
-    if variant not in BART_CACHE:
+    @pytest.fixture(scope='class')
+    def cachedbart(self, variant: int) -> CachedBart:
+        """Return a pre-computed BART."""
         # create a random seed that depends only on the variant, since this
         # fixture is shared between multiple tests
         key = random.key(0x139CD0C0)
-        keys = random.split(key, 3)
+        keys = random.split(key, N_VARIANTS)
         key = keys[variant]
         kw = make_kw(key, variant)
 
@@ -273,13 +275,8 @@ def cachedbart(variant: int) -> CachedBart:
         kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
 
         bart = mc_gbart(**kw)
-        BART_CACHE[variant] = CachedBart(kw, bart)
-    return BART_CACHE[variant]
 
-
-@pytest.mark.xdist_group(name='slow')
-class TestWithCachedBart:
-    """Group of slow tests that check the same BART run, for efficiency."""
+        return CachedBart(kwargs=kw, bart=bart)
 
     def test_residuals_accuracy(self, cachedbart: CachedBart):
         """Check that running residuals are close to the recomputed final residuals."""
