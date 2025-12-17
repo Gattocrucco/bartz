@@ -23,6 +23,8 @@
 # SOFTWARE.
 
 name: tests-docs
+permissions:
+  contents: read
 
 on:
   push:
