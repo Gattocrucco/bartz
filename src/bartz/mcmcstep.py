@@ -2691,7 +2691,7 @@ def compute_likelihood_ratio_mv(
 @partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
 def accept_moves_final_stage(bart: State, moves: Moves) -> State:
     """
-  Post-process the mcmc state after accepting/rejecting the moves.
+    Post-process the mcmc state after accepting/rejecting the moves.
 
     This function is separate from `accept_moves_sequential_stage` to signal it
     can work in parallel across trees.
