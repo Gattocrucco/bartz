@@ -104,11 +104,18 @@ docs-latest:
 
 .PHONY: covreport
 covreport:
-	$(UV_RUN_CI) coverage combine
-	$(UV_RUN_CI) coverage html
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage html --include='src/*'
 	@echo
-	@echo "Now open _site/index.html"
+	@echo "Now open _site/coverage/index.html"
 
+.PHONY: covcheck
+covcheck:
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage report --include='tests/*'
+	$(UV_RUN_CI) coverage report --include='src/*'
+	$(UV_RUN_CI) coverage report --include='tests/*' --fail-under=99 --format=total
+	$(UV_RUN_CI) coverage report --include='src/*' --fail-under=90 --format=total
 
 ################# RELEASE #################
 

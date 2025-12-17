@@ -87,7 +87,6 @@ addopts = [
     "--verbose",
     "--import-mode=importlib",
     "--cov-context=test",
-    "--cov-fail-under=90",
 ]
 filterwarnings = [
     "ignore:unclosed database:ResourceWarning",
@@ -97,7 +96,7 @@ timeout_method = "thread" # when jax hangs, signals do not work
 
 [tool.coverage.run]
 branch = true
-source = ["bartz"]
+source_pkgs = ["bartz", "tests"]
 
 [tool.coverage.report]
 show_missing = true
