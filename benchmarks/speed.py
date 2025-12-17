@@ -32,9 +32,12 @@ from itertools import product
 from re import escape, match
 from typing import Literal
 
+import jax
 from asv_runner.benchmarks.mark import skip_for_params
+from equinox import error_if
 from jax import block_until_ready, clear_caches, eval_shape, jit, random, vmap
 from jax import numpy as jnp
+from jax.errors import JaxRuntimeError
 from jax.tree import map_with_path
 from jax.tree_util import tree_map
 
@@ -375,3 +378,61 @@ class TimeGbart:
         with redirect_stdout(StringIO()):
             bart = gbart(**self.kw)
             block_until_ready((bart._mcmc_state, bart._main_trace))
+
+
+class TimeRunMcmcVsTraceLength:
+    """Timings of `run_mcmc` parametrized by length of the trace to save.
+
+    This benchmark is intended to pin a bug where the whole trace is duplicated
+    on every mcmc iteration.
+    """
+
+    # asv config
+    params: tuple[tuple[int, ...]] = ((2**6, 2**8, 2**10, 2**12, 2**14, 2**16),)
+    param_names = ('n_save',)
+    warmup_time = 0.0
+    number = 1
+
+    # other config
+    canary = 'canary happy-chinese-voiceover'
+
+    def setup(self, n_save: int):
+        """Prepare the arguments, compile the function, and run to warm-up."""
+        n_iters = min(self.params[0])
+
+        def callback(*, bart, i_total, **_):
+            # sigma2 is one of the last things modified in the mcmc loop, so
+            # using it as token ensures ordering, also it does not have n in the
+            # dimensionality
+            token = bart.sigma2
+            stop = i_total + 1 == n_iters  # i_total is updated after callback
+            token = error_if(token, stop, self.canary)
+            jax.debug.print('{}', token)  # prevent dead code elimination
+
+        self.kw: dict = dict(
+            key=random.key(2025_04_25_15_57),
+            bart=simple_init(P, 0, NTREE),
+            n_save=n_save,
+            n_burn=0,
+            n_skip=1,
+            callback=callback,
+        )
+
+        # prepare copies of the args because of buffer donation
+        key = jnp.copy(self.kw['key'])
+        bart = tree_map(jnp.copy, self.kw['bart'])
+        self.time_run_mcmc()
+        # put copies in place of donated buffers
+        self.kw.update(key=key, bart=bart)
+
+    def time_run_mcmc(self, *_):
+        """Time running the function."""
+        try:
+            run_mcmc(**self.kw)
+        except JaxRuntimeError as e:
+            is_expected = self.canary in str(e)
+            if not is_expected:
+                raise
+        else:
+            msg = 'expected JaxRuntimeError with canary not raised'
+            raise RuntimeError(msg)

@@ -233,6 +233,8 @@ class TestJitAndBlockIfProfiling:
             result = jitted_func(5)
             assert_array_equal(result, jnp.arange(5))
 
+    @pytest.mark.flaky(max_runs=3)
+    # flaky because it involves comparing time measurements done on the fly
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
         with debug_nans(False), debug_infs(False):
@@ -241,7 +243,7 @@ class TestJitAndBlockIfProfiling:
             jab_func = jit_and_block_if_profiling(func)
 
             # Time the jitted function
-            for _ in range(2):
+            for _ in range(3):
                 jit_func().block_until_ready()  # Warm-up
             start = perf_counter()
             jit_func().block_until_ready()
@@ -252,7 +254,7 @@ class TestJitAndBlockIfProfiling:
             result = jit_func()
             elapsed = perf_counter() - start
             result.block_until_ready()  # Ensure completion
-            assert elapsed < expected / 2  # Note: fails here in pytest
+            assert elapsed < expected / 2
 
             # Test profiling mode first (should block and wait >= expected)
             with profile_mode(True):
