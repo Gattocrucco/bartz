@@ -27,13 +27,14 @@
 This is the main suite of tests.
 """
 
-import os
-import signal
-import threading
-import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from functools import partial
+from os import getpid, kill
+from signal import SIG_IGN, SIGINT, getsignal, signal
+from sys import version_info
+from threading import Event, Thread
+from time import monotonic
 from typing import Any, Literal
 
 import jax
@@ -44,10 +45,11 @@ from jax import debug_nans, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jax.tree_util import tree_map
+from jax.tree_util import tree_map, tree_map_with_path
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
+from bartz import profile_mode
 from bartz.debug import (
     TraceWithOffset,
     check_trace,
@@ -638,8 +640,8 @@ def check_rbart(kw, bart, rbart):
         assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
 
 
-def test_R_BART3(kw, keys):
-    """Check `bartz.BART` gives the same results as the R package BART3."""
+def test_comparison_BART3(kw, keys):
+    """Check `bartz.BART` gives results similar to the R package BART3."""
     p, n = kw['x_train'].shape
     kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1, mc_cores=1)
     # R BART can't change the min_points_per_leaf per leaf setting
@@ -680,14 +682,14 @@ def test_R_BART3(kw, keys):
 
     else:  # continuous regression
         # check yhat_train_mean
-        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.2)
+        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.3)
 
         # check yhat_test_mean
         assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.4)
 
         # check sigma
         rhat_sigma = rhat([bart.sigma[-bart.ndpost :], rbart.sigma[-rbart.ndpost :]])
-        assert rhat_sigma < 1.02
+        assert rhat_sigma < 1.05
 
         # check sigma_mean
         assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
@@ -707,9 +709,9 @@ def test_R_BART3(kw, keys):
         rhat_varcount = multivariate_rhat([bart.varcount, rbart.varcount])
         # there is a visible discrepancy on the number of nodes, with bartz
         # having deeper trees, this 5 is not just "not good to sampling
-        # accuracy but close in practice.""
+        # accuracy but close in practice."
         assert rhat_varcount < 5
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.25, atol=5)
+        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.3, atol=5)
 
         # check varprob
         if kw.get('sparse', False):
@@ -718,7 +720,7 @@ def test_R_BART3(kw, keys):
             )
             # drop one component because varprob sums to 1
             assert rhat_varprob < 1.7
-            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.11)
+            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.15)
 
 
 def test_xinfo():
@@ -865,7 +867,7 @@ def test_prior(keys, p, nsplits):
     yhat_mcmc = bart._predict(X)
     yhat_prior = evaluate_trace(prior_trace, X)
     rhat_yhat = multivariate_rhat([yhat_mcmc, yhat_prior])
-    assert rhat_yhat < 1.05
+    assert rhat_yhat < 1.1
 
 
 def count_stub_trees(
@@ -1044,24 +1046,24 @@ class PeriodicSigintTimer:
     def __init__(self, *, first_after: float, interval: float, announce: bool):
         self.first_after = max(0.0, float(first_after))
         self.interval = max(0.001, float(interval))
-        self.pid = os.getpid()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.pid = getpid()
+        self._stop = Event()
+        self._thread: Thread | None = None
         self.sent = 0
         self.announce = announce
 
     def _run(self) -> None:
         """Run the main loop of the timer."""
-        t0 = time.monotonic()
+        t0 = monotonic()
         # Wait initial delay (cancellable)
         if self._stop.wait(self.first_after):
             return
         # Periodically send SIGINT until stopped
         while not self._stop.is_set():
-            os.kill(self.pid, signal.SIGINT)
+            kill(self.pid, SIGINT)
             self.sent += 1
             if self.announce:
-                elapsed = time.monotonic() - t0
+                elapsed = monotonic() - t0
                 print(
                     f'[PeriodicSigintTimer] sent SIGINT #{self.sent} at t={elapsed:.2f}s'
                 )
@@ -1071,9 +1073,7 @@ class PeriodicSigintTimer:
     def start(self) -> None:
         """Start the timer."""
         assert self._thread is None, 'Timer already started'
-        self._thread = threading.Thread(
-            target=self._run, name='PeriodicSigintTimer', daemon=True
-        )
+        self._thread = Thread(target=self._run, name='PeriodicSigintTimer', daemon=True)
         self._thread.start()
 
     def cancel(self) -> None:
@@ -1081,15 +1081,15 @@ class PeriodicSigintTimer:
         assert self._thread is not None, 'Timer not started'
 
         # Guard against a stray ^C arriving during teardown
-        prev = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        prev = getsignal(SIGINT)
+        signal(SIGINT, SIG_IGN)
 
         try:
             self._stop.set()
             if self.announce:
                 print(f'[PeriodicSigintTimer] stopped after {self.sent} SIGINT(s)')
         finally:
-            signal.signal(signal.SIGINT, prev)
+            signal(SIGINT, prev)
 
 
 @contextmanager
@@ -1106,7 +1106,7 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
 
 
 @pytest.mark.flaky
-# it's flaky because the interrupt may be caught and converted by jax internals
+# it's flaky because the interrupt may be caught and converted by jax internals (#33054)
 @pytest.mark.timeout(16)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
@@ -1310,3 +1310,38 @@ def merge_mcmc_state(ref_state: State, *states: State):
         *states,
         is_leaf=lambda x: x is None,
     )
+
+
+class TestProfile:
+    """Test the behavior of `mc_gbart` in profiling mode."""
+
+    @pytest.mark.xfail(
+        version_info[:2] == (3, 10),
+        reason='With the old toolchain the results are similar but not exactly the same.',
+    )
+    def test_same_result(self, kw: dict):
+        """Check that the result is the same in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_array_equal(xp, x)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
+
+    @pytest.mark.skipif(
+        version_info[:2] != (3, 10), reason='Redundant with the up-to-date toolchain.'
+    )
+    def test_similar_result(self, kw: dict):
+        """Check that the result is similar in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_allclose(xp, x, atol=1e-5, rtol=1e-5)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)

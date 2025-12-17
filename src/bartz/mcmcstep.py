@@ -50,6 +50,7 @@ from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
 from bartz import grove
+from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import (
     minimal_unsigned_dtype,
     split,
@@ -528,7 +529,7 @@ def _choose_suffstat_batch_size(
     return resid_batch_size, count_batch_size
 
 
-@jax.jit
+@jit_if_not_profiling
 def step(key: Key[Array, ''], bart: State) -> State:
     """
     Do one MCMC step.
@@ -656,6 +657,7 @@ class Moves(Module):
     to_prune: None | Bool[Array, ' num_trees']
 
 
+@jit_and_block_if_profiling
 def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     """
     Propose moves for all the trees.
@@ -676,7 +678,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     The proposed move for each tree.
     """
     num_trees, _ = forest.leaf_tree.shape
-    keys = split(key, 1 + 2 * num_trees)
+    keys = split(key, 3)
 
     # compute moves
     grow_moves = propose_grow_moves(
@@ -1654,6 +1656,7 @@ class ParallelStageOut(Module):
     prelf: PreLf
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1, 2))
 def accept_moves_parallel_stage(
     key: Key[Array, ''], bart: State, moves: Moves
 ) -> ParallelStageOut:
@@ -2313,6 +2316,7 @@ def precompute_leaf_terms_mv(
     )
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(0,))
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
@@ -2684,9 +2688,10 @@ def compute_likelihood_ratio_mv(
     return prelkv.sqrt_term + exp_term
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
 def accept_moves_final_stage(bart: State, moves: Moves) -> State:
     """
-    Post-process the mcmc state after accepting/rejecting the moves.
+  Post-process the mcmc state after accepting/rejecting the moves.
 
     This function is separate from `accept_moves_sequential_stage` to signal it
     can work in parallel across trees.
@@ -2770,6 +2775,7 @@ def apply_moves_to_split_trees(
     )
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_sigma(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the error variance (factor).
@@ -2845,7 +2851,6 @@ def _sample_wishart_bartlett(
     return T @ T.T
 
 
-# still need to make it more formal
 def step_sigma2_prec(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the error precision matrix `Σ⁻¹` under an inverse-Wishart prior on `Σ`.
@@ -2869,6 +2874,7 @@ def step_sigma2_prec(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, error_cov_inv=prec)
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_z(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the latent variable for binary regression.
@@ -2891,6 +2897,7 @@ def step_z(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, z=z, resid=resid)
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
 def step_s(key: Key[Array, ''], bart: State) -> State:
     """
     Update `log_s` using Dirichlet sampling.
@@ -2930,6 +2937,7 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
     return replace(bart, forest=replace(bart.forest, log_s=log_s))
 
 
+@partial(jit_and_block_if_profiling, donate_argnums=(1,), static_argnames=('num_grid',))
 def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> State:
     """
     Update `theta`.

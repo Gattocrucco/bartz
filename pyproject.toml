@@ -33,7 +33,7 @@ description = "Super-fast BART (Bayesian Additive Regression Trees) in Python"
 authors = [{ name = "Giacomo Petrillo", email = "info@giacomopetrillo.com" }]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.10" # also update OLD_PYTHON in makefile
+requires-python = ">=3.10"
 dependencies = [
     "equinox>=0.12.2",
     "jax>=0.5.3",
@@ -56,7 +56,6 @@ only-local = [
     "pre-commit>=4.2.0",
     "scikit-learn>=1.6.1",
     "snakeviz>=2.2.2",
-    "tomli>=2.2.1",
     "virtualenv>=20.31.2",
     "xgboost>=3.0.0",
 ]
@@ -74,6 +73,7 @@ ci = [
     "rpy2>=3.5.17",
     "sphinx>=8.1.3",
     "sphinx-autodoc-typehints>=3.0.1",
+    "tomli>=2.2.1",
 ]
 
 [tool.pytest.ini_options]
