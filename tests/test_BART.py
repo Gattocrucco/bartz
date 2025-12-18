@@ -81,7 +81,7 @@ def gen_X(
     match kind:
         case 'continuous':
             return random.uniform(key, (p, n), float, -2, 2)
-        case 'binary':
+        case 'binary':  # pragma: no branch
             return random.bernoulli(key, 0.5, (p, n)).astype(float)
 
 
@@ -112,7 +112,7 @@ def gen_y(
         pass
     elif s == 'random':
         s = jnp.exp(random.uniform(keys.pop(), (p,), float, -1, 1))
-    elif s == 'uniform':
+    elif s == 'uniform':  # pragma: no branch
         s = jnp.ones(p)
 
     match kind:
@@ -123,7 +123,7 @@ def gen_y(
                 error *= w
             return f(X, s) + error
 
-        case 'probit':
+        case 'probit':  # pragma: no branch
             assert w is None
             _, n = X.shape
             error = random.normal(keys.pop(), (n,))
@@ -209,7 +209,7 @@ def make_kw(key: Key[Array, ''], variant: int) -> dict[str, Any]:
             )
 
         # continuous regression with error weights and sparsity with fixed theta
-        case 3:
+        case 3:  # pragma: no branch
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
             w = gen_w(keys.pop(), X.shape[1])
@@ -235,7 +235,7 @@ def make_kw(key: Key[Array, ''], variant: int) -> dict[str, Any]:
                 ),
             )
 
-        case _:
+        case _:  # pragma: no cover
             msg = f'Unknown variant {variant}'
             raise ValueError(msg)
 
@@ -314,7 +314,7 @@ class TestWithCachedBart:
             assert rhat_varcount < 7
             print(f'{rhat_varcount.item()=}')
 
-            if kw.get('sparse', False):
+            if kw.get('sparse', False):  # pragma: no branch
                 varprob = bart.varprob.reshape(nchains, nsamples, p)
                 rhat_varprob = multivariate_rhat(varprob[:, :, 1:])
                 # drop one component because varprob sums to 1
@@ -451,7 +451,7 @@ class TestWithCachedBart:
             )
 
             # check varprob
-            if kw.get('sparse', False):
+            if kw.get('sparse', False):  # pragma: no branch
                 rhat_varprob = multivariate_rhat(
                     [bart.varprob[:, 1:], rbart.varprob[:, 1:]]
                 )
@@ -600,7 +600,7 @@ def test_varprob(kw):
     if not sparse:
         unique = jnp.unique(bart.varprob)
         assert unique.size in (1, 2)
-        if unique.size == 2:
+        if unique.size == 2:  # pragma: no cover
             assert unique[0] == 0
 
     # the mean is the mean
@@ -1029,10 +1029,10 @@ def multivariate_rhat(chains: Real[Any, 'chain sample dim']) -> Float[Array, '']
     chains = jnp.asarray(chains)
     m, n, p = chains.shape
 
-    if m < 2:
+    if m < 2:  # pragma: no cover
         msg = 'Need at least 2 chains'
         raise ValueError(msg)
-    if n < 2:
+    if n < 2:  # pragma: no cover
         msg = 'Need at least 2 samples per chain'
         raise ValueError(msg)
 
@@ -1341,7 +1341,7 @@ def merge_barts(barts: Sequence[gbart]) -> mc_gbart:
     vars(out)['ndpost'] = ref_bart.ndpost * len(barts)
     vars(out)['offset'] = ref_bart.offset
     vars(out)['sigest'] = ref_bart.sigest
-    if ref_bart.yhat_test is None:
+    if ref_bart.yhat_test is None:  # pragma: no cover
         vars(out)['yhat_test'] = None
     else:
         vars(out)['yhat_test'] = jnp.concatenate([bart.yhat_test for bart in barts])
