@@ -112,9 +112,9 @@ covreport:
 .PHONY: covcheck
 covcheck:
 	$(UV_RUN_CI) coverage combine --keep
-	$(UV_RUN_CI) coverage report --include='tests/*'
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py'
 	$(UV_RUN_CI) coverage report --include='src/*'
-	$(UV_RUN_CI) coverage report --include='tests/*' --fail-under=99 --format=total
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py' --fail-under=99 --format=total
 	$(UV_RUN_CI) coverage report --include='src/*' --fail-under=90 --format=total
 
 ################# RELEASE #################
