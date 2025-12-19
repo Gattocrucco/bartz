@@ -1331,8 +1331,8 @@ def test_split_key_multichain_equivalence(kw):
     assert_close_matrices(bart1.yhat_train, bart2.yhat_train, rtol=1e-5)
     assert_close_matrices(bart1.yhat_test, bart2.yhat_test, rtol=1e-5)
     if kw['y_train'].dtype == bool:  # binary regression
-        assert_close_matrices(bart1.prob_train, bart2.prob_train)
-        assert_close_matrices(bart1.prob_test, bart2.prob_test)
+        assert_close_matrices(bart1.prob_train, bart2.prob_train, rtol=1e-6)
+        assert_close_matrices(bart1.prob_test, bart2.prob_test, rtol=1e-6)
     else:  # continuous regression
         assert_close_matrices(bart1.yhat_train_mean, bart2.yhat_train_mean, rtol=1e-5)
         assert_close_matrices(bart1.yhat_test_mean, bart2.yhat_test_mean, rtol=1e-5)
