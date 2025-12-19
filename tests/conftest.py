@@ -24,6 +24,8 @@
 
 """Pytest configuration."""
 
+from re import fullmatch
+
 import jax
 import numpy as np
 import pytest
@@ -45,6 +47,9 @@ def keys(request):
     be safely used by multiple fixtures involved in the test case.
     """
     nodeid = request.node.nodeid
+    # exclude xdist_group suffixes because they are active only under xdist
+    match = fullmatch(r'(.+?\.py::.+?(\[.+?\])?)(@.+)?', nodeid)
+    nodeid = match.group(1)
     seed = np.array([nodeid], np.bytes_).view(np.uint8)
     rng = np.random.default_rng(seed)
     seed = np.array(rng.bytes(4)).view(np.uint32)

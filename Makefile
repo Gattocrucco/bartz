@@ -66,9 +66,8 @@ setup:
 
 ################# TESTS #################
 
-TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
-# I did not manage to make parallel pytest (pytest -n<processes>) work with
-# coverage
+TESTS_VARS = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX)
+TESTS_COMMAND = python -m pytest --cov --numprocesses 2 --dist worksteal $(ARGS)
 
 UV_RUN_CI = uv run --group ci
 UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
@@ -77,11 +76,11 @@ UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(UV_RUN_CI) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND)
 
 .PHONY: tests-old
 tests-old:
-	$(UV_RUN_CI_OLD) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND)
 
 
 ################# DOCS #################
@@ -105,11 +104,18 @@ docs-latest:
 
 .PHONY: covreport
 covreport:
-	$(UV_RUN_CI) coverage combine
-	$(UV_RUN_CI) coverage html
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage html --include='src/*'
 	@echo
-	@echo "Now open _site/index.html"
+	@echo "Now open _site/coverage/index.html"
 
+.PHONY: covcheck
+covcheck:
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py'
+	$(UV_RUN_CI) coverage report --include='src/*'
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py' --fail-under=99 --format=total
+	$(UV_RUN_CI) coverage report --include='src/*' --fail-under=90 --format=total
 
 ################# RELEASE #################
 

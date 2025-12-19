@@ -23,6 +23,8 @@
 # SOFTWARE.
 
 name: release
+permissions:
+  contents: read
 
 on:
   release:

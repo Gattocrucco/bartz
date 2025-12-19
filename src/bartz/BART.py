@@ -470,6 +470,15 @@ class mc_gbart(Module):
         return sigma
 
     @cached_property
+    def sigma_(self) -> Float32[Array, 'ndpost'] | None:
+        """The standard deviation of the error, only over the post-burnin samples and flattened."""
+        if self.sigma is None:
+            return None
+        _, nskip = self._burnin_trace.grow_prop_count.shape
+        sigma = self.sigma[nskip:, ...]
+        return sigma.reshape(-1)
+
+    @cached_property
     def sigma_mean(self) -> Float32[Array, ''] | None:
         """The mean of `sigma`, only over the post-burnin samples."""
         if self.sigma is None:

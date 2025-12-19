@@ -66,7 +66,7 @@ class TestRandintMasked:
         for _ in range(100):
             keys = split(key, 3)
             mask = bernoulli(keys.pop(), 0.5, (10,))
-            if not jnp.any(mask):
+            if not jnp.any(mask):  # pragma: no cover, rarely happens
                 continue
             u = randint_masked(keys.pop(), mask)
             assert 0 <= u < mask.size
