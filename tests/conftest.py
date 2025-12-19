@@ -24,6 +24,7 @@
 
 """Pytest configuration."""
 
+from contextlib import nullcontext
 from re import fullmatch
 
 import jax
@@ -55,3 +56,19 @@ def keys(request):
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
     return jaxext.split(key, 128)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Print information before pytest starts."""
+    # Get the capture manager plugin
+    capman = session.config.pluginmanager.get_plugin('capturemanager')
+
+    # Suspend capturing temporarily
+    if capman:
+        ctx = capman.global_and_fixture_disabled()
+    else:
+        ctx = nullcontext()
+
+    with ctx:
+        device_kind = jax.devices()[0].device_kind
+        print(f'jax default device: {device_kind}')
