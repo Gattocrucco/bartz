@@ -94,7 +94,8 @@ tests-old:
 
 .PHONY: tests-gpu
 tests-gpu:
-	$(UV_RUN_CI) python -c 'import jax; assert jax.devices()[0].platform == "gpu"'
+	nvidia-smi
+	$(UV_RUN_CI) python -c 'import jax; assert jax.devices()[0].platform == "gpu"; print(jax.devices()[0].device_kind)'
 	XLA_PYTHON_CLIENT_MEM_FRACTION=.95 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --numprocesses=0
 
 ################# DOCS #################
