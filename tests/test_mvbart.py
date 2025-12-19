@@ -24,21 +24,29 @@
 
 """Test multivariate BART components."""
 
+from dataclasses import replace
+
 import pytest
 from jax import numpy as jnp
-from jax import random
+from jax import random, vmap
 from numpy.testing import assert_allclose
-from scipy.stats import chi2, ks_1samp
+from scipy.stats import chi2, ks_1samp, ks_2samp
 
 from bartz.mcmcstep import (
     Precs,
+    State,
     _sample_wishart_bartlett,
     compute_likelihood_ratio_mv,
     compute_likelihood_ratio_uv,
+    init,
     precompute_leaf_terms_mv,
     precompute_leaf_terms_uv,
     precompute_likelihood_terms_mv,
     precompute_likelihood_terms_uv,
+    step,
+    step_sigma,
+    step_sigma2_prec,
+    step_trees,
 )
 from tests.util import assert_close_matrices
 
@@ -146,8 +154,8 @@ class TestPrecomputeTerms:
         result = precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv
         )
-        assert result.mean_factor.shape == (num_trees, num_leaves, k, k)
-        assert result.centered_leaves.shape == (num_trees, num_leaves, k)
+        assert result.mean_factor.shape == (num_trees, k, k, num_leaves)
+        assert result.centered_leaves.shape == (num_trees, k, num_leaves)
 
     def test_likelihood_equiv(self, keys):
         """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
@@ -202,13 +210,344 @@ class TestPrecomputeTerms:
 
         assert_allclose(
             result_uv.mean_factor,
-            result_mv.mean_factor.squeeze((-1, -2)),
+            result_mv.mean_factor.squeeze((1, 2)),
             rtol=1e-6,
             atol=1e-6,
         )
         assert_allclose(
             result_uv.centered_leaves,
-            result_mv.centered_leaves.squeeze(-1),
+            result_mv.centered_leaves.squeeze(1),
             rtol=1e-6,
             atol=1e-6,
         )
+
+
+class TestMVBartIntegration:
+    """Test equivalence between Univariate and Multivariate (k=1) modes."""
+
+    @pytest.fixture(params=[(10, 2), (20, 5), (3, 100), (50, 50)])
+    def data_shape(self, request):
+        """Provide (n, p) pairs for testing."""
+        return request.param
+
+    @pytest.fixture
+    def data(self, data_shape):
+        """Generate a toy dataset."""
+        n, p = data_shape
+        X = jnp.arange(n * p).reshape(p, n).astype(jnp.uint32)
+        y = jnp.linspace(-1, 1, n)
+        max_split = jnp.full(p, 5, dtype=jnp.uint32)
+        return X, y, max_split
+
+    def test_init_equivalence(self, data):
+        """Test that init produces compatible structures for UV and MV(k=1)."""
+        X, y, max_split = data
+        y_mv = y[None, :]
+        p_nonterminal = jnp.array([0.9, 0.5], dtype=jnp.float32)
+
+        common = dict(
+            X=X,
+            max_split=max_split,
+            num_trees=10,
+            p_nonterminal=p_nonterminal,
+            sigma_mu2=1.0,
+            resid_batch_size=None,
+            count_batch_size=None,
+            filter_splitless_vars=False,
+        )
+
+        bart_uv = init(y=y, sigma2_alpha=3.0, sigma2_beta=2.0, **common)
+
+        bart_mv = init(
+            y=y_mv,
+            leaf_prior_cov_inv=jnp.array([[1.0]], dtype=jnp.float32),
+            error_cov_inv_df=jnp.array(3.0, dtype=jnp.float32),
+            error_cov_inv_scale=jnp.eye(1, dtype=jnp.float32),
+            **common,
+        )
+
+        assert bart_uv.kind == 'uv'
+        assert bart_uv.sigma2 is not None
+        assert bart_uv.error_cov_inv is None
+
+        assert bart_mv.kind == 'mv'
+        assert bart_mv.sigma2 is None
+        assert bart_mv.error_cov_inv is not None
+
+        assert bart_uv.resid.ndim == 1
+        assert bart_mv.resid.ndim == 2
+        assert bart_mv.resid.shape[0] == 1
+        assert bart_mv.resid.shape[1] == bart_uv.resid.shape[0]
+
+        assert jnp.ndim(bart_uv.sigma2) == 0
+        assert bart_mv.error_cov_inv.shape == (1, 1)
+
+        assert_allclose(bart_uv.resid, bart_mv.resid.squeeze(0), rtol=0, atol=0)
+        assert_allclose(
+            bart_uv.forest.var_tree, bart_mv.forest.var_tree, rtol=0, atol=0
+        )
+        assert_allclose(
+            bart_uv.forest.split_tree, bart_mv.forest.split_tree, rtol=0, atol=0
+        )
+        assert_allclose(
+            bart_uv.forest.leaf_tree,
+            bart_mv.forest.leaf_tree.squeeze(1),
+            rtol=0,
+            atol=0,
+        )
+        assert_allclose(
+            bart_uv.forest.leaf_indices, bart_mv.forest.leaf_indices, rtol=0, atol=0
+        )
+        assert_allclose(
+            bart_uv.forest.p_nonterminal, bart_mv.forest.p_nonterminal, rtol=0, atol=0
+        )
+        assert_allclose(
+            bart_uv.forest.p_propose_grow, bart_mv.forest.p_propose_grow, rtol=0, atol=0
+        )
+        assert_allclose(
+            bart_uv.forest.affluence_tree, bart_mv.forest.affluence_tree, rtol=0, atol=0
+        )
+
+    def test_step_sigma_distribution_match(self, keys, data):
+        """
+        Test that step_sigma and step_sigma2_prec (k = 1) sample from the same posterior.
+
+        UV: 1/sigma2 ~ Gamma(alpha_post, 1/beta_post)
+        MV: error_cov_inv ~ Wishart(df_post, scale_post^-1)
+        """
+        X, y, _ = data
+        n = y.size
+
+        resid = random.normal(keys.pop(), (n,))
+        ssr = jnp.sum(resid**2)
+
+        alpha_post = 10.0
+        beta_post = 5.0
+
+        alpha_prior_uv = alpha_post - n / 2.0
+        beta_prior_uv = beta_post - ssr / 2.0
+
+        st_uv = State(
+            X=X,
+            y=y,
+            resid=resid,
+            kind='uv',
+            sigma2_alpha=alpha_prior_uv,
+            sigma2_beta=beta_prior_uv,
+            z=None,
+            offset=0.0,
+            sigma2=1.0,
+            error_cov_inv=None,
+            prec_scale=None,
+            error_cov_inv_df=None,
+            error_cov_inv_scale=None,
+            forest=None,
+        )
+
+        df_prior_mv = (2 * alpha_post) - n
+        scale_prior_mv = (2 * beta_post) - ssr
+
+        st_mv = State(
+            X=X,
+            y=y[None, :],
+            resid=resid[None, :],
+            kind='mv',
+            error_cov_inv_df=jnp.array(df_prior_mv),
+            error_cov_inv_scale=jnp.array([[scale_prior_mv]]),
+            z=None,
+            offset=0.0,
+            sigma2=None,
+            error_cov_inv=jnp.eye(1),
+            prec_scale=None,
+            sigma2_alpha=None,
+            sigma2_beta=None,
+            forest=None,
+        )
+
+        def sample_uv(k):
+            return 1.0 / step_sigma(k, st_uv).sigma2
+
+        def sample_mv(k):
+            return step_sigma2_prec(k, st_mv).error_cov_inv[0, 0]
+
+        n_samples = 10000
+        subkeys = random.split(keys.pop(), n_samples)
+        samples_uv = vmap(sample_uv)(subkeys)
+
+        subkeys = random.split(keys.pop(), n_samples)
+        samples_mv = vmap(sample_mv)(subkeys)
+
+        _, p_value = ks_2samp(samples_uv, samples_mv)
+
+        assert jnp.abs(jnp.mean(samples_uv) - jnp.mean(samples_mv)) < 0.01
+        assert p_value > 0.01
+
+
+class TestMVBartSteps:
+    """Test the full MCMC step trajectory (init + multiple steps)."""
+
+    @pytest.fixture(params=[(10, 2), (20, 5), (3, 100), (50, 50)])
+    def data_shape(self, request):
+        """Provide (n, p) pairs for testing."""
+        return request.param
+
+    @pytest.fixture
+    def data(self, data_shape):
+        """Generate a toy dataset."""
+        n, p = data_shape
+        X = jnp.arange(n * p).reshape(p, n)
+        y = jnp.linspace(-1, 1, n, dtype=jnp.float64)
+        max_split = jnp.full(p, 5, dtype=jnp.uint32)
+        return X, y, max_split
+
+    def test_step_trees_exact_match(self, keys, data):
+        """Test that MV tree logic is Identical to UV logic."""
+        X, y, max_split = data
+        y_mv = y[None, :]
+
+        params = dict(
+            X=X,
+            max_split=max_split,
+            num_trees=5,
+            p_nonterminal=jnp.array([0.9, 0.5]),
+            sigma_mu2=1.0,
+            resid_batch_size=None,
+            count_batch_size=None,
+            filter_splitless_vars=False,
+        )
+
+        uv_state = init(y=y, sigma2_alpha=2.0, sigma2_beta=1.0, kind='uv', **params)
+        mv_state = init(
+            y=y_mv,
+            leaf_prior_cov_inv=jnp.eye(1),
+            error_cov_inv_df=jnp.array(4.0),
+            error_cov_inv_scale=jnp.eye(1),
+            kind='mv',
+            **params,
+        )
+
+        mv_state = replace(
+            mv_state,
+            resid=uv_state.resid[None, :],
+            error_cov_inv=jnp.array([[1.0 / uv_state.sigma2]]),
+            forest=replace(
+                mv_state.forest,
+                var_tree=uv_state.forest.var_tree,
+                split_tree=uv_state.forest.split_tree,
+                leaf_tree=uv_state.forest.leaf_tree[:, None, :],
+                leaf_indices=uv_state.forest.leaf_indices,
+                affluence_tree=uv_state.forest.affluence_tree,
+            ),
+        )
+
+        key_tree = keys.pop()
+        key_tree_mv = random.clone(key_tree)
+
+        uv_next = step_trees(key_tree, uv_state)
+        mv_next = step_trees(key_tree_mv, mv_state)
+
+        assert_allclose(uv_next.resid, mv_next.resid.squeeze(0), atol=1e-2, rtol=1e-2)
+
+    def test_trajectory_equivalence(self, keys, data):
+        """Test that UV and MV(k = 1) gives similar updates after some gibbs steps."""
+        X, y, max_split = data
+        y_mv = y[None, :]
+
+        params = dict(
+            X=X,
+            max_split=max_split,
+            num_trees=10,
+            p_nonterminal=jnp.array([0.9, 0.5]),
+            sigma_mu2=1.0,
+            resid_batch_size=None,
+            count_batch_size=None,
+            filter_splitless_vars=False,
+        )
+
+        uv_state = init(y=y, sigma2_alpha=2.0, sigma2_beta=1.0, kind='uv', **params)
+        mv_state = init(
+            y=y_mv,
+            leaf_prior_cov_inv=jnp.eye(1),
+            error_cov_inv_df=jnp.array(4.0),
+            error_cov_inv_scale=jnp.array([[2.0]]),
+            kind='mv',
+            **params,
+        )
+        mv_state = replace(
+            mv_state,
+            resid=uv_state.resid[None, :],
+            error_cov_inv=jnp.array([[1.0 / uv_state.sigma2]]),
+            forest=replace(
+                mv_state.forest,
+                var_tree=uv_state.forest.var_tree,
+                split_tree=uv_state.forest.split_tree,
+                leaf_tree=uv_state.forest.leaf_tree[:, None, :],
+                leaf_indices=uv_state.forest.leaf_indices,
+                affluence_tree=uv_state.forest.affluence_tree,
+            ),
+        )
+
+        n_burnin, n_keep = 200, 50
+        master = keys.pop()
+        masters = random.split(master, n_burnin + n_keep)
+
+        for i in range(n_burnin):  # burn-in
+            k_uv, k_mv = random.split(masters[i], 2)
+            uv_state = step(k_uv, uv_state)
+            mv_state = step(k_mv, mv_state)
+
+        uv_precs, mv_precs = [], []
+        uv_mses, mv_mses = [], []
+
+        for i in range(n_keep):
+            k_uv, k_mv = random.split(masters[n_burnin + i], 2)
+            uv_state = step(k_uv, uv_state)
+            mv_state = step(k_mv, mv_state)
+            uv_precs.append(1.0 / uv_state.sigma2)
+            mv_precs.append(mv_state.error_cov_inv[0, 0])
+
+            uv_mses.append(jnp.mean(uv_state.resid**2))
+            mv_mses.append(jnp.mean(mv_state.resid**2))
+
+        uv_mean_sigma = jnp.mean(jnp.array(uv_precs))
+        mv_mean_sigma = jnp.mean(jnp.array(mv_precs))
+
+        uv_mean_mse = jnp.mean(jnp.array(uv_mses))
+        mv_mean_mse = jnp.mean(jnp.array(mv_mses))
+
+        assert_allclose(uv_mean_sigma, mv_mean_sigma, rtol=1.0, atol=1.0)
+        assert_allclose(uv_mean_mse, mv_mean_mse, rtol=1.0, atol=1.0)
+
+    def test_mv_steps(self, keys, data):
+        """Test that mv mode can run without crashing."""
+        X, y_uv, max_split = data
+        k = 3
+
+        y = jnp.tile(y_uv, (k, 1))
+        y = y + random.normal(keys.pop(), y.shape) * 0.1
+
+        mv_state = init(
+            X=X,
+            y=y,
+            max_split=max_split,
+            num_trees=5,
+            p_nonterminal=jnp.array([0.9, 0.5]),
+            sigma_mu2=1.0,
+            leaf_prior_cov_inv=jnp.eye(k),
+            error_cov_inv_df=jnp.array(10.0),
+            error_cov_inv_scale=jnp.eye(k),
+            resid_batch_size=None,
+            count_batch_size=None,
+            kind='mv',
+            filter_splitless_vars=False,
+        )
+
+        for key in random.split(keys.pop(), 10):
+            mv_state = step(key, mv_state)
+
+            assert jnp.all(jnp.isfinite(mv_state.resid))
+            assert jnp.all(jnp.isfinite(mv_state.error_cov_inv))
+            assert jnp.all(jnp.isfinite(mv_state.forest.leaf_tree))
+
+            assert mv_state.error_cov_inv.shape == (k, k)
+            assert mv_state.resid.shape == (k, y.shape[1])

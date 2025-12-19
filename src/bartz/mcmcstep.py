@@ -677,7 +677,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     -------
     The proposed move for each tree.
     """
-    num_trees, _ = forest.leaf_tree.shape
+    num_trees = forest.leaf_tree.shape[0]
     keys = split(key, 3)
 
     # compute moves
@@ -1600,8 +1600,8 @@ class PreLf(Module):
     These terms can be computed in parallel across trees.
 
     Supports both scalar and multivariate models. In the scalara case, the arrays have
-    shape (num_trees, 2**d); In the multivariate case, mean_factor has shape (num_trees, 2**d, k, k) and
-    centered_leaves has shape (num_trees, 2**d, k).
+    shape (num_trees, 2**d); In the multivariate case, mean_factor has shape (num_trees, k, k, 2**d) and
+    centered_leaves has shape (num_trees, k, 2**d).
 
     Parameters
     ----------
@@ -2150,7 +2150,8 @@ def _chol_with_gersh(mat: Float32[Array, '... k k']) -> Float32[Array, '... k k'
 
 def _logdet_from_chol(L):
     """Compute logdet of A = L'L via Cholesky (sum of log of diag^2)."""
-    return 2.0 * jnp.sum(jnp.log(jnp.diag(L)))
+    diags = jnp.diagonal(L, axis1=-2, axis2=-1)
+    return 2.0 * jnp.sum(jnp.log(diags), axis=-1)
 
 
 def precompute_likelihood_terms_mv(
@@ -2200,8 +2201,10 @@ def precompute_likelihood_terms_mv(
     )
 
     def _covariance_from_chol(L):
-        Y = solve_triangular(L, error_cov_inv, lower=True)
-        return Y.T @ Y
+        rhs = jnp.broadcast_to(error_cov_inv, L.shape)  # (num_trees, k, k)
+        Y = solve_triangular(L, rhs, lower=True)  # (num_trees, k, k)
+        YT = jnp.swapaxes(Y, -1, -2)  # (num_trees, k, k)
+        return YT @ Y
 
     prelkv = PreLkV(
         sigma2_left=_covariance_from_chol(L_left),
@@ -2305,14 +2308,16 @@ def precompute_leaf_terms_mv(
     L_prec = _chol_with_gersh(posterior_precision)
     Y = solve_triangular(L_prec, error_cov_inv_batched, lower=True)
     mean_factor = solve_triangular(L_prec, Y, trans='T', lower=True)
+    mean_factor = jnp.moveaxis(mean_factor, 1, -1)
 
     if z is None:
         z = random.normal(key, (num_trees, num_leaves, k))
     centered_leaves = solve_triangular(L_prec, z, trans='T')
+    centered_leaves = jnp.swapaxes(centered_leaves, -1, -2)
 
     return PreLf(
-        mean_factor=mean_factor,  # Shape: [num_trees, num_leaves, k, k]
-        centered_leaves=centered_leaves,  # Shape: [num_trees, num_leaves, k]
+        mean_factor=mean_factor,  # Shape: [num_trees, k, k, num_leaves]
+        centered_leaves=centered_leaves,  # Shape: [num_trees, k, num_leaves]
     )
 
 
@@ -2478,7 +2483,7 @@ def accept_move_and_sample_leaves(
     tree_size = pt.leaf_tree.shape[-1]  # 2**d
 
     if resid.ndim > 1:
-        resid_tree = sum_resid_vec(
+        resid_tree = sum_resid_vec(  # [k, 2**d]
             scaled_resid, pt.leaf_indices, tree_size, at.resid_batch_size
         )
     else:
@@ -2516,7 +2521,7 @@ def accept_move_and_sample_leaves(
 
     # compute leaves posterior and sample leaves
     if resid.ndim > 1:
-        mean_post = jnp.einsum('nij,jn->in', pt.prelf.mean_factor, resid_tree)
+        mean_post = jnp.einsum('ikl,kl->il', pt.prelf.mean_factor, resid_tree)
     else:
         mean_post = resid_tree * pt.prelf.mean_factor
     leaf_tree = mean_post + pt.prelf.centered_leaves
