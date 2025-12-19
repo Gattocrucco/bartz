@@ -302,14 +302,14 @@ jobs:
           version: ${{ env.UV_VERSION }}
           cache-suffix: -${{ matrix.os }}${{ matrix.target-suffix }}
 
+      - name: Get machine information for asv
+        run: RPY2_CFFI_MODE=ABI uv run --group ci python -m asv machine --yes
+
       - name: Install jax GPU support
         if: matrix.target-suffix == '-gpu'
         run: |
           CUDA_VERSION=`nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9]*' | cut -d' ' -f3`
           uv pip install "jax[cuda$CUDA_VERSION]"
-
-      - name: Get machine information for asv
-        run: RPY2_CFFI_MODE=ABI uv run --group ci python -m asv machine --yes
 
       - name: Run asv in quick mode
         run: make asv-quick ARGS='--attribute timeout=120' # long timeout because CI runners are slow
