@@ -102,6 +102,7 @@ jobs:
           echo "benchmarks-matrix={\"include\":$BENCHMARKS_MATRIX}" >> $GITHUB_OUTPUT
 
   tests:
+    name: tests-${{ matrix.os }}${{ matrix.target-suffix }}
     needs: setup-matrix
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.target-suffix == '-gpu' }}
@@ -281,6 +282,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
   benchmarks:
+    name: benchmarks-${{ matrix.os }}${{ matrix.target-suffix }}
     needs: setup-matrix
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.target-suffix == '-gpu' }}
