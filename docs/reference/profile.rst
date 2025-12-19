@@ -1,6 +1,6 @@
-.. bartz/docs/reference/index.rst
+.. bartz/docs/reference/profile.rst
 ..
-.. Copyright (c) 2024-2025, The Bartz Contributors
+.. Copyright (c) 2025, The Bartz Contributors
 ..
 .. This file is part of bartz.
 ..
@@ -22,17 +22,7 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-Reference
-=========
+Profiling
+---------
 
-.. toctree::
-    :maxdepth: 1
-
-    interface.rst
-    grove.rst
-    mcmcstep.rst
-    mcmcloop.rst
-    prepcovars.rst
-    jaxext.rst
-    debug.rst
-    profile.rst
+.. autofunction:: bartz.profile_mode

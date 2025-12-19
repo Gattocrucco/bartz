@@ -52,27 +52,6 @@ Pre-defined commands
 
 Development commands are defined in a makefile. Run :literal:`make` without arguments to list the targets.
 
-Benchmarks
-----------
-
-The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. The basic asv workflow is:
-
-.. code-block:: shell
-
-    uv run asv run      # run and save benchmarks on main branch
-    uv run asv publish  # create html report
-    uv run asv preview  # start a local server to view the report
-
-:literal:`asv run` writes the results into files saved in :literal:`./benchmarks`. These files are tracked by git; consider deliberately not committing all results generated while developing.
-
-There are a few make targets for common asv commands. The most useful command during development is
-
-.. code-block:: shell
-
-    make asv-quick ARGS='--bench <pattern>'
-
-This runs only benchmarks whose name matches <pattern>, only once, within the working copy and current Python environment.
-
 Documentation
 -------------
 
@@ -93,3 +72,59 @@ To debug the documentation build, do
 .. code-block:: shell
 
     make docs SPHINXOPTS='--fresh-env --pdb'
+
+Benchmarks
+----------
+
+The benchmarks are managed with `asv <https://asv.readthedocs.io/en/latest>`_. The basic asv workflow is:
+
+.. code-block:: shell
+
+    uv run asv run      # run and save benchmarks on main branch
+    uv run asv publish  # create html report
+    uv run asv preview  # start a local server to view the report
+
+:literal:`asv run` writes the results into files saved in :literal:`./benchmarks`. These files are tracked by git; consider deliberately not committing all results generated while developing.
+
+There are a few make targets for common asv commands. The most useful command during development is
+
+.. code-block:: shell
+
+    make asv-quick ARGS='--bench <pattern>'
+
+This runs only benchmarks whose name matches <pattern>, only once, within the working copy and current Python environment.
+
+Profiling
+---------
+
+Use the `JAX profiling utilities <https://docs.jax.dev/en/latest/profiling.html>`_ to profile `bartz`. By default the MCMC loop is compiled all at once, which makes it quite opaque to profiling. There are two ways to understand what's going on inside in more detail: 1) inspect the individual operations and use intuition to understand to what piece of code they correspond to, 2) turn on bartz's profile mode. Basic workflow:
+
+.. code-block:: python
+
+    from jax.profiler import trace, ProfileOptions
+    from bartz.BART import gbart
+    from bartz import profile_mode
+
+    traceopt = ProfileOptions()
+
+    # this setting makes Python function calls show up in the trace
+    traceopt.python_tracer_level = 1
+
+    # on cpu, this makes the trace detailed enough to understand what's going on
+    # even within compiled functions
+    traceopt.host_tracer_level = 2
+
+    with trace('./trace_results', profiler_options=traceopt), profile_mode(True):
+        bart = gbart(...)
+
+On the first run, the trace will show compilation operations, while subsequent runs (within the same Python shell) will be warmed-up. Start a xprof server to visualize the results:
+
+.. code-block:: shell
+
+    $ uvx --python 3.13 xprof ./trace_results
+    [...]
+    XProf at http://localhost:8791/ (Press CTRL+C to quit)
+
+Open the provided URL in a browser. In the sidebar, select the tool "Trace Viewer".
+
+In "profile mode", the MCMC loop is split into a few chunks that are compiled separately, allowing to see at a glance how much time each phase of the MCMC cycle takes. This causes some overhead, so the timings are not equivalent to the normal mode ones. On some specific example on CPU, Bartz was 20% slower in profile mode with one chain, and 2x slower with multiple chains.

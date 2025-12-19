@@ -1,6 +1,6 @@
 # bartz/Makefile
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2024-2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -25,7 +25,7 @@
 # Makefile for running tests, prepare and upload a release.
 
 COVERAGE_SUFFIX =
-OLD_PYTHON = 3.10
+OLD_PYTHON = $(shell uv run --group ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["requires-python"].removeprefix(">="))')
 OLD_DATE = 2025-05-15
 
 .PHONY: all
@@ -40,7 +40,7 @@ all:
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
 	@echo "- upload-test: upload release to TestPyPI"
-	@echo "- asv-all-tags: run benchmarks on all unbenchmarked tagged releases"
+	@echo "- asv-run: run benchmarks on all unbenchmarked tagged releases and main"
 	@echo "- asv-publish: create html benchmark report"
 	@echo "- asv-preview: create html report and start server"
 	@echo "- asv-main: run benchmarks on main branch"
@@ -66,21 +66,21 @@ setup:
 
 ################# TESTS #################
 
-TESTS_COMMAND = python -m coverage run --data-file=.coverage.tests$(COVERAGE_SUFFIX) --context=tests$(COVERAGE_SUFFIX) -m pytest $(ARGS)
-# I did not manage to make parallel pytest (pytest -n<processes>) work with
-# coverage
+TESTS_VARS = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX)
+TESTS_COMMAND = python -m pytest --cov --numprocesses 2 --dist worksteal $(ARGS)
 
 UV_RUN_CI = uv run --group ci
 UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
 UV_VARS_OLD = UV_PROJECT_ENVIRONMENT=.venv-old
+UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(UV_RUN_CI) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND)
 
 .PHONY: tests-old
 tests-old:
-	$(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND)
 
 
 ################# DOCS #################
@@ -104,11 +104,18 @@ docs-latest:
 
 .PHONY: covreport
 covreport:
-	$(UV_RUN_CI) coverage combine
-	$(UV_RUN_CI) coverage html
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage html --include='src/*'
 	@echo
-	@echo "Now open _site/index.html"
+	@echo "Now open _site/coverage/index.html"
 
+.PHONY: covcheck
+covcheck:
+	$(UV_RUN_CI) coverage combine --keep
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py'
+	$(UV_RUN_CI) coverage report --include='src/*'
+	$(UV_RUN_CI) coverage report --include='tests/**/test_*.py' --fail-under=99 --format=total
+	$(UV_RUN_CI) coverage report --include='src/*' --fail-under=90 --format=total
 
 ################# RELEASE #################
 
@@ -120,7 +127,7 @@ update-deps:
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
-	uv run --group only-local python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
+	uv run --group ci python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
 
 .PHONY: check-committed
 check-committed:
@@ -157,7 +164,7 @@ upload-test: check-committed
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish --check-url https://test.pypi.org/simple/ --publish-url https://test.pypi.org/legacy/
-	@VERSION=$$(uv run --group only-local python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	@VERSION=$$(uv run --group ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
 	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
@@ -166,9 +173,9 @@ upload-test: check-committed
 
 ASV = $(UV_RUN_CI) python -m asv
 
-.PHONY: asv-all-tags
-asv-all-tags:
-	git tag | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
+.PHONY: asv-run
+asv-run:
+	$(UV_RUN_CI) python config/refs-for-asv.py | $(ASV) run --skip-existing --show-stderr HASHFILE:- $(ARGS)
 
 .PHONY: asv-publish
 asv-publish:

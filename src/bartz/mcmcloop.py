@@ -28,19 +28,25 @@ The entry points are `run_mcmc` and `make_default_callback`.
 """
 
 from collections.abc import Callable
-from dataclasses import fields, replace
+from dataclasses import fields
 from functools import partial, wraps
 from typing import Any, Protocol
 
 import jax
 import numpy
 from equinox import Module
-from jax import debug, lax, tree
+from jax import debug, jit, lax, tree
 from jax import numpy as jnp
 from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
 
 from bartz import grove, jaxext, mcmcstep
+from bartz._profiler import (
+    callback_if_not_profiling,
+    cond_if_not_profiling,
+    jit_if_not_profiling,
+    scan_if_not_profiling,
+)
 from bartz.mcmcstep import State
 
 
@@ -244,12 +250,8 @@ def run_mcmc(
     The number of MCMC updates is ``n_burn + n_skip * n_save``. The traces do
     not include the initial state, and include the final state.
     """
-
-    def empty_trace(length, bart, extractor):
-        return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
-
-    burnin_trace = empty_trace(n_burn, bart, burnin_extractor)
-    main_trace = empty_trace(n_save, bart, main_extractor)
+    burnin_trace = _empty_trace(n_burn, bart, burnin_extractor)
+    main_trace = _empty_trace(n_save, bart, main_extractor)
 
     # determine number of iterations for inner and outer loops
     n_iters = n_burn + n_skip * n_save
@@ -280,6 +282,14 @@ def run_mcmc(
     return carry.bart, carry.burnin_trace, carry.main_trace
 
 
+@partial(jit, static_argnums=(0, 2))
+def _empty_trace(
+    length: int, bart: State, extractor: Callable[[State], PyTree]
+) -> PyTree:
+    return jax.vmap(extractor, in_axes=None, out_axes=0, axis_size=length)(bart)
+
+
+@jit
 def _compute_i_skip(
     i_total: Int32[Array, ''], n_burn: Int32[Array, ''], n_skip: Int32[Array, '']
 ) -> Int32[Array, '']:
@@ -293,7 +303,7 @@ def _compute_i_skip(
     )
 
 
-@partial(jax.jit, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
+@partial(jit_if_not_profiling, donate_argnums=(0,), static_argnums=(1, 2, 3, 4))
 def _run_mcmc_inner_loop(
     carry: _Carry,
     inner_loop_length: int,
@@ -305,28 +315,27 @@ def _run_mcmc_inner_loop(
     n_skip: Int32[Array, ''],
     i_outer: Int32[Array, ''],
     n_iters: Int32[Array, ''],
-):
+) -> _Carry:
     def loop_impl(carry: _Carry) -> _Carry:
         """Loop body to run if i_total < n_iters."""
         # split random key
         keys = jaxext.split(carry.key, 3)
-        carry = replace(carry, key=keys.pop())
+        key = keys.pop()
 
         # update state
-        carry = replace(carry, bart=mcmcstep.step(keys.pop(), carry.bart))
-
-        burnin = carry.i_total < n_burn
+        bart = mcmcstep.step(keys.pop(), carry.bart)
 
         # invoke callback
+        callback_state = carry.callback_state
         if callback is not None:
             i_skip = _compute_i_skip(carry.i_total, n_burn, n_skip)
             rt = callback(
                 key=keys.pop(),
-                bart=carry.bart,
-                burnin=burnin,
+                bart=bart,
+                burnin=carry.i_total < n_burn,
                 i_total=carry.i_total,
                 i_skip=i_skip,
-                callback_state=carry.callback_state,
+                callback_state=callback_state,
                 n_burn=n_burn,
                 n_save=n_save,
                 n_skip=n_skip,
@@ -335,28 +344,26 @@ def _run_mcmc_inner_loop(
             )
             if rt is not None:
                 bart, callback_state = rt
-                carry = replace(carry, bart=bart, callback_state=callback_state)
 
-        def save_to_burnin_trace() -> tuple[PyTree, PyTree]:
-            return _pytree_at_set(
-                carry.burnin_trace, carry.i_total, burnin_extractor(carry.bart)
-            ), carry.main_trace
-
-        def save_to_main_trace() -> tuple[PyTree, PyTree]:
-            idx = (carry.i_total - n_burn) // n_skip
-            return carry.burnin_trace, _pytree_at_set(
-                carry.main_trace, idx, main_extractor(carry.bart)
-            )
-
-        # save state to trace
-        burnin_trace, main_trace = lax.cond(
-            burnin, save_to_burnin_trace, save_to_main_trace
+        # save to trace
+        burnin_trace, main_trace = _save_state_to_trace(
+            carry.burnin_trace,
+            carry.main_trace,
+            burnin_extractor,
+            main_extractor,
+            bart,
+            carry.i_total,
+            n_burn,
+            n_skip,
         )
-        return replace(
-            carry,
+
+        return _Carry(
+            bart=bart,
             i_total=carry.i_total + 1,
+            key=key,
             burnin_trace=burnin_trace,
             main_trace=main_trace,
+            callback_state=callback_state,
         )
 
     def loop_noop(carry: _Carry) -> _Carry:
@@ -364,11 +371,39 @@ def _run_mcmc_inner_loop(
         return carry
 
     def loop(carry: _Carry, _) -> tuple[_Carry, None]:
-        carry = lax.cond(carry.i_total < n_iters, loop_impl, loop_noop, carry)
+        carry = cond_if_not_profiling(
+            carry.i_total < n_iters, loop_impl, loop_noop, carry
+        )
         return carry, None
 
-    carry, _ = lax.scan(loop, carry, None, inner_loop_length)
+    carry, _ = scan_if_not_profiling(loop, carry, None, inner_loop_length)
     return carry
+
+
+@partial(jit, donate_argnums=(0, 1), static_argnums=(2, 3))
+# this is jitted because under profiling _run_mcmc_inner_loop and the loop
+# within it are not, so I need the donate_argnums feature of jit to avoid
+# creating copies of the traces
+def _save_state_to_trace(
+    burnin_trace: PyTree,
+    main_trace: PyTree,
+    burnin_extractor: Callable[[State], PyTree],
+    main_extractor: Callable[[State], PyTree],
+    bart: State,
+    i_total: Int32[Array, ''],
+    n_burn: Int32[Array, ''],
+    n_skip: Int32[Array, ''],
+) -> tuple[PyTree, PyTree]:
+    burnin_idx = i_total
+    main_idx = (i_total - n_burn) // n_skip
+    noop_idx = jnp.iinfo(jnp.int32).max
+    noop_cond = i_total < n_burn
+    main_idx = jnp.where(noop_cond, noop_idx, main_idx)
+
+    burnin_trace = _pytree_at_set(burnin_trace, burnin_idx, burnin_extractor(bart))
+    main_trace = _pytree_at_set(main_trace, main_idx, main_extractor(bart))
+
+    return burnin_trace, main_trace
 
 
 def _pytree_at_set(
@@ -378,7 +413,7 @@ def _pytree_at_set(
 
     def at_set(dest, val):
         if dest.size:
-            return dest.at[index, ...].set(val)
+            return dest.at[index, ...].set(val, mode='drop')
         else:
             # this handles the case where an array is empty because jax refuses
             # to index into an array of length 0, even if just in the abstract
@@ -422,15 +457,8 @@ def make_default_callback(
     def asarray_or_none(val: None | Any) -> None | Array:
         return None if val is None else jnp.asarray(val)
 
-    def callback(*, bart, callback_state, **kwargs):
-        print_state, sparse_state = callback_state
-        bart, _ = sparse_callback(callback_state=sparse_state, bart=bart, **kwargs)
-        print_callback(callback_state=print_state, bart=bart, **kwargs)
-        return bart, callback_state
-        # here I assume that the callbacks don't update their states
-
     return dict(
-        callback=callback,
+        callback=_default_callback,
         callback_state=(
             PrintCallbackState(
                 asarray_or_none(dot_every), asarray_or_none(report_every)
@@ -438,6 +466,14 @@ def make_default_callback(
             SparseCallbackState(asarray_or_none(sparse_on_at)),
         ),
     )
+
+
+def _default_callback(*, bart, callback_state, **kwargs):
+    print_state, sparse_state = callback_state
+    bart, _ = sparse_callback(callback_state=sparse_state, bart=bart, **kwargs)
+    print_callback(callback_state=print_state, bart=bart, **kwargs)
+    return bart, callback_state
+    # here I assume that the callbacks don't update their states
 
 
 class PrintCallbackState(Module):
@@ -470,9 +506,9 @@ def print_callback(
     """Print a dot and/or a report periodically during the MCMC."""
     if callback_state.dot_every is not None:
         dot_cond = (i_total + 1) % callback_state.dot_every == 0
-        lax.cond(
+        cond_if_not_profiling(
             dot_cond,
-            lambda: debug.callback(
+            lambda: callback_if_not_profiling(
                 lambda: print('.', end='', flush=True),  # noqa: T201
                 ordered=True,
             ),
@@ -499,13 +535,13 @@ def print_callback(
 
         # print a newline after dots
         if callback_state.dot_every is not None:
-            lax.cond(
+            cond_if_not_profiling(
                 report_cond & dot_cond,
-                lambda: debug.callback(lambda: print(), ordered=True),  # noqa: T201
+                lambda: callback_if_not_profiling(print, ordered=True),
                 lambda: None,
             )
 
-        lax.cond(report_cond, print_report, lambda: None)
+        cond_if_not_profiling(report_cond, print_report, lambda: None)
 
 
 def _convert_jax_arrays_in_args(func: Callable) -> Callable:
@@ -586,7 +622,7 @@ def sparse_callback(
 ):
     """Perform variable selection, see `mcmcstep.step_sparse`."""
     if callback_state.sparse_on_at is not None:
-        bart = lax.cond(
+        bart = cond_if_not_profiling(
             i_total < callback_state.sparse_on_at,
             lambda: bart,
             lambda: mcmcstep.step_sparse(key, bart),

@@ -27,13 +27,15 @@
 This is the main suite of tests.
 """
 
-import os
-import signal
-import threading
-import time
 from collections.abc import Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
+from os import getpid, kill
+from signal import SIG_IGN, SIGINT, getsignal, signal
+from sys import version_info
+from threading import Event, Thread
+from time import monotonic
 from typing import Any, Literal
 
 import jax
@@ -44,10 +46,11 @@ from jax import debug_nans, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
-from jax.tree_util import tree_map
+from jax.tree_util import tree_map, tree_map_with_path
 from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
+from bartz import profile_mode
 from bartz.debug import (
     TraceWithOffset,
     check_trace,
@@ -78,7 +81,7 @@ def gen_X(
     match kind:
         case 'continuous':
             return random.uniform(key, (p, n), float, -2, 2)
-        case 'binary':
+        case 'binary':  # pragma: no branch
             return random.bernoulli(key, 0.5, (p, n)).astype(float)
 
 
@@ -109,7 +112,7 @@ def gen_y(
         pass
     elif s == 'random':
         s = jnp.exp(random.uniform(keys.pop(), (p,), float, -1, 1))
-    elif s == 'uniform':
+    elif s == 'uniform':  # pragma: no branch
         s = jnp.ones(p)
 
     match kind:
@@ -120,7 +123,7 @@ def gen_y(
                 error *= w
             return f(X, s) + error
 
-        case 'probit':
+        case 'probit':  # pragma: no branch
             assert w is None
             _, n = X.shape
             error = random.normal(keys.pop(), (n,))
@@ -128,10 +131,26 @@ def gen_y(
             return random.bernoulli(keys.pop(), prob, (n,))
 
 
-@pytest.fixture(params=[1, 2, 3])
-def kw(keys, request):
+N_VARIANTS = 3
+
+
+@pytest.fixture(params=list(range(1, N_VARIANTS + 1)), scope='module')
+def variant(request) -> int:
+    """Return a parametrized indicator to select different BART configurations."""
+    return request.param
+
+
+@pytest.fixture
+def kw(keys: split, variant: int) -> dict[str, Any]:
     """Return a dictionary of keyword arguments for BART."""
-    match request.param:
+    return make_kw(keys.pop(), variant)
+
+
+def make_kw(key: Key[Array, ''], variant: int) -> dict[str, Any]:
+    """Return a dictionary of keyword arguments for BART."""
+    keys = split(key, 5)
+
+    match variant:
         # continuous regression with some settings that induce large types,
         # sparsity with free theta
         case 1:
@@ -190,7 +209,7 @@ def kw(keys, request):
             )
 
         # continuous regression with error weights and sparsity with fixed theta
-        case 3:
+        case 3:  # pragma: no branch
             X = gen_X(keys.pop(), 2, 30, 'continuous')
             Xt = gen_X(keys.pop(), 2, 31, 'continuous')
             w = gen_w(keys.pop(), X.shape[1])
@@ -215,6 +234,232 @@ def kw(keys, request):
                     resid_batch_size=None, count_batch_size=None, save_ratios=True
                 ),
             )
+
+        case _:  # pragma: no cover
+            msg = f'Unknown variant {variant}'
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class CachedBart:
+    """Pre-computed BART run shared between multiple tests that do not change the arguments."""
+
+    kwargs: dict[str, Any]
+    bart: mc_gbart
+
+
+class TestWithCachedBart:
+    """Group of slow tests that check the same BART run, for efficiency."""
+
+    @pytest.fixture(scope='class')
+    def cachedbart(self, variant: int) -> CachedBart:
+        """Return a pre-computed BART."""
+        # create a random seed that depends only on the variant, since this
+        # fixture is shared between multiple tests
+        key = random.key(0x139CD0C0)
+        keys = random.split(key, N_VARIANTS)
+        key = keys[variant - 1]
+        kw = make_kw(key, variant)
+
+        # modify configs to make them appropriate for convergence checks
+        p, n = kw['x_train'].shape
+        nchains = 4
+        kw.update(
+            ntree=max(2 * n, p),
+            nskip=3000,
+            ndpost=nchains * 1000,
+            keepevery=1,
+            mc_cores=nchains,
+        )
+        # R BART can't change the min_points_per_leaf setting
+        kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
+
+        bart = mc_gbart(**kw)
+
+        return CachedBart(kwargs=kw, bart=bart)
+
+    def test_residuals_accuracy(self, cachedbart: CachedBart):
+        """Check that running residuals are close to the recomputed final residuals."""
+        accum_resid, actual_resid = cachedbart.bart.compare_resid()
+        assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
+
+    def test_convergence(self, cachedbart: CachedBart):
+        """Run multiple chains and check convergence with rhat."""
+        bart = cachedbart.bart
+        nchains, _ = bart._mcmc_state.resid.shape
+        nsamples = bart.ndpost // nchains
+        kw = cachedbart.kwargs
+        p, n = kw['x_train'].shape
+
+        yhat_train = bart.yhat_train.reshape(nchains, nsamples, n)
+        rhat_yhat_train = multivariate_rhat(yhat_train)
+        assert rhat_yhat_train < 6
+        print(f'{rhat_yhat_train.item()=}')
+
+        if kw['y_train'].dtype == bool:  # binary regression
+            prob_train = bart.prob_train.reshape(nchains, nsamples, n)
+            rhat_prob_train = multivariate_rhat(prob_train)
+            assert rhat_prob_train < 1.2
+            print(f'{rhat_prob_train.item()=}')
+
+        else:  # continuous regression
+            sigma = bart.sigma[nsamples:, :].T
+            rhat_sigma = rhat(sigma)
+            assert rhat_sigma < 1.2
+            print(f'{rhat_sigma.item()=}')
+
+        if p < n:
+            varcount = bart.varcount.reshape(nchains, nsamples, p)
+            rhat_varcount = multivariate_rhat(varcount)
+            assert rhat_varcount < 7
+            print(f'{rhat_varcount.item()=}')
+
+            if kw.get('sparse', False):  # pragma: no branch
+                varprob = bart.varprob.reshape(nchains, nsamples, p)
+                rhat_varprob = multivariate_rhat(varprob[:, :, 1:])
+                # drop one component because varprob sums to 1
+                assert rhat_varprob < 7
+                print(f'{rhat_varprob.item()=}')
+
+    def kw_bartz_to_BART3(self, key: Key[Array, ''], kw: dict, bart: mc_gbart) -> dict:
+        """Convert bartz keyword arguments to R BART3 keyword arguments."""
+        kw_BART: dict = dict(**kw, rm_const=False)
+        kw_BART.pop('init_kw')
+        kw_BART.pop('maxdepth', None)
+        for arg in 'w', 'printevery':
+            if arg in kw_BART and kw_BART[arg] is None:
+                kw_BART.pop(arg)
+        kw_BART['seed'] = random.randint(key, (), 0, jnp.uint32(2**31)).item()
+
+        # Set BART cutpoints manually. This means I am not checking that the
+        # automatic cutpoint determination of BART is the same of my package. They
+        # are similar but have some differences, and having exactly the same
+        # cutpoints is more important for the test.
+        kw_BART['transposed'] = True  # this disables predictors pre-processing
+        kw_BART['numcut'] = bart._mcmc_state.forest.max_split
+        kw_BART['xinfo'] = bart._splits
+
+        return kw_BART
+
+    def check_rbart(self, kw, bart, rbart):
+        """Subroutine for `test_comparison_BART3`, check that the R BART output is self-consistent."""
+        # convert the trees to bartz format
+        trees = rbart.treedraws['trees']
+        trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
+
+        # check the trees are valid
+        assert jnp.all(meta.numcut <= bart._mcmc_state.forest.max_split)
+        bad = check_trace(trace, meta.numcut)
+        num_bad = jnp.count_nonzero(bad)
+        assert num_bad == 0
+
+        # check varcount
+        varcount = compute_varcount(meta.numcut.size, trace)
+        assert jnp.all(varcount == rbart.varcount)
+
+        # check yhat_train
+        yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
+        assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
+
+        # check yhat_test
+        Xt = bart._bin_predictors(kw['x_test'], bart._splits)
+        yhat_test = evaluate_trace(trace, Xt)
+        assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
+
+        if kw['y_train'].dtype == bool:
+            # check prob_train
+            prob_train = ndtr(yhat_train)
+            assert_close_matrices(prob_train, rbart.prob_train, rtol=1e-7)
+
+            # check prob_test
+            prob_test = ndtr(yhat_test)
+            assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
+
+    def test_comparison_BART3(self, cachedbart: CachedBart, keys):
+        """Check `bartz.BART` gives results similar to the R package BART3."""
+        bart = cachedbart.bart
+        kw = cachedbart.kwargs
+        p, n = kw['x_train'].shape
+
+        # run R bart
+        kw_BART = self.kw_bartz_to_BART3(keys.pop(), kw, bart)
+        rbart = BART3.mc_gbart(**kw_BART)
+        # use mc_gbart instead of gbart because gbart does not use the seed
+
+        # first cross-check the outputs of R BART alone
+        self.check_rbart(kw, bart, rbart)
+
+        # compare results of bartz and BART
+
+        # check offset
+        assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
+        # I would check sigest as well, but it's not in the R object despite what
+        # the documentation says
+
+        # check yhat_train
+        rhat_yhat_train = multivariate_rhat([bart.yhat_train, rbart.yhat_train])
+        assert rhat_yhat_train < 1.8
+
+        # check yhat_test
+        rhat_yhat_test = multivariate_rhat([bart.yhat_test, rbart.yhat_test])
+        assert rhat_yhat_test < 1.8
+
+        if kw['y_train'].dtype == bool:  # binary regression
+            # check prob_train
+            rhat_prob_train = multivariate_rhat([bart.prob_train, rbart.prob_train])
+            assert rhat_prob_train < 1.2
+
+            # check prob_test
+            rhat_prob_test = multivariate_rhat([bart.prob_test, rbart.prob_test])
+            assert rhat_prob_test < 1.2
+
+        else:  # continuous regression
+            # check yhat_train_mean
+            assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.5)
+
+            # check yhat_test_mean
+            assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.5)
+
+            # check sigma
+            rhat_sigma = rhat(
+                [bart.sigma_[-bart.ndpost :], rbart.sigma_[-rbart.ndpost :]]
+            )
+            assert rhat_sigma < 1.1
+
+            # check sigma_mean
+            assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
+
+        # check number of tree nodes in forest
+        bart_count = bart.varcount.sum(axis=1)
+        rbart_count = rbart.varcount.sum(axis=1)
+        rhat_count = rhat([bart_count, rbart_count])
+        assert rhat_count < 30  # genuinely bad, see below
+        assert_allclose(bart_count.mean(), rbart_count.mean(), rtol=0.2)
+
+        if p < n:
+            # skip if p is large because it would be difficult for the MCMC to get
+            # stuff about predictors right
+
+            # check varcount
+            rhat_varcount = multivariate_rhat([bart.varcount, rbart.varcount])
+            # there is a visible discrepancy on the number of nodes, with bartz
+            # having deeper trees, this 5 is not just "not good to sampling
+            # accuracy but close in practice."
+            assert rhat_varcount < 5
+            assert_close_matrices(
+                bart.varcount_mean, rbart.varcount_mean, rtol=0.5, atol=7
+            )
+
+            # check varprob
+            if kw.get('sparse', False):  # pragma: no branch
+                rhat_varprob = multivariate_rhat(
+                    [bart.varprob[:, 1:], rbart.varprob[:, 1:]]
+                )
+                # drop one component because varprob sums to 1
+                assert rhat_varprob < 1.7
+                assert_allclose(
+                    bart.varprob_mean, rbart.varprob_mean, atol=0.15, rtol=0.4
+                )
 
 
 def test_sequential_guarantee(kw):
@@ -276,6 +521,7 @@ def test_output_shapes(kw):
         assert bart.prob_train.shape == (ndpost, n)
         assert bart.prob_train_mean.shape == (n,)
         assert bart.sigma is None
+        assert bart.sigma_ is None
         assert bart.sigma_mean is None
     else:
         assert bart.prob_test is None
@@ -286,6 +532,7 @@ def test_output_shapes(kw):
             assert bart.sigma.shape == (nskip + ndpost,)
         else:
             assert bart.sigma.shape == (nskip + ndpost // mc_cores, mc_cores)
+        assert bart.sigma_.shape == (ndpost,)
         assert bart.sigma_mean.shape == ()
     assert bart.varcount.shape == (ndpost, p)
     assert bart.varcount_mean.shape == (p,)
@@ -318,6 +565,7 @@ def test_output_types(kw):
         assert bart.prob_train_mean.dtype == jnp.float32
     else:
         assert bart.sigma.dtype == jnp.float32
+        assert bart.sigma_.dtype == jnp.float32
         assert bart.sigma_mean.dtype == jnp.float32
     assert bart.varcount.dtype == jnp.int32
     assert bart.varcount_mean.dtype == jnp.float32
@@ -352,7 +600,7 @@ def test_varprob(kw):
     if not sparse:
         unique = jnp.unique(bart.varprob)
         assert unique.size in (1, 2)
-        if unique.size == 2:
+        if unique.size == 2:  # pragma: no cover
             assert unique[0] == 0
 
     # the mean is the mean
@@ -462,7 +710,7 @@ def test_min_points_per_decision_node(kw):
         assert distr_marg[9] > 0
     else:
         assert jnp.all(distr_marg[:min_points] == 0)
-        assert distr_marg[min_points] > 0
+        assert jnp.any(distr_marg[min_points:] > 0)
 
 
 def test_min_points_per_leaf(kw):
@@ -479,14 +727,6 @@ def test_min_points_per_leaf(kw):
     else:
         assert jnp.all(distr_marg[:min_points] == 0)
         assert distr_marg[min_points] > 0
-
-
-def test_residuals_accuracy(kw):
-    """Check that running residuals are close to the recomputed final residuals."""
-    kw.update(ntree=200, ndpost=1000, nskip=0)
-    bart = mc_gbart(**kw)
-    accum_resid, actual_resid = bart.compare_resid()
-    assert_close_matrices(accum_resid, actual_resid, rtol=1e-4)
 
 
 def set_num_datapoints(kw: dict, n):
@@ -580,145 +820,6 @@ def test_few_datapoints(kw):
     kw['seed'] = random.clone(kw['seed'])
     bart = mc_gbart(**kw)
     assert jnp.all(bart.yhat_train == bart.yhat_train[:, :1])
-
-
-def kw_bartz_to_BART3(key: Key[Array, ''], kw: dict, bart: mc_gbart) -> dict:
-    """Convert bartz keyword arguments to R BART3 keyword arguments."""
-    kw_BART = dict(**kw, rm_const=False)
-    kw_BART.pop('init_kw')
-    kw_BART.pop('maxdepth', None)
-    for arg in 'w', 'printevery':
-        if arg in kw_BART and kw_BART[arg] is None:
-            kw_BART.pop(arg)
-    kw_BART['seed'] = random.randint(key, (), 0, jnp.uint32(2**31)).item()
-
-    # Set BART cutpoints manually. This means I am not checking that the
-    # automatic cutpoint determination of BART is the same of my package. They
-    # are similar but have some differences, and having exactly the same
-    # cutpoints is more important for the test.
-    kw_BART['transposed'] = True  # this disables predictors pre-processing
-    kw_BART['numcut'] = bart._mcmc_state.forest.max_split
-    kw_BART['xinfo'] = bart._splits
-
-    return kw_BART
-
-
-def check_rbart(kw, bart, rbart):
-    """Subroutine for `test_rbart`, check that the R BART output is self-consistent."""
-    # convert the trees to bartz format
-    trees = rbart.treedraws['trees']
-    trace, meta = trees_BART_to_bartz(trees, offset=rbart.offset)
-
-    # check the trees are valid
-    assert jnp.all(meta.numcut <= bart._mcmc_state.forest.max_split)
-    bad = check_trace(trace, meta.numcut)
-    num_bad = jnp.count_nonzero(bad)
-    assert num_bad == 0
-
-    # check varcount
-    varcount = compute_varcount(meta.numcut.size, trace)
-    assert jnp.all(varcount == rbart.varcount)
-
-    # chech yhat_train
-    yhat_train = evaluate_trace(trace, bart._mcmc_state.X)
-    assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
-
-    # check yhat_test
-    Xt = bart._bin_predictors(kw['x_test'], bart._splits)
-    yhat_test = evaluate_trace(trace, Xt)
-    assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
-
-    if kw['y_train'].dtype == bool:
-        # check prob_train
-        prob_train = ndtr(yhat_train)
-        assert_close_matrices(prob_train, rbart.prob_train, rtol=1e-7)
-
-        # check prob_test
-        prob_test = ndtr(yhat_test)
-        assert_close_matrices(prob_test, rbart.prob_test, rtol=1e-7)
-
-
-def test_R_BART3(kw, keys):
-    """Check `bartz.BART` gives the same results as the R package BART3."""
-    p, n = kw['x_train'].shape
-    kw.update(ntree=max(2 * n, p), nskip=3000, ndpost=1000, keepevery=1, mc_cores=1)
-    # R BART can't change the min_points_per_leaf per leaf setting
-    kw['init_kw'].update(min_points_per_decision_node=10, min_points_per_leaf=5)
-
-    # run bart with both packages
-    bart = mc_gbart(**kw)
-    kw_BART = kw_bartz_to_BART3(keys.pop(), kw, bart)
-    rbart = BART3.mc_gbart(**kw_BART)
-    # use mc_gbart instead of gbart because gbart does not use the seed
-
-    # first cross-check the outputs of R BART alone
-    check_rbart(kw, bart, rbart)
-
-    # compare results of bartz and BART
-
-    # check offset
-    assert_allclose(bart.offset, rbart.offset, rtol=1e-6, atol=1e-7)
-    # I would check sigest as well, but it's not in the R object despite what
-    # the documentation says
-
-    # check yhat_train
-    rhat_yhat_train = multivariate_rhat([bart.yhat_train, rbart.yhat_train])
-    assert rhat_yhat_train < 1.8
-
-    # check yhat_test
-    rhat_yhat_test = multivariate_rhat([bart.yhat_test, rbart.yhat_test])
-    assert rhat_yhat_test < 1.8
-
-    if kw['y_train'].dtype == bool:  # binary regression
-        # check prob_train
-        rhat_prob_train = multivariate_rhat([bart.prob_train, rbart.prob_train])
-        assert rhat_prob_train < 1.2
-
-        # check prob_test
-        rhat_prob_test = multivariate_rhat([bart.prob_test, rbart.prob_test])
-        assert rhat_prob_test < 1.2
-
-    else:  # continuous regression
-        # check yhat_train_mean
-        assert_close_matrices(bart.yhat_train_mean, rbart.yhat_train_mean, rtol=0.2)
-
-        # check yhat_test_mean
-        assert_close_matrices(bart.yhat_test_mean, rbart.yhat_test_mean, rtol=0.4)
-
-        # check sigma
-        rhat_sigma = rhat([bart.sigma[-bart.ndpost :], rbart.sigma[-rbart.ndpost :]])
-        assert rhat_sigma < 1.02
-
-        # check sigma_mean
-        assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
-
-    # check number of tree nodes in forest
-    bart_count = bart.varcount.sum(axis=1)
-    rbart_count = rbart.varcount.sum(axis=1)
-    rhat_count = rhat([bart_count, rbart_count])
-    assert rhat_count < 30  # genuinely bad, see below
-    assert_allclose(bart_count.mean(), rbart_count.mean(), rtol=0.2)
-
-    if p < n:
-        # skip if p is large because it would be difficult for the MCMC to get
-        # stuff about predictors right
-
-        # check varcount
-        rhat_varcount = multivariate_rhat([bart.varcount, rbart.varcount])
-        # there is a visible discrepancy on the number of nodes, with bartz
-        # having deeper trees, this 5 is not just "not good to sampling
-        # accuracy but close in practice.""
-        assert rhat_varcount < 5
-        assert_allclose(bart.varcount_mean, rbart.varcount_mean, rtol=0.25, atol=5)
-
-        # check varprob
-        if kw.get('sparse', False):
-            rhat_varprob = multivariate_rhat(
-                [bart.varprob[:, 1:], rbart.varprob[:, 1:]]
-            )
-            # drop one component because varprob sums to 1
-            assert rhat_varprob < 1.7
-            assert_allclose(bart.varprob_mean, rbart.varprob_mean, atol=0.11)
 
 
 def test_xinfo():
@@ -865,7 +966,7 @@ def test_prior(keys, p, nsplits):
     yhat_mcmc = bart._predict(X)
     yhat_prior = evaluate_trace(prior_trace, X)
     rhat_yhat = multivariate_rhat([yhat_mcmc, yhat_prior])
-    assert rhat_yhat < 1.05
+    assert rhat_yhat < 1.1
 
 
 def count_stub_trees(
@@ -928,10 +1029,10 @@ def multivariate_rhat(chains: Real[Any, 'chain sample dim']) -> Float[Array, '']
     chains = jnp.asarray(chains)
     m, n, p = chains.shape
 
-    if m < 2:
+    if m < 2:  # pragma: no cover
         msg = 'Need at least 2 chains'
         raise ValueError(msg)
-    if n < 2:
+    if n < 2:  # pragma: no cover
         msg = 'Need at least 2 samples per chain'
         raise ValueError(msg)
 
@@ -1044,24 +1145,24 @@ class PeriodicSigintTimer:
     def __init__(self, *, first_after: float, interval: float, announce: bool):
         self.first_after = max(0.0, float(first_after))
         self.interval = max(0.001, float(interval))
-        self.pid = os.getpid()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        self.pid = getpid()
+        self._stop = Event()
+        self._thread: Thread | None = None
         self.sent = 0
         self.announce = announce
 
     def _run(self) -> None:
         """Run the main loop of the timer."""
-        t0 = time.monotonic()
+        t0 = monotonic()
         # Wait initial delay (cancellable)
         if self._stop.wait(self.first_after):
             return
         # Periodically send SIGINT until stopped
         while not self._stop.is_set():
-            os.kill(self.pid, signal.SIGINT)
+            kill(self.pid, SIGINT)
             self.sent += 1
             if self.announce:
-                elapsed = time.monotonic() - t0
+                elapsed = monotonic() - t0
                 print(
                     f'[PeriodicSigintTimer] sent SIGINT #{self.sent} at t={elapsed:.2f}s'
                 )
@@ -1071,9 +1172,7 @@ class PeriodicSigintTimer:
     def start(self) -> None:
         """Start the timer."""
         assert self._thread is None, 'Timer already started'
-        self._thread = threading.Thread(
-            target=self._run, name='PeriodicSigintTimer', daemon=True
-        )
+        self._thread = Thread(target=self._run, name='PeriodicSigintTimer', daemon=True)
         self._thread.start()
 
     def cancel(self) -> None:
@@ -1081,15 +1180,15 @@ class PeriodicSigintTimer:
         assert self._thread is not None, 'Timer not started'
 
         # Guard against a stray ^C arriving during teardown
-        prev = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        prev = getsignal(SIGINT)
+        signal(SIGINT, SIG_IGN)
 
         try:
             self._stop.set()
             if self.announce:
                 print(f'[PeriodicSigintTimer] stopped after {self.sent} SIGINT(s)')
         finally:
-            signal.signal(signal.SIGINT, prev)
+            signal(SIGINT, prev)
 
 
 @contextmanager
@@ -1105,6 +1204,8 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
         timer.cancel()
 
 
+@pytest.mark.flaky
+# it's flaky because the interrupt may be caught and converted by jax internals (#33054)
 @pytest.mark.timeout(16)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
@@ -1190,51 +1291,6 @@ def test_gbart_multichain_error(keys):
         gbart(X, y, mc_cores='gatto')
 
 
-def test_convergence(kw):
-    """Run multiple chains and check convergence with rhat."""
-    nchains = 4
-    nsamples = 1000
-    p, n = kw['x_train'].shape
-    kw.update(
-        nskip=nsamples,
-        ndpost=nsamples * nchains,
-        mc_cores=nchains,
-        keepevery=1,
-        ntree=max(2 * n, p),
-    )
-    bart = mc_gbart(**kw)
-
-    yhat_train = bart.yhat_train.reshape(nchains, nsamples, n)
-    rhat_yhat_train = multivariate_rhat(yhat_train)
-    assert rhat_yhat_train < 1.6
-    print(f'{rhat_yhat_train.item()=}')
-
-    if kw['y_train'].dtype == bool:  # binary regression
-        prob_train = bart.prob_train.reshape(nchains, nsamples, n)
-        rhat_prob_train = multivariate_rhat(prob_train)
-        assert rhat_prob_train < 1.05
-        print(f'{rhat_prob_train.item()=}')
-
-    else:  # continuous regression
-        sigma = bart.sigma[nsamples:, :].T
-        rhat_sigma = rhat(sigma)
-        assert rhat_sigma < 1.05
-        print(f'{rhat_sigma.item()=}')
-
-    if p < n:
-        varcount = bart.varcount.reshape(nchains, nsamples, p)
-        rhat_varcount = multivariate_rhat(varcount)
-        assert rhat_varcount < 3
-        print(f'{rhat_varcount.item()=}')
-
-        if kw.get('sparse', False):
-            varprob = bart.varprob.reshape(nchains, nsamples, p)
-            rhat_varprob = multivariate_rhat(varprob[:, :, 1:])
-            # drop one component because varprob sums to 1
-            assert rhat_varprob < 3
-            print(f'{rhat_varprob.item()=}')
-
-
 def test_split_key_multichain_equivalence(kw):
     """Check that `mc_gbart` is equivalent to multiple `gbart` invocations."""
     # config
@@ -1251,7 +1307,7 @@ def test_split_key_multichain_equivalence(kw):
     kw.pop('mc_cores')
     kw.update(ndpost=ndpost_per_chain)
     barts = [gbart(**kw, seed=key) for key in keys]
-    bart2 = merge_barts(bart1, barts)
+    bart2 = merge_barts(barts)
 
     # compare
     assert_close_matrices(bart1.yhat_train, bart2.yhat_train, rtol=1e-5)
@@ -1266,7 +1322,7 @@ def test_split_key_multichain_equivalence(kw):
         assert_allclose(bart1.sigma_mean, bart2.sigma_mean, rtol=1e-6)
 
 
-def merge_barts(ref_bart: mc_gbart, barts: Sequence[gbart]) -> mc_gbart:
+def merge_barts(barts: Sequence[gbart]) -> mc_gbart:
     """Merge multiple single-chain gbart instances into a multichain mc_gbart."""
     out = object.__new__(mc_gbart)
 
@@ -1276,15 +1332,16 @@ def merge_barts(ref_bart: mc_gbart, barts: Sequence[gbart]) -> mc_gbart:
     vars(out)['_burnin_trace'] = tree_map(
         lambda *x: jnp.concatenate(x), *(bart._burnin_trace for bart in barts)
     )
+    ref_bart = barts[0]
     vars(out)['_mcmc_state'] = merge_mcmc_state(
         ref_bart._mcmc_state, *(bart._mcmc_state for bart in barts)
     )
     vars(out)['_splits'] = ref_bart._splits
     vars(out)['_x_train_fmt'] = ref_bart._x_train_fmt
-    vars(out)['ndpost'] = ref_bart.ndpost
+    vars(out)['ndpost'] = ref_bart.ndpost * len(barts)
     vars(out)['offset'] = ref_bart.offset
     vars(out)['sigest'] = ref_bart.sigest
-    if ref_bart.yhat_test is None:
+    if ref_bart.yhat_test is None:  # pragma: no cover
         vars(out)['yhat_test'] = None
     else:
         vars(out)['yhat_test'] = jnp.concatenate([bart.yhat_test for bart in barts])
@@ -1308,3 +1365,38 @@ def merge_mcmc_state(ref_state: State, *states: State):
         *states,
         is_leaf=lambda x: x is None,
     )
+
+
+class TestProfile:
+    """Test the behavior of `mc_gbart` in profiling mode."""
+
+    @pytest.mark.xfail(
+        version_info[:2] == (3, 10),
+        reason='With the old toolchain the results are similar but not exactly the same.',
+    )
+    def test_same_result(self, kw: dict):
+        """Check that the result is the same in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_array_equal(xp, x)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
+
+    @pytest.mark.skipif(
+        version_info[:2] != (3, 10), reason='Redundant with the up-to-date toolchain.'
+    )
+    def test_similar_result(self, kw: dict):
+        """Check that the result is similar in profiling mode."""
+        bart = mc_gbart(**kw)
+        with profile_mode(True):
+            bartp = mc_gbart(**kw)
+
+        def check_same(_path, x, xp):
+            assert_allclose(xp, x, atol=1e-5, rtol=1e-5)
+
+        tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
+        tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)

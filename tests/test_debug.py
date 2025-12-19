@@ -1,6 +1,6 @@
 # bartz/tests/test_debug.py
 #
-# Copyright (c) 2025, Giacomo Petrillo
+# Copyright (c) 2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -47,6 +47,10 @@ def manual_tree(
     def check_powers_of_2(seq: list[list]):
         """Check if the lengths of the lists in `seq` are powers of 2."""
         return all(len(x) == 2**i for i, x in enumerate(seq))
+
+    check_powers_of_2(leaf)
+    check_powers_of_2(var)
+    check_powers_of_2(split)
 
     tree = TreesTrace(
         jnp.concatenate([jnp.zeros(1), *map(jnp.array, leaf)]),

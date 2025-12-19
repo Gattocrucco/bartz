@@ -214,11 +214,20 @@ def test_split(keys):
 
     ks = jaxext.split(random.clone(key), 3)
     key1a = ks.pop()
-    key23 = ks.pop(2)
+    key2a = ks.pop(2)
+    key3a = ks.pop()
 
     assert not different_keys(key1, key1a)
-    assert not different_keys(key2, key23[0])
-    assert not different_keys(key3, key23[1])
+    assert not different_keys(random.split(key2), key2a)
+    assert not different_keys(key3, key3a)
+
+    ks = jaxext.split(keys.pop(), 1)
+    key = ks.pop((2, 3, 5))
+    assert key.shape == (2, 3, 5)
+    assert len(ks) == 0
+
+    ks = jaxext.split(keys.pop())
+    assert len(ks) == 2
 
 
 class TestJaxPatches:
@@ -227,9 +236,9 @@ class TestJaxPatches:
     def test_invgamma_missing(self):
         """Check that jax does not implement the inverse gamma distribution."""
         with pytest.raises(ImportError, match=r'gammainccinv'):
-            from jax.scipy.special import gammainccinv  # noqa: F401
+            from jax.scipy.special import gammainccinv  # noqa: F401, PLC0415
         with pytest.raises(ImportError, match=r'invgamma'):
-            from jax.scipy.stats import invgamma  # noqa: F401
+            from jax.scipy.stats import invgamma  # noqa: F401, PLC0415
 
     def test_invgamma_correct(self, keys):
         """Compare my implementation of invgamma against scipy's."""

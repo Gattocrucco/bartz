@@ -470,6 +470,15 @@ class mc_gbart(Module):
         return sigma
 
     @cached_property
+    def sigma_(self) -> Float32[Array, 'ndpost'] | None:
+        """The standard deviation of the error, only over the post-burnin samples and flattened."""
+        if self.sigma is None:
+            return None
+        _, nskip = self._burnin_trace.grow_prop_count.shape
+        sigma = self.sigma[nskip:, ...]
+        return sigma.reshape(-1)
+
+    @cached_property
     def sigma_mean(self) -> Float32[Array, ''] | None:
         """The mean of `sigma`, only over the post-burnin samples."""
         if self.sigma is None:
@@ -856,11 +865,22 @@ class mc_gbart(Module):
     @classmethod
     def _single_run_mcmc(
         cls, key: Key[Array, ''], bart: mcmcstep.State, *args, **kwargs
-    ):
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
         out = mcmcloop.run_mcmc(key, bart, *args, **kwargs)
+        return cls._add_multichain_index(out)
+
+    @classmethod
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def _add_multichain_index(
+        cls,
+        run_mcmc_output: tuple[
+            mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace
+        ],
+    ) -> tuple[mcmcstep.State, mcmcloop.BurninTrace, mcmcloop.MainTrace]:
+        bart, _, _ = run_mcmc_output
         axes = cls._vmap_axes_for_state(bart)
         return jax.vmap(lambda x: x, in_axes=None, out_axes=(axes, 0, 0), axis_size=1)(
-            out
+            run_mcmc_output
         )
 
     @classmethod

@@ -93,37 +93,50 @@ def test_debug_key_reuse_within_jit(keys):
         func(keys.pop())
 
 
-def test_jax_no_copy_behavior():
+class TestJaxNoCopyBehavior:
     """Check whether jax makes actual copies of arrays in various conditions."""
-    # nan-debug mode makes jax create some copies apparently
-    with jax.debug_nans(False):
-        # check buffer donation works unconditionally
-        x = jnp.arange(100)
-        xp = x.unsafe_buffer_pointer()
 
-        @partial(jit, donate_argnums=(0,))
-        def noop(x):
-            return x
+    def test_unconditional_buffer_donation(self):
+        """Test jax donates buffers even if they are small."""
+        # nan-debug mode makes jax create some copies apparently
+        with jax.debug_nans(False):
+            # check buffer donation works unconditionally
+            x = jnp.arange(100)
+            xp = x.unsafe_buffer_pointer()
 
-        y = noop(x)
+            @partial(jit, donate_argnums=(0,))
+            def noop(x):
+                return x
+
+            y = noop(x)
+            yp = y.unsafe_buffer_pointer()
+
+            assert xp == yp
+            with pytest.raises(RuntimeError, match=r'delete'):
+                x[0]
+
+    def test_jnp_array_copy_no_jit(self):
+        """Test jnp.array makes copies outside jitted functions."""
+        y = jnp.arange(100)
         yp = y.unsafe_buffer_pointer()
 
-        assert xp == yp
-        with pytest.raises(RuntimeError, match=r'delete'):
-            x[0]
-
-        # check jnp.array makes actual copies out of the jit
         z = jnp.array(y)
         zp = z.unsafe_buffer_pointer()
 
         assert zp != yp
 
-        # check jnp.array does not make copies within jit
-        @partial(jit, donate_argnums=(0,))
-        def array(x):
-            return jnp.array(x)
+    def test_jnp_array_no_copy_jit(self):
+        """Check jnp.array does not make copies within jit."""
+        # nan-debug mode makes jax create some copies apparently
+        with jax.debug_nans(False):
+            y = jnp.arange(100)
+            yp = y.unsafe_buffer_pointer()
 
-        q = array(y)
-        qp = q.unsafe_buffer_pointer()
+            @partial(jit, donate_argnums=(0,))
+            def array(x):
+                return jnp.array(x)
 
-        assert qp == yp
+            q = array(y)
+            qp = q.unsafe_buffer_pointer()
+
+            assert qp == yp

@@ -1,6 +1,6 @@
 # bartz/workflows/release.yml
 #
-# Copyright (c) 2024-2025, Giacomo Petrillo
+# Copyright (c) 2024-2025, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -23,6 +23,8 @@
 # SOFTWARE.
 
 name: release
+permissions:
+  contents: read
 
 on:
   release:
@@ -30,18 +32,16 @@ on:
   workflow_dispatch:
 
 jobs:
-
   tests:
-
     runs-on: ubuntu-latest
     steps:
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.13
-    - name: Update pip
-      run: python -m pip install --upgrade pip
-    - name: Install software
-      run: python -m pip install bartz
-    - name: Try to import it
-      run: python -c 'import bartz;print(bartz.__version__)'
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+      - name: Update pip
+        run: python -m pip install --upgrade pip
+      - name: Install software
+        run: python -m pip install bartz
+      - name: Try to import it
+        run: python -c 'import bartz;print(bartz.__version__)'
