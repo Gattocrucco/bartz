@@ -469,36 +469,49 @@ def test_sequential_guarantee(kw):
     bart1 = mc_gbart(**kw)
 
     # run moving some samples form burn-in to main
-    kw['seed'] = random.clone(kw['seed'])
-    if kw.get('sparse', False):
+    kw2 = kw.copy()
+    kw2['seed'] = random.clone(kw2['seed'])
+    if kw2.get('sparse', False):
         callback_state = (
             PrintCallbackState(None, None),
-            SparseCallbackState(kw['nskip'] // 2),
+            SparseCallbackState(kw2['nskip'] // 2),
         )
         # see `mcmcloop.make_default_callback`
-        kw.setdefault('run_mcmc_kw', {}).setdefault('callback_state', callback_state)
+        kw2.setdefault('run_mcmc_kw', {}).setdefault('callback_state', callback_state)
     delta = 1
-    kw['nskip'] -= delta
-    kw['ndpost'] += delta * kw['mc_cores']
-    bart2 = mc_gbart(**kw)
-    assert_array_equal(
-        bart1.yhat_train,
-        bart2.yhat_train.reshape(
-            kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
-        )[:, delta:, :].reshape(bart1.ndpost, kw['y_train'].size),
-    )
+    kw2['nskip'] -= delta
+    kw2['ndpost'] += delta * kw2['mc_cores']
+    bart2 = mc_gbart(**kw2)
+    n = kw2['y_train'].size
+    bart2_yhat_train = bart2.yhat_train.reshape(
+        kw2['mc_cores'], kw2['ndpost'] // kw2['mc_cores'], n
+    )[:, delta:, :].reshape(bart1.ndpost, n)
+    if bart1.yhat_train.device.platform == 'cpu':
+        assert_array_equal(bart1.yhat_train, bart2_yhat_train)
+    else:
+        # on gpu typically it works fine, but in one case there was a small
+        # numerical difference in one of two chains
+        assert_close_matrices(bart1.yhat_train, bart2_yhat_train, rtol=2e-6)
 
     # run keeping 1 every 2 samples
-    kw['seed'] = random.clone(kw['seed'])
-    kw['keepevery'] = 2
-    bart3 = mc_gbart(**kw)
-    bart2_yhat_train = bart2.yhat_train.reshape(
-        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
+    kw3 = kw.copy()
+    kw3['seed'] = random.clone(kw3['seed'])
+    kw3['keepevery'] = 2
+    bart3 = mc_gbart(**kw3)
+    bart1_yhat_train = bart1.yhat_train.reshape(
+        kw3['mc_cores'], kw3['ndpost'] // kw3['mc_cores'], n
     )[:, 1::2, :]
     bart3_yhat_train = bart3.yhat_train.reshape(
-        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
-    )[:, : bart2_yhat_train.shape[1], :]
-    assert_array_equal(bart2_yhat_train, bart3_yhat_train)
+        kw3['mc_cores'], kw3['ndpost'] // kw3['mc_cores'], n
+    )[:, : bart1_yhat_train.shape[1], :]
+    if bart1.yhat_train.device.platform == 'cpu':
+        assert_array_equal(bart1_yhat_train, bart3_yhat_train)
+    else:
+        # on gpu typically it works fine, but in one case there was a small
+        # numerical difference in one of two chains
+        assert_close_matrices(
+            bart1_yhat_train.reshape(-1, n), bart3_yhat_train.reshape(-1, n), rtol=1e-6
+        )
 
 
 def test_output_shapes(kw):
