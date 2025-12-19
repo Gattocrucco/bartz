@@ -1253,9 +1253,14 @@ def test_polars(kw):
     bart2 = mc_gbart(**kw)
     pred2 = bart2.predict(kw['x_test'])
 
-    assert_array_equal(bart.yhat_train, bart2.yhat_train)
-    assert_array_equal(bart.sigma, bart2.sigma)
-    assert_array_equal(pred, pred2)
+    if pred.device.platform == 'cpu':
+        func = assert_array_equal
+    else:
+        func = partial(assert_close_matrices, rtol=1e-6)
+
+    func(bart.yhat_train, bart2.yhat_train)
+    func(bart.sigma, bart2.sigma)
+    func(pred, pred2)
 
 
 def test_data_format_mismatch(kw):
@@ -1380,12 +1385,17 @@ def merge_mcmc_state(ref_state: State, *states: State):
     )
 
 
+PLATFORM = jax.devices()[0].platform
+PYTHON_VERSION = version_info[:2]
+OLD_PYTHON = (3, 10)
+EXACT_CHECK = PLATFORM != 'gpu' and PYTHON_VERSION != OLD_PYTHON
+
+
 class TestProfile:
     """Test the behavior of `mc_gbart` in profiling mode."""
 
     @pytest.mark.xfail(
-        version_info[:2] == (3, 10),
-        reason='With the old toolchain the results are similar but not exactly the same.',
+        not EXACT_CHECK, reason='exact equality fails on old toolchain or gpu'
     )
     def test_same_result(self, kw: dict):
         """Check that the result is the same in profiling mode."""
@@ -1399,9 +1409,7 @@ class TestProfile:
         tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
 
-    @pytest.mark.skipif(
-        version_info[:2] != (3, 10), reason='Redundant with the up-to-date toolchain.'
-    )
+    @pytest.mark.skipif(EXACT_CHECK)
     def test_similar_result(self, kw: dict):
         """Check that the result is similar in profiling mode."""
         bart = mc_gbart(**kw)
@@ -1410,6 +1418,7 @@ class TestProfile:
 
         def check_same(_path, x, xp):
             assert_allclose(xp, x, atol=1e-5, rtol=1e-5)
+            # maybe this should be close_matrices
 
         tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
