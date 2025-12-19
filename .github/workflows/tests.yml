@@ -74,27 +74,41 @@ jobs:
           python -m pip install gitlint
           gitlint --commits ${{ steps.refs.outputs.from }}..HEAD --fail-without-commits --debug
 
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      benchmarks-matrix: ${{ steps.set-matrix.outputs.benchmarks-matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          BASE_MATRIX='[
+            {"os":"ubuntu-latest","runs-on":"ubuntu-latest","target-suffix":""},
+            {"os":"ubuntu-22.04","runs-on":"ubuntu-22.04","target-suffix":"-old"}
+          ]'
+          BENCHMARKS_BASE_MATRIX='[
+            {"os":"ubuntu-latest","runs-on":"ubuntu-latest","target-suffix":""}
+          ]'
+          GPU_ENTRY='{"os":"machine-T4","runs-on":["machine","gpu=T4","tenancy=spot"],"target-suffix":"-gpu"}'
+
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MATRIX=$(echo "$BASE_MATRIX" | jq -c ". + [$GPU_ENTRY]")
+            BENCHMARKS_MATRIX=$(echo "$BENCHMARKS_BASE_MATRIX" | jq -c ". + [$GPU_ENTRY]")
+          else
+            MATRIX=$(echo "$BASE_MATRIX" | jq -c ".")
+            BENCHMARKS_MATRIX=$(echo "$BENCHMARKS_BASE_MATRIX" | jq -c ".")
+          fi
+          echo "matrix={\"include\":$MATRIX}" >> $GITHUB_OUTPUT
+          echo "benchmarks-matrix={\"include\":$BENCHMARKS_MATRIX}" >> $GITHUB_OUTPUT
+
   tests:
+    needs: setup-matrix
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.target-suffix == '-gpu' }}
-    if: ${{ matrix.target-suffix != '-gpu' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            runs-on: ubuntu-latest
-            target-suffix: ""
-          - os: ubuntu-22.04
-            runs-on: ubuntu-22.04
-            target-suffix: "-old"
-          - os: machine-T4
-            runs-on:
-              - machine
-              - gpu=T4
-              - tenancy=spot
-            target-suffix: "-gpu"
+      matrix: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
@@ -267,23 +281,13 @@ jobs:
         uses: actions/deploy-pages@v4
 
   benchmarks:
+    needs: setup-matrix
     runs-on: ${{ matrix.runs-on }}
     continue-on-error: ${{ matrix.target-suffix == '-gpu' }}
-    if: ${{ matrix.target-suffix != '-gpu' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            runs-on: ubuntu-latest
-            target-suffix: ""
-          - os: machine-T4
-            runs-on:
-              - machine
-              - gpu=T4
-              - tenancy=spot
-            target-suffix: "-gpu"
+      matrix: ${{ fromJSON(needs.setup-matrix.outputs.benchmarks-matrix) }}
 
     steps:
       - name: Checkout repository
