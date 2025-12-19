@@ -92,6 +92,10 @@ tests:
 tests-old:
 	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND)
 
+.PHONY: tests-gpu
+tests-gpu:
+	$(UV_RUN_CI) python -c 'import jax; assert jax.devices()[0].platform == "gpu"'
+	XLA_PYTHON_CLIENT_MEM_FRACTION=.95 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --numprocesses=0
 
 ################# DOCS #################
 
