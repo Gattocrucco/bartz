@@ -62,6 +62,16 @@ all:
 setup:
 	Rscript -e "renv::restore()"
 	uv run --all-groups pre-commit install
+	@CUDA_VERSION=$$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+' | head -1); \
+	if [ "$$CUDA_VERSION" = "12" ]; then \
+		echo "Detected CUDA 12, installing jax[cuda12]"; \
+		uv pip install "jax[cuda12]"; \
+	elif [ "$$CUDA_VERSION" = "13" ]; then \
+		echo "Detected CUDA 13, installing jax[cuda13]"; \
+		uv pip install "jax[cuda13]"; \
+	else \
+		echo "No CUDA detected"; \
+	fi
 
 
 ################# TESTS #################
