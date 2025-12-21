@@ -1409,7 +1409,9 @@ class TestProfile:
         tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
 
-    @pytest.mark.skipif(EXACT_CHECK)
+    @pytest.mark.skipif(
+        EXACT_CHECK, reason='run only when same_result is expected to fail'
+    )
     def test_similar_result(self, kw: dict):
         """Check that the result is similar in profiling mode."""
         bart = mc_gbart(**kw)
