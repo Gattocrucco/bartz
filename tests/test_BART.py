@@ -1259,7 +1259,8 @@ def test_polars(kw):
         func = partial(assert_close_matrices, rtol=1e-6)
 
     func(bart.yhat_train, bart2.yhat_train)
-    func(bart.sigma, bart2.sigma)
+    if bart.sigma is not None:
+        func(bart.sigma, bart2.sigma)
     func(pred, pred2)
 
 
