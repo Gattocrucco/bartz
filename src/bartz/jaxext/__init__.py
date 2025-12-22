@@ -176,6 +176,8 @@ def truncated_normal_onesided(
     shape: Sequence[int],
     upper: Bool[Array, '*'],
     bound: Float32[Array, '*'],
+    *,
+    clip: bool = True,
 ) -> Float32[Array, '*']:
     """
     Sample from a one-sided truncated standard normal distribution.
@@ -190,6 +192,9 @@ def truncated_normal_onesided(
         True for (-∞, bound], False for [bound, ∞).
     bound
         The truncation boundary.
+    clip
+        Whether to clip the truncated uniform samples to (0, 1) before
+        transforming them to truncated normal. Intended for debugging purposes.
 
     Returns
     -------
@@ -220,6 +225,13 @@ def truncated_normal_onesided(
     left_u = scale * (1 - u)  # ~ uniform in (0, ndtr(±bound)]
     right_u = shift + scale * u  # ~ uniform in [ndtr(∓bound), 1)
     truncated_u = jnp.where(upper ^ bound_pos, left_u, right_u)
+    if clip:
+        # on gpu the accuracy is lower and sometimes u can reach the boundaries
+        zero = jnp.zeros((), truncated_u.dtype)
+        one = jnp.ones((), truncated_u.dtype)
+        truncated_u = jnp.clip(
+            truncated_u, jnp.nextafter(zero, one), jnp.nextafter(one, zero)
+        )
     truncated_norm = ndtri(truncated_u)
     return jnp.where(bound_pos, -truncated_norm, truncated_norm)
 
