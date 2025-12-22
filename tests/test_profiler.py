@@ -43,6 +43,7 @@ from bartz._profiler import (
     scan_if_not_profiling,
     set_profile_mode,
 )
+from bartz.jaxext import get_default_device
 
 
 class TestFlag:
@@ -238,7 +239,7 @@ class TestJitAndBlockIfProfiling:
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
         with debug_nans(False), debug_infs(False):
-            platform = jnp.zeros(()).device.platform
+            platform = get_default_device().platform
             match platform:
                 case 'cpu':
                     n = 2000
