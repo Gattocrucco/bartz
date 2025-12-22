@@ -62,7 +62,7 @@ from bartz.debug import (
 from bartz.debug import debug_gbart as gbart
 from bartz.debug import debug_mc_gbart as mc_gbart
 from bartz.grove import is_actual_leaf, tree_depth, tree_depths
-from bartz.jaxext import split
+from bartz.jaxext import get_default_device, split
 from bartz.mcmcloop import (
     PrintCallbackState,
     SparseCallbackState,
@@ -1386,7 +1386,7 @@ def merge_mcmc_state(ref_state: State, *states: State):
     )
 
 
-PLATFORM = jax.devices()[0].platform
+PLATFORM = get_default_device().platform
 PYTHON_VERSION = version_info[:2]
 OLD_PYTHON = (3, 10)
 EXACT_CHECK = PLATFORM != 'gpu' and PYTHON_VERSION != OLD_PYTHON
