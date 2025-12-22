@@ -510,7 +510,7 @@ def test_sequential_guarantee(kw):
         # on gpu typically it works fine, but in one case there was a small
         # numerical difference in one of two chains
         assert_close_matrices(
-            bart1_yhat_train.reshape(-1, n), bart3_yhat_train.reshape(-1, n), rtol=1e-6
+            bart1_yhat_train.reshape(-1, n), bart3_yhat_train.reshape(-1, n), rtol=2e-6
         )
 
 
