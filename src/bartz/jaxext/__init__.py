@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from functools import partial
 
 import jax
-from jax import Device, jit, random
+from jax import Device, ensure_compile_time_eval, jit, random
 from jax import numpy as jnp
 from jax.lax import scan
 from jax.scipy.special import ndtr
@@ -237,5 +237,6 @@ def truncated_normal_onesided(
 
 
 def get_default_device() -> Device:
-    """Get the default JAX device."""
-    return jnp.zeros(()).device
+    """Get the current default JAX device."""
+    with ensure_compile_time_eval():
+        return jnp.zeros(()).device
