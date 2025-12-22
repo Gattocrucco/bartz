@@ -24,13 +24,14 @@
 
 """Pytest configuration."""
 
+from contextlib import nullcontext
 from re import fullmatch
 
 import jax
 import numpy as np
 import pytest
 
-from bartz import jaxext
+from bartz.jaxext import get_default_device, split
 
 jax.config.update('jax_debug_key_reuse', True)
 jax.config.update('jax_debug_nans', True)
@@ -39,7 +40,7 @@ jax.config.update('jax_legacy_prng_key', 'error')
 
 
 @pytest.fixture
-def keys(request):
+def keys(request) -> split:
     """
     Return a deterministic per-test-case list of jax random keys.
 
@@ -54,4 +55,40 @@ def keys(request):
     rng = np.random.default_rng(seed)
     seed = np.array(rng.bytes(4)).view(np.uint32)
     key = jax.random.key(seed)
-    return jaxext.split(key, 128)
+    return split(key, 128)
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add custom command line options."""
+    parser.addoption(
+        '--platform',
+        choices=['cpu', 'gpu', 'auto'],
+        default='auto',
+        help='JAX platform to use: cpu, gpu, or auto (default: auto)',
+    )
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Configure and print the jax device."""
+    # Get the platform option
+    platform = session.config.getoption('--platform')
+
+    # Set the default JAX device if not auto
+    if platform != 'auto':
+        current_platform = get_default_device().platform
+        if current_platform != platform:
+            jax.config.update('jax_default_device', jax.devices(platform)[0])
+        assert get_default_device().platform == platform
+
+    # Get the capture manager plugin
+    capman = session.config.pluginmanager.get_plugin('capturemanager')
+
+    # Suspend capturing temporarily
+    if capman:
+        ctx = capman.global_and_fixture_disabled()
+    else:
+        ctx = nullcontext()
+
+    with ctx:
+        device_kind = get_default_device().device_kind
+        print(f'jax default device: {device_kind}')

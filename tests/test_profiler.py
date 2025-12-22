@@ -30,7 +30,7 @@ from pstats import Stats
 from time import perf_counter, sleep
 
 import pytest
-from jax import debug_infs, debug_nans, jit, lax, pure_callback, random
+from jax import debug_infs, debug_nans, jit, pure_callback, random
 from jax import numpy as jnp
 from numpy.testing import assert_array_equal
 
@@ -43,6 +43,7 @@ from bartz._profiler import (
     scan_if_not_profiling,
     set_profile_mode,
 )
+from bartz.jaxext import get_default_device
 
 
 class TestFlag:
@@ -238,7 +239,17 @@ class TestJitAndBlockIfProfiling:
     def test_blocks_execution(self):
         """Check that `jit_and_block_if_profiling` blocks execution when profiling."""
         with debug_nans(False), debug_infs(False):
-            func = lambda: idle(100_000)  # 50 ms on my laptop
+            platform = get_default_device().platform
+            match platform:
+                case 'cpu':
+                    n = 2000
+                case 'gpu':
+                    n = 10_000
+                case _:
+                    msg = f'Unsupported platform for timing test: {platform}'
+                    raise RuntimeError(msg)
+
+            func = lambda: idle(n)  # about 50-100 ms
             jit_func = jit(func)
             jab_func = jit_and_block_if_profiling(func)
 
@@ -308,16 +319,8 @@ class TestJitAndBlockIfProfiling:
 
 
 @partial(jit, static_argnums=(0,))
-def idle(steps: int):
-    """Waste time in jax proportionally to `steps`."""
+def idle(n: int):
+    """Waste time in jax computation."""
     key = random.key(0)
-    x = random.normal(key, (8, 8))
-
-    def body(x, _):
-        x @= x.T
-        s = jnp.sqrt(jnp.diag(x))
-        x /= jnp.outer(s, s)
-        return x, None
-
-    x, _ = lax.scan(body, x, None, steps)
-    return x
+    x = random.normal(key, (n, n))
+    return x @ x

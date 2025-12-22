@@ -52,6 +52,7 @@ from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import (
+    get_default_device,
     minimal_unsigned_dtype,
     split,
     truncated_normal_onesided,
@@ -420,7 +421,7 @@ def _choose_suffstat_batch_size(
         try:
             device = y.devices().pop()
         except jax.errors.ConcretizationTypeError:
-            device = jax.devices()[0]
+            device = get_default_device()
         platform = device.platform
         if platform not in ('cpu', 'gpu'):
             msg = f'Unknown platform: {platform}'

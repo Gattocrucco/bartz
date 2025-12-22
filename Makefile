@@ -62,6 +62,16 @@ all:
 setup:
 	Rscript -e "renv::restore()"
 	uv run --all-groups pre-commit install
+	@CUDA_VERSION=$$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9]*' | cut -d' ' -f3); \
+	if [ "$$CUDA_VERSION" = "12" ]; then \
+		echo "Detected CUDA 12, installing jax[cuda12]"; \
+		uv pip install "jax[cuda12]"; \
+	elif [ "$$CUDA_VERSION" = "13" ]; then \
+		echo "Detected CUDA 13, installing jax[cuda13]"; \
+		uv pip install "jax[cuda13]"; \
+	else \
+		echo "No CUDA detected"; \
+	fi
 
 
 ################# TESTS #################
@@ -82,6 +92,10 @@ tests:
 tests-old:
 	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND)
 
+.PHONY: tests-gpu
+tests-gpu:
+	nvidia-smi
+	XLA_PYTHON_CLIENT_MEM_FRACTION=.30 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --platform=gpu
 
 ################# DOCS #################
 
