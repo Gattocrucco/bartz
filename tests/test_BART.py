@@ -71,7 +71,7 @@ from bartz.mcmcloop import (
 )
 from bartz.mcmcstep import State
 from tests.rbartpackages import BART3
-from tests.util import assert_close_matrices
+from tests.util import assert_close_matrices, get_old_python_tuple
 
 
 def gen_X(
@@ -1388,7 +1388,7 @@ def merge_mcmc_state(ref_state: State, *states: State):
 
 PLATFORM = get_default_device().platform
 PYTHON_VERSION = version_info[:2]
-OLD_PYTHON = (3, 10)
+OLD_PYTHON = get_old_python_tuple()
 EXACT_CHECK = PLATFORM != 'gpu' and PYTHON_VERSION != OLD_PYTHON
 
 
