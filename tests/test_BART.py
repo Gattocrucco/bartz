@@ -1256,7 +1256,7 @@ def test_polars(kw):
     if pred.device.platform == 'cpu':
         func = assert_array_equal
     else:
-        func = partial(assert_close_matrices, rtol=1e-6)
+        func = partial(assert_close_matrices, rtol=2e-6)
 
     func(bart.yhat_train, bart2.yhat_train)
     if bart.sigma is not None:

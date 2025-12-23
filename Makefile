@@ -34,9 +34,11 @@ all:
 	@echo "- setup: create R and Python environments for development"
 	@echo "- tests: run unit tests, saving coverage information"
 	@echo "- tests-old: run unit tests with oldest supported python and dependencies"
+	@echo "- tests-gpu: variant of `tests` that works on gpu"
 	@echo "- docs: build html documentation"
 	@echo "- docs-latest: build html documentation for latest release"
 	@echo "- covreport: build html coverage report"
+	@echo "- covcheck: check coverage is above some thresholds"
 	@echo "- release: packages the python module, invokes tests and docs first"
 	@echo "- upload: upload release to PyPI"
 	@echo "- upload-test: upload release to TestPyPI"
@@ -77,10 +79,10 @@ setup:
 ################# TESTS #################
 
 TESTS_VARS = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX)
-TESTS_COMMAND = python -m pytest --cov --numprocesses 2 --dist worksteal $(ARGS)
+TESTS_COMMAND = python -m pytest --cov --numprocesses=2 --dist=worksteal $(ARGS)
 
-UV_RUN_CI = uv run --group ci
-UV_OPTS_OLD = --python $(OLD_PYTHON) --resolution lowest-direct --exclude-newer $(OLD_DATE)
+UV_RUN_CI = uv run --group=ci
+UV_OPTS_OLD = --python=$(OLD_PYTHON) --resolution=lowest-direct --exclude-newer=$(OLD_DATE)
 UV_VARS_OLD = UV_PROJECT_ENVIRONMENT=.venv-old
 UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
@@ -170,17 +172,17 @@ upload: version-tag
 	uv publish
 	@VERSION=$$(uv run python -c 'import bartz; print(bartz.__version__)') && \
 	echo "Try to install bartz $$VERSION from PyPI" && \
-	uv tool run --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
+	uv tool run --with="bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 .PHONY: upload-test
 upload-test: check-committed
 	@echo "Enter TestPyPI token:"
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
-	uv publish --check-url https://test.pypi.org/simple/ --publish-url https://test.pypi.org/legacy/
-	@VERSION=$$(uv run --group ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	uv publish --check-url=https://test.pypi.org/simple/ --publish-url=https://test.pypi.org/legacy/
+	@VERSION=$$(uv run --group=ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
-	uv tool run --index https://test.pypi.org/simple/ --index-strategy unsafe-best-match --with "bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
+	uv tool run --index=https://test.pypi.org/simple/ --index-strategy=unsafe-best-match --with="bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
 
 ################# BENCHMARKS #################
@@ -212,8 +214,8 @@ asv-quick:
 
 .PHONY: ipython
 ipython:
-	IPYTHONDIR=config/ipython uv run --all-groups ipython $(ARGS)
+	IPYTHONDIR=config/ipython uv run --all-groups python -m IPython $(ARGS)
 
 .PHONY: ipython-old
 ipython-old:
-	IPYTHONDIR=config/ipython $(UV_VARS_OLD) uv run --all-groups $(UV_OPTS_OLD) ipython $(ARGS)
+	IPYTHONDIR=config/ipython $(UV_VARS_OLD) uv run --all-groups $(UV_OPTS_OLD) python -m IPython $(ARGS)
