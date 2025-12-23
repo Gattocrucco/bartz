@@ -97,7 +97,7 @@ tests-old:
 .PHONY: tests-gpu
 tests-gpu:
 	nvidia-smi
-	XLA_PYTHON_CLIENT_MEM_FRACTION=.30 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --platform=gpu
+	XLA_PYTHON_CLIENT_MEM_FRACTION=.20 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --platform=gpu --numprocesses=3
 
 ################# DOCS #################
 
