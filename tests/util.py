@@ -24,7 +24,10 @@
 
 """Functions intended to be shared across the test suite."""
 
+from pathlib import Path
+
 import numpy as np
+import tomli
 from jaxtyping import ArrayLike
 from scipy import linalg
 
@@ -97,3 +100,28 @@ norm({expr}) = {adnorm:.2g}  (atol = {atol:.2g})
 ratio = {ratio:.2g}  (rtol = {rtol:.2g})"""
 
         assert adnorm <= atol + rtol * dnorm, msg
+
+
+def get_old_python_str() -> str:
+    """Read the oldest supported Python from pyproject.toml."""
+    with Path('pyproject.toml').open('rb') as file:
+        return tomli.load(file)['project']['requires-python'].removeprefix('>=')
+
+
+def get_old_python_tuple() -> tuple[int, int]:
+    """Read the oldest supported Python from pyproject.toml as a tuple."""
+    ver_str = get_old_python_str()
+    major, minor = ver_str.split('.')
+    return int(major), int(minor)
+
+
+def get_version() -> str:
+    """Read the bartz version from pyproject.toml."""
+    with Path('pyproject.toml').open('rb') as file:
+        return tomli.load(file)['project']['version']
+
+
+def update_version():
+    """Update the version file."""
+    version = get_version()
+    Path('src/bartz/_version.py').write_text(f'__version__ = {version!r}\n')

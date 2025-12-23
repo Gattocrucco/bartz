@@ -25,7 +25,7 @@
 # Makefile for running tests, prepare and upload a release.
 
 COVERAGE_SUFFIX =
-OLD_PYTHON = $(shell uv run --group ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["requires-python"].removeprefix(">="))')
+OLD_PYTHON = $(shell uv run --group=ci python -c 'from tests.util import get_old_python_str; print(get_old_python_str())')
 OLD_DATE = 2025-05-15
 
 .PHONY: all
@@ -34,7 +34,7 @@ all:
 	@echo "- setup: create R and Python environments for development"
 	@echo "- tests: run unit tests, saving coverage information"
 	@echo "- tests-old: run unit tests with oldest supported python and dependencies"
-	@echo "- tests-gpu: variant of `tests` that works on gpu"
+	@echo '- tests-gpu: variant of `tests` that works on gpu'
 	@echo "- docs: build html documentation"
 	@echo "- docs-latest: build html documentation for latest release"
 	@echo "- covreport: build html coverage report"
@@ -143,7 +143,7 @@ update-deps:
 .PHONY: copy-version
 copy-version: src/bartz/_version.py
 src/bartz/_version.py: pyproject.toml
-	uv run --group ci python -c 'import tomli, pathlib; version = tomli.load(open("pyproject.toml", "rb"))["project"]["version"]; pathlib.Path("src/bartz/_version.py").write_text(f"__version__ = {version!r}\n")'
+	uv run --group=ci python -c 'from tests.util import update_version; update_version()'
 
 .PHONY: check-committed
 check-committed:
@@ -180,7 +180,7 @@ upload-test: check-committed
 	@read -s UV_PUBLISH_TOKEN && \
 	export UV_PUBLISH_TOKEN="$$UV_PUBLISH_TOKEN" && \
 	uv publish --check-url=https://test.pypi.org/simple/ --publish-url=https://test.pypi.org/legacy/
-	@VERSION=$$(uv run --group=ci python -c 'import tomli; print(tomli.load(open("pyproject.toml", "rb"))["project"]["version"])') && \
+	@VERSION=$$(uv run --group=ci python -c 'from tests.util import get_version; print(get_version())') && \
 	echo "Try to install bartz $$VERSION from TestPyPI" && \
 	uv tool run --index=https://test.pypi.org/simple/ --index-strategy=unsafe-best-match --with="bartz==$$VERSION" python -c 'import bartz; print(bartz.__version__)'
 
