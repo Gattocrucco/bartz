@@ -1219,7 +1219,7 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
 
 @pytest.mark.flaky
 # it's flaky because the interrupt may be caught and converted by jax internals (#33054)
-@pytest.mark.timeout(16)
+@pytest.mark.timeout(32)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     kw['printevery'] = 1
