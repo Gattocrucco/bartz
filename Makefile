@@ -79,7 +79,7 @@ setup:
 ################# TESTS #################
 
 TESTS_VARS = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX)
-TESTS_COMMAND = python -m pytest --cov --numprocesses=2 --dist=worksteal $(ARGS)
+TESTS_COMMAND = python -m pytest --cov --numprocesses=2 --dist=worksteal
 
 UV_RUN_CI = uv run --group=ci
 UV_OPTS_OLD = --python=$(OLD_PYTHON) --resolution=lowest-direct --exclude-newer=$(OLD_DATE)
@@ -88,16 +88,16 @@ UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --cov-context=test $(ARGS)
 
 .PHONY: tests-old
 tests-old:
-	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND)
+	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND) --cov-context=test $(ARGS)
 
 .PHONY: tests-gpu
 tests-gpu:
 	nvidia-smi
-	XLA_PYTHON_CLIENT_MEM_FRACTION=.20 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --platform=gpu --numprocesses=3
+	XLA_PYTHON_CLIENT_MEM_FRACTION=.20 $(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --platform=gpu --numprocesses=3 $(ARGS)
 
 ################# DOCS #################
 
