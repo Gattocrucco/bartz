@@ -9,41 +9,6 @@
     ]
   },
   "Packages": {
-    "BART": {
-      "Package": "BART",
-      "Version": "2.9.9",
-      "Source": "Repository",
-      "Type": "Package",
-      "Title": "Bayesian Additive Regression Trees",
-      "Date": "2024-06-21",
-      "Authors@R": "c(person('Robert', 'McCulloch', role='aut'), person('Rodney', 'Sparapani', role=c('aut', 'cre'),  email='rsparapa@mcw.edu'), person('Robert', 'Gramacy', role='ctb'), person('Matthew', 'Pratola', role='ctb'), person('Charles', 'Spanbauer', role='ctb'), person('Martyn', 'Plummer', role='ctb'),  person('Nicky', 'Best', role='ctb'), person('Kate', 'Cowles', role='ctb'),  person('Karen', 'Vines', role='ctb'))",
-      "Author": "Robert McCulloch [aut], Rodney Sparapani [aut, cre], Robert Gramacy [ctb], Matthew Pratola [ctb], Charles Spanbauer [ctb], Martyn Plummer [ctb], Nicky Best [ctb], Kate Cowles [ctb], Karen Vines [ctb]",
-      "Maintainer": "Rodney Sparapani <rsparapa@mcw.edu>",
-      "Description": "Bayesian Additive Regression Trees (BART) provide flexible nonparametric modeling of covariates for continuous, binary, categorical and time-to-event outcomes.  For more information see Sparapani, Spanbauer and McCulloch <doi:10.18637/jss.v097.i01>.",
-      "License": "GPL (>= 2)",
-      "Depends": [
-        "R (>= 3.6)",
-        "nlme",
-        "survival"
-      ],
-      "Imports": [
-        "Rcpp (>= 0.12.3)",
-        "parallel",
-        "tools"
-      ],
-      "LinkingTo": [
-        "Rcpp"
-      ],
-      "Suggests": [
-        "MASS",
-        "knitr",
-        "rmarkdown"
-      ],
-      "VignetteBuilder": "knitr",
-      "NeedsCompilation": "yes",
-      "Repository": "https://packagemanager.posit.co/cran/latest",
-      "Encoding": "UTF-8"
-    },
     "BART3": {
       "Package": "BART3",
       "Version": "5.6",

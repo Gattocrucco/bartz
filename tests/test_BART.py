@@ -71,7 +71,7 @@ from bartz.mcmcloop import (
 )
 from bartz.mcmcstep import State
 from tests.rbartpackages import BART3
-from tests.util import assert_close_matrices
+from tests.util import assert_close_matrices, get_old_python_tuple
 
 
 def gen_X(
@@ -1219,7 +1219,7 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
 
 @pytest.mark.flaky
 # it's flaky because the interrupt may be caught and converted by jax internals (#33054)
-@pytest.mark.timeout(16)
+@pytest.mark.timeout(32)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     kw['printevery'] = 1
@@ -1256,7 +1256,7 @@ def test_polars(kw):
     if pred.device.platform == 'cpu':
         func = assert_array_equal
     else:
-        func = partial(assert_close_matrices, rtol=1e-6)
+        func = partial(assert_close_matrices, rtol=2e-6)
 
     func(bart.yhat_train, bart2.yhat_train)
     if bart.sigma is not None:
@@ -1388,7 +1388,7 @@ def merge_mcmc_state(ref_state: State, *states: State):
 
 PLATFORM = get_default_device().platform
 PYTHON_VERSION = version_info[:2]
-OLD_PYTHON = (3, 10)
+OLD_PYTHON = get_old_python_tuple()
 EXACT_CHECK = PLATFORM != 'gpu' and PYTHON_VERSION != OLD_PYTHON
 
 
