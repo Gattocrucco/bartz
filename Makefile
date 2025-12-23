@@ -79,7 +79,7 @@ setup:
 ################# TESTS #################
 
 TESTS_VARS = COVERAGE_FILE=.coverage.tests$(COVERAGE_SUFFIX)
-TESTS_COMMAND = python -m pytest --cov --numprocesses=2 --dist=worksteal
+TESTS_COMMAND = python -m pytest --cov --cov-context=test --numprocesses=2 --dist=worksteal
 
 UV_RUN_CI = uv run --group=ci
 UV_OPTS_OLD = --python=$(OLD_PYTHON) --resolution=lowest-direct --exclude-newer=$(OLD_DATE)
@@ -88,11 +88,11 @@ UV_RUN_CI_OLD = $(UV_VARS_OLD) $(UV_RUN_CI) $(UV_OPTS_OLD)
 
 .PHONY: tests
 tests:
-	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) --cov-context=test $(ARGS)
+	$(TESTS_VARS) $(UV_RUN_CI) $(TESTS_COMMAND) $(ARGS)
 
 .PHONY: tests-old
 tests-old:
-	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND) --cov-context=test $(ARGS)
+	$(TESTS_VARS) $(UV_RUN_CI_OLD) $(TESTS_COMMAND) $(ARGS)
 
 .PHONY: tests-gpu
 tests-gpu:
