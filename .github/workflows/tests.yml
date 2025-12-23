@@ -58,6 +58,7 @@ jobs:
 
       - name: Run pre-commit on changed files
         # even if I run it on all files below, it's convenient to see if something fails in new changes first
+        if: ${{ steps.refs.outputs.from != '' }}
         uses: pre-commit/action@v3.0.1
         with:
           extra_args: --verbose --show-diff-on-failure --from-ref ${{ steps.refs.outputs.from }} --to-ref HEAD
