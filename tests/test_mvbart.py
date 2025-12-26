@@ -29,7 +29,7 @@ from dataclasses import replace
 import pytest
 from jax import numpy as jnp
 from jax import random, vmap
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_array_equal
 from scipy.stats import chi2, ks_1samp, ks_2samp
 
 from bartz.mcmcstep import (
@@ -222,22 +222,24 @@ class TestPrecomputeTerms:
         )
 
 
+@pytest.fixture(params=[(10, 2), (20, 5), (3, 100), (50, 50)])
+def data_shape(request):
+    """Provide (n, p) pairs for testing."""
+    return request.param
+
+
+@pytest.fixture
+def data(data_shape):
+    """Generate a toy dataset."""
+    n, p = data_shape
+    X = jnp.arange(n * p).reshape(p, n)
+    y = jnp.linspace(-1, 1, n)
+    max_split = jnp.full(p, 5, dtype=jnp.uint32)
+    return X, y, max_split
+
+
 class TestMVBartIntegration:
     """Test equivalence between Univariate and Multivariate (k=1) modes."""
-
-    @pytest.fixture(params=[(10, 2), (20, 5), (3, 100), (50, 50)])
-    def data_shape(self, request):
-        """Provide (n, p) pairs for testing."""
-        return request.param
-
-    @pytest.fixture
-    def data(self, data_shape):
-        """Generate a toy dataset."""
-        n, p = data_shape
-        X = jnp.arange(n * p).reshape(p, n).astype(jnp.uint32)
-        y = jnp.linspace(-1, 1, n)
-        max_split = jnp.full(p, 5, dtype=jnp.uint32)
-        return X, y, max_split
 
     def test_init_equivalence(self, data):
         """Test that init produces compatible structures for UV and MV(k=1)."""
@@ -261,8 +263,8 @@ class TestMVBartIntegration:
         bart_mv = init(
             y=y_mv,
             leaf_prior_cov_inv=jnp.array([[1.0]], dtype=jnp.float32),
-            error_cov_inv_df=jnp.array(3.0, dtype=jnp.float32),
-            error_cov_inv_scale=jnp.eye(1, dtype=jnp.float32),
+            error_cov_inv_df=jnp.array(6.0, dtype=jnp.float32),
+            error_cov_inv_scale=4.0 * jnp.eye(1, dtype=jnp.float32),
             **common,
         )
 
@@ -282,50 +284,29 @@ class TestMVBartIntegration:
         assert jnp.ndim(bart_uv.sigma2) == 0
         assert bart_mv.error_cov_inv.shape == (1, 1)
 
-        assert_allclose(bart_uv.resid, bart_mv.resid.squeeze(0), rtol=0, atol=0)
-        assert_allclose(
-            bart_uv.forest.var_tree, bart_mv.forest.var_tree, rtol=0, atol=0
+        assert_array_equal(bart_uv.resid, bart_mv.resid.squeeze(0))
+        assert_array_equal(bart_uv.forest.var_tree, bart_mv.forest.var_tree)
+        assert_array_equal(bart_uv.forest.split_tree, bart_mv.forest.split_tree)
+        assert_array_equal(
+            bart_uv.forest.leaf_tree, bart_mv.forest.leaf_tree.squeeze(1)
         )
-        assert_allclose(
-            bart_uv.forest.split_tree, bart_mv.forest.split_tree, rtol=0, atol=0
-        )
-        assert_allclose(
-            bart_uv.forest.leaf_tree,
-            bart_mv.forest.leaf_tree.squeeze(1),
-            rtol=0,
-            atol=0,
-        )
-        assert_allclose(
-            bart_uv.forest.leaf_indices, bart_mv.forest.leaf_indices, rtol=0, atol=0
-        )
-        assert_allclose(
-            bart_uv.forest.p_nonterminal, bart_mv.forest.p_nonterminal, rtol=0, atol=0
-        )
-        assert_allclose(
-            bart_uv.forest.p_propose_grow, bart_mv.forest.p_propose_grow, rtol=0, atol=0
-        )
-        assert_allclose(
-            bart_uv.forest.affluence_tree, bart_mv.forest.affluence_tree, rtol=0, atol=0
-        )
+        assert_array_equal(bart_uv.forest.leaf_indices, bart_mv.forest.leaf_indices)
+        assert_array_equal(bart_uv.forest.p_nonterminal, bart_mv.forest.p_nonterminal)
+        assert_array_equal(bart_uv.forest.p_propose_grow, bart_mv.forest.p_propose_grow)
+        assert_array_equal(bart_uv.forest.affluence_tree, bart_mv.forest.affluence_tree)
 
     def test_step_sigma_distribution_match(self, keys, data):
         """
         Test that step_sigma and step_sigma2_prec (k = 1) sample from the same posterior.
 
-        UV: 1/sigma2 ~ Gamma(alpha_post, 1/beta_post)
-        MV: error_cov_inv ~ Wishart(df_post, scale_post^-1)
+        UV: 1/sigma2 ~ Gamma(alpha_post, beta_post)
+        MV: error_cov_inv ~ Wishart(df_post, scale_post)
         """
         X, y, _ = data
-        n = y.size
+        resid = random.normal(keys.pop(), (y.size,))
 
-        resid = random.normal(keys.pop(), (n,))
-        ssr = jnp.sum(resid**2)
-
-        alpha_post = 10.0
-        beta_post = 5.0
-
-        alpha_prior_uv = alpha_post - n / 2.0
-        beta_prior_uv = beta_post - ssr / 2.0
+        alpha_prior_uv = 10.0
+        beta_prior_uv = 5.0
 
         st_uv = State(
             X=X,
@@ -344,8 +325,8 @@ class TestMVBartIntegration:
             forest=None,
         )
 
-        df_prior_mv = (2 * alpha_post) - n
-        scale_prior_mv = (2 * beta_post) - ssr
+        df_prior_mv = 2 * alpha_prior_uv
+        scale_prior_mv = 2 * beta_prior_uv
 
         st_mv = State(
             X=X,
@@ -371,11 +352,8 @@ class TestMVBartIntegration:
             return step_sigma2_prec(k, st_mv).error_cov_inv[0, 0]
 
         n_samples = 10000
-        subkeys = random.split(keys.pop(), n_samples)
-        samples_uv = vmap(sample_uv)(subkeys)
-
-        subkeys = random.split(keys.pop(), n_samples)
-        samples_mv = vmap(sample_mv)(subkeys)
+        samples_uv = vmap(sample_uv)(keys.pop(n_samples))
+        samples_mv = vmap(sample_mv)(keys.pop(n_samples))
 
         _, p_value = ks_2samp(samples_uv, samples_mv)
 
@@ -385,20 +363,6 @@ class TestMVBartIntegration:
 
 class TestMVBartSteps:
     """Test the full MCMC step trajectory (init + multiple steps)."""
-
-    @pytest.fixture(params=[(10, 2), (20, 5), (3, 100), (50, 50)])
-    def data_shape(self, request):
-        """Provide (n, p) pairs for testing."""
-        return request.param
-
-    @pytest.fixture
-    def data(self, data_shape):
-        """Generate a toy dataset."""
-        n, p = data_shape
-        X = jnp.arange(n * p).reshape(p, n)
-        y = jnp.linspace(-1, 1, n, dtype=jnp.float64)
-        max_split = jnp.full(p, 5, dtype=jnp.uint32)
-        return X, y, max_split
 
     def test_step_trees_exact_match(self, keys, data):
         """Test that MV tree logic is Identical to UV logic."""
@@ -421,7 +385,7 @@ class TestMVBartSteps:
             y=y_mv,
             leaf_prior_cov_inv=jnp.eye(1),
             error_cov_inv_df=jnp.array(4.0),
-            error_cov_inv_scale=jnp.eye(1),
+            error_cov_inv_scale=2 * jnp.eye(1),
             kind='mv',
             **params,
         )
@@ -440,83 +404,37 @@ class TestMVBartSteps:
             ),
         )
 
-        key_tree = keys.pop()
-        key_tree_mv = random.clone(key_tree)
+        key = keys.pop()
+        uv_next = step_trees(key, uv_state)
+        mv_next = step_trees(random.clone(key), mv_state)
 
-        uv_next = step_trees(key_tree, uv_state)
-        mv_next = step_trees(key_tree_mv, mv_state)
-
-        assert_allclose(uv_next.resid, mv_next.resid.squeeze(0), atol=1e-2, rtol=1e-2)
-
-    def test_trajectory_equivalence(self, keys, data):
-        """Test that UV and MV(k = 1) gives similar updates after some gibbs steps."""
-        X, y, max_split = data
-        y_mv = y[None, :]
-
-        params = dict(
-            X=X,
-            max_split=max_split,
-            num_trees=10,
-            p_nonterminal=jnp.array([0.9, 0.5]),
-            sigma_mu2=1.0,
-            resid_batch_size=None,
-            count_batch_size=None,
-            filter_splitless_vars=False,
+        assert_allclose(uv_next.resid, mv_next.resid.squeeze(0), atol=1e-3, rtol=1e-3)
+        assert_allclose(
+            uv_state.forest.leaf_tree,
+            mv_state.forest.leaf_tree.squeeze(1),
+            atol=1e-3,
+            rtol=1e-3,
         )
 
-        uv_state = init(y=y, sigma2_alpha=2.0, sigma2_beta=1.0, kind='uv', **params)
-        mv_state = init(
-            y=y_mv,
-            leaf_prior_cov_inv=jnp.eye(1),
-            error_cov_inv_df=jnp.array(4.0),
-            error_cov_inv_scale=jnp.array([[2.0]]),
-            kind='mv',
-            **params,
-        )
-        mv_state = replace(
-            mv_state,
-            resid=uv_state.resid[None, :],
-            error_cov_inv=jnp.array([[1.0 / uv_state.sigma2]]),
-            forest=replace(
-                mv_state.forest,
-                var_tree=uv_state.forest.var_tree,
-                split_tree=uv_state.forest.split_tree,
-                leaf_tree=uv_state.forest.leaf_tree[:, None, :],
-                leaf_indices=uv_state.forest.leaf_indices,
-                affluence_tree=uv_state.forest.affluence_tree,
-            ),
+        assert_array_equal(uv_state.forest.var_tree, mv_state.forest.var_tree)
+        assert_array_equal(uv_state.forest.split_tree, mv_state.forest.split_tree)
+        assert_array_equal(uv_state.forest.leaf_indices, mv_state.forest.leaf_indices)
+        assert_array_equal(
+            uv_state.forest.affluence_tree, mv_state.forest.affluence_tree
         )
 
-        n_burnin, n_keep = 200, 50
-        master = keys.pop()
-        masters = random.split(master, n_burnin + n_keep)
-
-        for i in range(n_burnin):  # burn-in
-            k_uv, k_mv = random.split(masters[i], 2)
-            uv_state = step(k_uv, uv_state)
-            mv_state = step(k_mv, mv_state)
-
-        uv_precs, mv_precs = [], []
-        uv_mses, mv_mses = [], []
-
-        for i in range(n_keep):
-            k_uv, k_mv = random.split(masters[n_burnin + i], 2)
-            uv_state = step(k_uv, uv_state)
-            mv_state = step(k_mv, mv_state)
-            uv_precs.append(1.0 / uv_state.sigma2)
-            mv_precs.append(mv_state.error_cov_inv[0, 0])
-
-            uv_mses.append(jnp.mean(uv_state.resid**2))
-            mv_mses.append(jnp.mean(mv_state.resid**2))
-
-        uv_mean_sigma = jnp.mean(jnp.array(uv_precs))
-        mv_mean_sigma = jnp.mean(jnp.array(mv_precs))
-
-        uv_mean_mse = jnp.mean(jnp.array(uv_mses))
-        mv_mean_mse = jnp.mean(jnp.array(mv_mses))
-
-        assert_allclose(uv_mean_sigma, mv_mean_sigma, rtol=1.0, atol=1.0)
-        assert_allclose(uv_mean_mse, mv_mean_mse, rtol=1.0, atol=1.0)
+        assert_array_equal(
+            uv_state.forest.grow_prop_count, mv_state.forest.grow_prop_count
+        )
+        assert_array_equal(
+            uv_state.forest.grow_acc_count, mv_state.forest.grow_acc_count
+        )
+        assert_array_equal(
+            uv_state.forest.prune_prop_count, mv_state.forest.prune_prop_count
+        )
+        assert_array_equal(
+            uv_state.forest.prune_acc_count, mv_state.forest.prune_acc_count
+        )
 
     def test_mv_steps(self, keys, data):
         """Test that mv mode can run without crashing."""

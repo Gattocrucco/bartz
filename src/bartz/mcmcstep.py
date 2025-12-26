@@ -303,7 +303,7 @@ def init(
         variance. Leave unspecified for binary regression.
     error_cov_inv_df
     error_cov_inv_scale
-        The parameters of the inverse Wishard prior on the error covariance matrix.
+        The parameters of the inverse Wishart prior on the error covariance matrix.
     error_scale
         Each error is scaled by the corresponding factor in `error_scale`, so
         the error variance for ``y[i]`` is ``sigma2 * error_scale[i] ** 2``.
@@ -2203,8 +2203,7 @@ def precompute_likelihood_terms_mv(
     def _covariance_from_chol(L):
         rhs = jnp.broadcast_to(error_cov_inv, L.shape)  # (num_trees, k, k)
         Y = solve_triangular(L, rhs, lower=True)  # (num_trees, k, k)
-        YT = jnp.swapaxes(Y, -1, -2)  # (num_trees, k, k)
-        return YT @ Y
+        return Y.mT @ Y
 
     prelkv = PreLkV(
         sigma2_left=_covariance_from_chol(L_left),
