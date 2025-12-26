@@ -529,6 +529,7 @@ def print_callback(
                 prune_acc_count=bart.forest.prune_acc_count,
                 prop_total=len(bart.forest.leaf_tree),
                 fill=grove.forest_fill(bart.forest.split_tree),
+                ordered=True,
             )
 
         report_cond = (i_total + 1) % callback_state.report_every == 0

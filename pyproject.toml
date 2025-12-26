@@ -86,7 +86,6 @@ addopts = [
     "--durations=3",
     "--verbose",
     "--import-mode=importlib",
-    "--cov-context=test",
 ]
 filterwarnings = [
     "ignore:unclosed database:ResourceWarning",

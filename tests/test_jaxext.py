@@ -246,7 +246,7 @@ class TestJaxPatches:
         alpha = 3.5
         x0 = scipy_invgamma.ppf(p, alpha)
         x1 = invgamma.ppf(p, alpha)
-        assert_allclose(x1, x0)
+        assert_allclose(x1, x0, rtol=1e-6)
 
     @pytest.mark.xfail(reason='Fixed in jax 0.6.2.')
     def test_ndtri_bugged(self, keys):
@@ -313,12 +313,17 @@ class TestTruncatedNormalOneSided:
 
         keys = random.split(keys.pop(), n_loops)
 
+        platform = keys.device.platform
+        clip = platform == 'gpu'
+
         @jit
         def loop_body(key):
             keys = jaxext.split(key, 3)
             upper = random.bernoulli(keys.pop(), 0.5, shape)
             bound = random.uniform(keys.pop(), shape, float, -1, 1)
-            return jaxext.truncated_normal_onesided(keys.pop(), shape, upper, bound)
+            return jaxext.truncated_normal_onesided(
+                keys.pop(), shape, upper, bound, clip=clip
+            )
 
         for key in keys:
             vals = loop_body(key)

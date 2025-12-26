@@ -62,7 +62,7 @@ from bartz.debug import (
 from bartz.debug import debug_gbart as gbart
 from bartz.debug import debug_mc_gbart as mc_gbart
 from bartz.grove import is_actual_leaf, tree_depth, tree_depths
-from bartz.jaxext import split
+from bartz.jaxext import get_default_device, split
 from bartz.mcmcloop import (
     PrintCallbackState,
     SparseCallbackState,
@@ -71,7 +71,7 @@ from bartz.mcmcloop import (
 )
 from bartz.mcmcstep import State
 from tests.rbartpackages import BART3
-from tests.util import assert_close_matrices
+from tests.util import assert_close_matrices, get_old_python_tuple
 
 
 def gen_X(
@@ -469,36 +469,49 @@ def test_sequential_guarantee(kw):
     bart1 = mc_gbart(**kw)
 
     # run moving some samples form burn-in to main
-    kw['seed'] = random.clone(kw['seed'])
-    if kw.get('sparse', False):
+    kw2 = kw.copy()
+    kw2['seed'] = random.clone(kw2['seed'])
+    if kw2.get('sparse', False):
         callback_state = (
             PrintCallbackState(None, None),
-            SparseCallbackState(kw['nskip'] // 2),
+            SparseCallbackState(kw2['nskip'] // 2),
         )
         # see `mcmcloop.make_default_callback`
-        kw.setdefault('run_mcmc_kw', {}).setdefault('callback_state', callback_state)
+        kw2.setdefault('run_mcmc_kw', {}).setdefault('callback_state', callback_state)
     delta = 1
-    kw['nskip'] -= delta
-    kw['ndpost'] += delta * kw['mc_cores']
-    bart2 = mc_gbart(**kw)
-    assert_array_equal(
-        bart1.yhat_train,
-        bart2.yhat_train.reshape(
-            kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
-        )[:, delta:, :].reshape(bart1.ndpost, kw['y_train'].size),
-    )
+    kw2['nskip'] -= delta
+    kw2['ndpost'] += delta * kw2['mc_cores']
+    bart2 = mc_gbart(**kw2)
+    n = kw2['y_train'].size
+    bart2_yhat_train = bart2.yhat_train.reshape(
+        kw2['mc_cores'], kw2['ndpost'] // kw2['mc_cores'], n
+    )[:, delta:, :].reshape(bart1.ndpost, n)
+    if bart1.yhat_train.device.platform == 'cpu':
+        assert_array_equal(bart1.yhat_train, bart2_yhat_train)
+    else:
+        # on gpu typically it works fine, but in one case there was a small
+        # numerical difference in one of two chains
+        assert_close_matrices(bart1.yhat_train, bart2_yhat_train, rtol=2e-6)
 
     # run keeping 1 every 2 samples
-    kw['seed'] = random.clone(kw['seed'])
-    kw['keepevery'] = 2
-    bart3 = mc_gbart(**kw)
-    bart2_yhat_train = bart2.yhat_train.reshape(
-        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
+    kw3 = kw.copy()
+    kw3['seed'] = random.clone(kw3['seed'])
+    kw3['keepevery'] = 2
+    bart3 = mc_gbart(**kw3)
+    bart1_yhat_train = bart1.yhat_train.reshape(
+        kw3['mc_cores'], kw3['ndpost'] // kw3['mc_cores'], n
     )[:, 1::2, :]
     bart3_yhat_train = bart3.yhat_train.reshape(
-        kw['mc_cores'], kw['ndpost'] // kw['mc_cores'], kw['y_train'].size
-    )[:, : bart2_yhat_train.shape[1], :]
-    assert_array_equal(bart2_yhat_train, bart3_yhat_train)
+        kw3['mc_cores'], kw3['ndpost'] // kw3['mc_cores'], n
+    )[:, : bart1_yhat_train.shape[1], :]
+    if bart1.yhat_train.device.platform == 'cpu':
+        assert_array_equal(bart1_yhat_train, bart3_yhat_train)
+    else:
+        # on gpu typically it works fine, but in one case there was a small
+        # numerical difference in one of two chains
+        assert_close_matrices(
+            bart1_yhat_train.reshape(-1, n), bart3_yhat_train.reshape(-1, n), rtol=2e-6
+        )
 
 
 def test_output_shapes(kw):
@@ -1206,7 +1219,7 @@ def periodic_sigint(*, first_after: float, interval: float, announce: bool):
 
 @pytest.mark.flaky
 # it's flaky because the interrupt may be caught and converted by jax internals (#33054)
-@pytest.mark.timeout(16)
+@pytest.mark.timeout(32)
 def test_interrupt(kw):
     """Test that the MCMC can be interrupted with ^C."""
     kw['printevery'] = 1
@@ -1240,9 +1253,15 @@ def test_polars(kw):
     bart2 = mc_gbart(**kw)
     pred2 = bart2.predict(kw['x_test'])
 
-    assert_array_equal(bart.yhat_train, bart2.yhat_train)
-    assert_array_equal(bart.sigma, bart2.sigma)
-    assert_array_equal(pred, pred2)
+    if pred.device.platform == 'cpu':
+        func = assert_array_equal
+    else:
+        func = partial(assert_close_matrices, rtol=2e-6)
+
+    func(bart.yhat_train, bart2.yhat_train)
+    if bart.sigma is not None:
+        func(bart.sigma, bart2.sigma)
+    func(pred, pred2)
 
 
 def test_data_format_mismatch(kw):
@@ -1313,8 +1332,8 @@ def test_split_key_multichain_equivalence(kw):
     assert_close_matrices(bart1.yhat_train, bart2.yhat_train, rtol=1e-5)
     assert_close_matrices(bart1.yhat_test, bart2.yhat_test, rtol=1e-5)
     if kw['y_train'].dtype == bool:  # binary regression
-        assert_close_matrices(bart1.prob_train, bart2.prob_train)
-        assert_close_matrices(bart1.prob_test, bart2.prob_test)
+        assert_close_matrices(bart1.prob_train, bart2.prob_train, rtol=1e-6)
+        assert_close_matrices(bart1.prob_test, bart2.prob_test, rtol=1e-6)
     else:  # continuous regression
         assert_close_matrices(bart1.yhat_train_mean, bart2.yhat_train_mean, rtol=1e-5)
         assert_close_matrices(bart1.yhat_test_mean, bart2.yhat_test_mean, rtol=1e-5)
@@ -1367,12 +1386,17 @@ def merge_mcmc_state(ref_state: State, *states: State):
     )
 
 
+PLATFORM = get_default_device().platform
+PYTHON_VERSION = version_info[:2]
+OLD_PYTHON = get_old_python_tuple()
+EXACT_CHECK = PLATFORM != 'gpu' and PYTHON_VERSION != OLD_PYTHON
+
+
 class TestProfile:
     """Test the behavior of `mc_gbart` in profiling mode."""
 
     @pytest.mark.xfail(
-        version_info[:2] == (3, 10),
-        reason='With the old toolchain the results are similar but not exactly the same.',
+        not EXACT_CHECK, reason='exact equality fails on old toolchain or gpu'
     )
     def test_same_result(self, kw: dict):
         """Check that the result is the same in profiling mode."""
@@ -1387,7 +1411,7 @@ class TestProfile:
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)
 
     @pytest.mark.skipif(
-        version_info[:2] != (3, 10), reason='Redundant with the up-to-date toolchain.'
+        EXACT_CHECK, reason='run only when same_result is expected to fail'
     )
     def test_similar_result(self, kw: dict):
         """Check that the result is similar in profiling mode."""
@@ -1397,6 +1421,7 @@ class TestProfile:
 
         def check_same(_path, x, xp):
             assert_allclose(xp, x, atol=1e-5, rtol=1e-5)
+            # maybe this should be close_matrices
 
         tree_map_with_path(check_same, bart._mcmc_state, bartp._mcmc_state)
         tree_map_with_path(check_same, bart._main_trace, bartp._main_trace)

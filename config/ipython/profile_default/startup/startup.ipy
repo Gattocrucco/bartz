@@ -1,3 +1,10 @@
+with open(__file__) as f:
+    print("Startup commands:")
+    for i, line in enumerate(f):
+        if i >= 7:
+            print(f">>> {line.rstrip('\n')}")
+    print()
+
 %matplotlib
 %load_ext autoreload
 %autoreload 2
