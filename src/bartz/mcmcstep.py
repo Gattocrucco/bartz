@@ -170,8 +170,8 @@ class State(Module):
         regression.
     offset
         Constant shift added to the sum of trees.
-    sigma2
-        The error variance. `None` in binary regression.
+    inv_sigma2
+        The inverse error variance. `None` in binary regression.
     error_cov_inv
         The inverse of error covariance matrix, in multivariate responses cases.
     prec_scale
@@ -195,7 +195,7 @@ class State(Module):
     z: None | Float32[Array, ' n']
     offset: Float32[Array, ''] | Float32[Array, ' k']
     resid: Float32[Array, ' n'] | Float32[Array, ' k n']
-    sigma2: Float32[Array, ''] | None
+    inv_sigma2: Float32[Array, ''] | None
     error_cov_inv: Float32[Array, 'k k'] | None
     prec_scale: Float32[Array, ' n'] | None
     sigma2_alpha: Float32[Array, ''] | None
@@ -225,7 +225,7 @@ def _init_kind_parameters(
         else:
             kind = 'mv'
 
-    sigma2 = None
+    inv_sigma2 = None
     error_cov_inv = None
 
     if kind == 'binary':
@@ -238,11 +238,11 @@ def _init_kind_parameters(
     elif kind == 'uv':
         sigma2_alpha = jnp.asarray(sigma2_alpha)
         sigma2_beta = jnp.asarray(sigma2_beta)
-        sigma2 = sigma2_beta / sigma2_alpha
+        inv_sigma2 = sigma2_alpha / sigma2_beta
     else:  # kind == 'mv'
         error_cov_inv = error_cov_inv_scale * error_cov_inv_df
 
-    return kind, sigma2, error_cov_inv, sigma2_alpha, sigma2_beta
+    return kind, inv_sigma2, error_cov_inv, sigma2_alpha, sigma2_beta
 
 
 def init(
@@ -385,7 +385,7 @@ def init(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
 
-    kind, sigma2, error_cov_inv, sigma2_alpha, sigma2_beta = _init_kind_parameters(
+    kind, inv_sigma2, error_cov_inv, sigma2_alpha, sigma2_beta = _init_kind_parameters(
         kind,
         y,
         k,
@@ -427,7 +427,7 @@ def init(
         z=jnp.full(y.shape, offset) if is_binary else None,
         offset=offset,
         resid=jnp.zeros(y.shape) if is_binary else y - offset,
-        sigma2=sigma2 if kind == 'uv' else None,
+        inv_sigma2=inv_sigma2 if kind == 'uv' else None,
         error_cov_inv=error_cov_inv if kind == 'mv' else None,
         prec_scale=(
             None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
@@ -549,9 +549,9 @@ def step(key: Key[Array, ''], bart: State) -> State:
     keys = split(key)
 
     if bart.kind == 'binary':
-        bart = replace(bart, sigma2=jnp.float32(1))
+        bart = replace(bart, inv_sigma2=jnp.float32(1))
         bart = step_trees(keys.pop(), bart)
-        bart = replace(bart, sigma2=None)
+        bart = replace(bart, inv_sigma2=None)
         return step_z(keys.pop(), bart)
 
     elif bart.kind == 'mv':
@@ -1754,12 +1754,12 @@ def accept_moves_parallel_stage(
             key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
         )
     else:
-        assert bart.sigma2 is not None
+        assert bart.inv_sigma2 is not None
         prelkv, prelk = precompute_likelihood_terms_uv(
-            bart.sigma2, bart.forest.sigma_mu2, move_precs
+            bart.inv_sigma2, bart.forest.sigma_mu2, move_precs
         )
         prelf = precompute_leaf_terms_uv(
-            key, prec_trees, bart.sigma2, bart.forest.sigma_mu2
+            key, prec_trees, bart.inv_sigma2, bart.forest.sigma_mu2
         )
 
     return ParallelStageOut(
@@ -2101,7 +2101,7 @@ def adapt_leaf_trees_to_grow_indices(
 
 
 def precompute_likelihood_terms_uv(
-    sigma2: Float32[Array, ''],
+    inv_sigma2: Float32[Array, ''],
     sigma_mu2: Float32[Array, ''],
     move_precs: Precs | Counts,
 ) -> tuple[PreLkV, PreLk]:
@@ -2110,9 +2110,9 @@ def precompute_likelihood_terms_uv(
 
     Parameters
     ----------
-    sigma2
-        The error variance, or the global error variance factor is `prec_scale`
-        is set.
+    inv_sigma2
+        The inverse error variance, or the inverse global error variance factor
+        if `prec_scale` is set.
     sigma_mu2
         The prior variance of each leaf.
     move_precs
@@ -2128,6 +2128,7 @@ def precompute_likelihood_terms_uv(
         Dictionary with pre-computed terms of the likelihood ratio, shared by
         all trees.
     """
+    sigma2 = lax.reciprocal(inv_sigma2)
     sigma2_left = sigma2 + move_precs.left * sigma_mu2
     sigma2_right = sigma2 + move_precs.right * sigma_mu2
     sigma2_total = sigma2 + move_precs.total * sigma_mu2
@@ -2137,7 +2138,7 @@ def precompute_likelihood_terms_uv(
         sigma2_total=sigma2_total,
         sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
     )
-    return prelkv, PreLk(exp_factor=sigma_mu2 / (2 * sigma2))
+    return prelkv, PreLk(exp_factor=sigma_mu2 * inv_sigma2 / 2)
 
 
 @partial(jnp.vectorize, signature='(k,k)->(k,k)')
@@ -2219,7 +2220,7 @@ def precompute_likelihood_terms_mv(
 def precompute_leaf_terms_uv(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
-    sigma2: Float32[Array, ''],
+    inv_sigma2: Float32[Array, ''],
     sigma_mu2: Float32[Array, ''],
     z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
@@ -2232,8 +2233,8 @@ def precompute_leaf_terms_uv(
         A jax random key.
     prec_trees
         The likelihood precision scale in each potential or actual leaf node.
-    sigma2
-        The error variance, or the global error variance factor if `prec_scale`
+    inv_sigma2
+        The inverse error variance, or the inverse global error variance factor if `prec_scale`
         is set.
     sigma_mu2
         The prior variance of each leaf.
@@ -2245,13 +2246,13 @@ def precompute_leaf_terms_uv(
     -------
     Pre-computed terms for leaf sampling.
     """
-    prec_lk = prec_trees / sigma2
+    prec_lk = prec_trees * inv_sigma2
     prec_prior = lax.reciprocal(sigma_mu2)
     var_post = lax.reciprocal(prec_lk + prec_prior)
     if z is None:
-        z = random.normal(key, prec_trees.shape, sigma2.dtype)
+        z = random.normal(key, prec_trees.shape, inv_sigma2.dtype)
     return PreLf(
-        mean_factor=var_post / sigma2,
+        mean_factor=var_post * inv_sigma2,
         # | mean = mean_lk * prec_lk * var_post
         # | resid_tree = mean_lk * prec_tree  -->
         # |    -->  mean_lk = resid_tree / prec_tree  (kind of)
@@ -2794,7 +2795,7 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
 
     Returns
     -------
-    The new BART mcmc state, with an updated `sigma2`.
+    The new BART mcmc state, with an updated `inv_sigma2`.
     """
     resid = bart.resid
     alpha = bart.sigma2_alpha + resid.size / 2
@@ -2808,7 +2809,7 @@ def step_sigma(key: Key[Array, ''], bart: State) -> State:
     sample = random.gamma(key, alpha)
     # random.gamma seems to be slow at compiling, maybe cdf inversion would
     # be better, but it's not implemented in jax
-    return replace(bart, sigma2=beta / sample)
+    return replace(bart, inv_sigma2=sample / beta)
 
 
 @jax.jit
