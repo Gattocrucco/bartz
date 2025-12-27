@@ -368,13 +368,14 @@ class TestMVBartSteps:
         """Test that MV tree logic is Identical to UV logic."""
         X, y, max_split = data
         y_mv = y[None, :]
+        n_trees = 100
 
         params = dict(
             X=X,
             max_split=max_split,
-            num_trees=5,
+            num_trees=n_trees,
             p_nonterminal=jnp.array([0.9, 0.5]),
-            sigma_mu2=1.0,
+            sigma_mu2=1 / n_trees,
             resid_batch_size=None,
             count_batch_size=None,
             filter_splitless_vars=False,
@@ -383,7 +384,7 @@ class TestMVBartSteps:
         uv_state = init(y=y, sigma2_alpha=2.0, sigma2_beta=1.0, kind='uv', **params)
         mv_state = init(
             y=y_mv,
-            leaf_prior_cov_inv=jnp.eye(1),
+            leaf_prior_cov_inv=n_trees * jnp.eye(1),
             error_cov_inv_df=jnp.array(4.0),
             error_cov_inv_scale=2 * jnp.eye(1),
             kind='mv',
@@ -408,12 +409,14 @@ class TestMVBartSteps:
         uv_next = step_trees(key, uv_state)
         mv_next = step_trees(random.clone(key), mv_state)
 
-        assert_allclose(uv_next.resid, mv_next.resid.squeeze(0), atol=1e-3, rtol=1e-3)
-        assert_allclose(
+        assert_close_matrices(
+            uv_next.resid, mv_next.resid.squeeze(0), atol=1e-6, rtol=1e-6
+        )
+        assert_close_matrices(
             uv_state.forest.leaf_tree,
             mv_state.forest.leaf_tree.squeeze(1),
-            atol=1e-3,
-            rtol=1e-3,
+            atol=1e-6,
+            rtol=1e-6,
         )
 
         assert_array_equal(uv_state.forest.var_tree, mv_state.forest.var_tree)

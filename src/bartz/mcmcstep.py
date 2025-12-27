@@ -110,7 +110,7 @@ class Forest(Module):
     sigma_mu2
         The prior variance of a leaf, conditional on the tree structure.
     leaf_prior_cov_inv
-        The prior covariance matrix of a leaf, conditional on the tree structure.
+        The prior precision matrix of a leaf, conditional on the tree structure.
     log_s
         The logarithm of the prior probability for choosing a variable to split
         along in a decision rule, conditional on the ancestors. Not normalized.
@@ -297,7 +297,7 @@ def init(
         prior variance of the sum of trees is ``num_trees * sigma_mu2``. The
         prior mean of leaves is always zero.
     leaf_prior_cov_inv
-        The prior covariance matrix of a leaf, conditional on the tree structure.
+        The prior precision matrix of a leaf, conditional on the tree structure.
     sigma2_alpha
     sigma2_beta
         The shape and scale parameters of the inverse gamma prior on the error
