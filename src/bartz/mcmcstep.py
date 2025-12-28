@@ -240,7 +240,8 @@ def _init_kind_parameters(
         sigma2_beta = jnp.asarray(sigma2_beta)
         inv_sigma2 = sigma2_alpha / sigma2_beta
     else:  # kind == 'mv'
-        error_cov_inv = error_cov_scale * error_cov_df
+        error_cov = error_cov_scale * error_cov_df
+        error_cov_inv = _inv_via_chol_with_gersh(error_cov)
 
     return kind, inv_sigma2, error_cov_inv, sigma2_alpha, sigma2_beta
 
@@ -2148,6 +2149,17 @@ def _chol_with_gersh(mat: Float32[Array, '... k k']) -> Float32[Array, '... k k'
     u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
     mat = mat.at[jnp.diag_indices_from(mat)].add(u)
     return jnp.linalg.cholesky(mat)
+
+
+def _inv_via_chol_with_gersh(mat: Float32[Array, 'k k']) -> Float32[Array, 'k k']:
+    """Compute matrix inverse via Cholesky with Gershgorin stabilization.
+
+    DO NOT USE THIS FUNCTION UNLESS YOU REALLY NEED TO.
+    """
+    L = _chol_with_gersh(mat)
+    I = jnp.eye(mat.shape[0], dtype=mat.dtype)
+    L_inv = solve_triangular(L, I, lower=True)
+    return L_inv.T @ L_inv
 
 
 def _logdet_from_chol(L):
