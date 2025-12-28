@@ -247,7 +247,7 @@ class TestMVBartIntegration:
         """Test that init produces compatible structures for UV and MV(k=1)."""
         X, y, max_split = data
         y_mv = y[None, :]
-        p_nonterminal = jnp.array([0.9, 0.5], dtype=jnp.float32)
+        p_nonterminal = jnp.array([0.9, 0.5])
 
         common = dict(
             X=X,
@@ -265,9 +265,9 @@ class TestMVBartIntegration:
 
         bart_mv = init(
             y=y_mv,
-            leaf_prior_cov_inv=jnp.array([[1.0]], dtype=jnp.float32),
-            error_cov_df=jnp.array(6.0, dtype=jnp.float32),
-            error_cov_scale=4.0 * jnp.eye(1, dtype=jnp.float32),
+            leaf_prior_cov_inv=jnp.array([[1.0]]),
+            error_cov_df=jnp.array(6.0),
+            error_cov_scale=4.0 * jnp.eye(1),
             **common,
         )
 
