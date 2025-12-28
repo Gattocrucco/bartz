@@ -2149,11 +2149,22 @@ def adapt_leaf_trees_to_grow_indices(
     )
 
 
-@partial(jnp.vectorize, signature='(k,k)->(k,k)')
-def _chol_with_gersh(mat: Float32[Array, '... k k']) -> Float32[Array, '... k k']:
+def _chol_with_gersh(
+    mat: Float32[Array, '... k k'], absolute_eps: bool = False
+) -> Float32[Array, '... k k']:
     """Cholesky with Gershgorin stabilization, supports batching."""
+    return _chol_with_gersh_impl(mat, absolute_eps)
+
+
+@partial(jnp.vectorize, signature='(k,k)->(k,k)', excluded=(1,))
+def _chol_with_gersh_impl(
+    mat: Float32[Array, '... k k'], absolute_eps: bool
+) -> Float32[Array, '... k k']:
     rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
-    u = mat.shape[0] * rho * jnp.finfo(mat.dtype).eps
+    eps = jnp.finfo(mat.dtype).eps
+    u = mat.shape[0] * rho * eps
+    if absolute_eps:
+        u += eps
     mat = mat.at[jnp.diag_indices_from(mat)].add(u)
     return jnp.linalg.cholesky(mat)
 
@@ -2843,24 +2854,16 @@ def _sample_wishart_bartlett(
     """
     keys = split(key)
 
-    k = scale_inv.shape[0]
-
-    # Gershgorin estimate for max eigenvalue
-    rho = jnp.max(jnp.sum(jnp.abs(scale_inv), axis=1))
-    u = k * rho * jnp.finfo(scale_inv.dtype).eps + jnp.finfo(scale_inv.dtype).eps
-
-    # Stabilize the matrix
-    scale_inv = scale_inv.at[jnp.diag_indices(k)].add(u)
-    L = jnp.linalg.cholesky(scale_inv)
-
     # Diagonal elements: A_ii ~ sqrt(chi^2(df - i))
     # chi^2(k) = Gamma(k/2, scale=2)
+    k, _ = scale_inv.shape
     df_vector = df - jnp.arange(k)
     chi2_samples = random.gamma(keys.pop(), df_vector / 2.0) * 2.0
     diag_A = jnp.sqrt(chi2_samples)
 
     off_diag_A = random.normal(keys.pop(), (k, k))
     A = jnp.tril(off_diag_A, -1) + jnp.diag(diag_A)
+    L = _chol_with_gersh(scale_inv, absolute_eps=True)
     T = solve_triangular(L, A, lower=True, trans='T')
 
     return T @ T.T
