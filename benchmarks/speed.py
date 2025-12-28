@@ -104,7 +104,7 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
-        inv_sigma_mu2=jnp.float32(ntree),
+        leaf_prior_cov_inv=jnp.float32(ntree),
         error_cov_df=2.0,
         error_cov_scale=2.0,
         min_points_per_decision_node=10,
@@ -118,11 +118,11 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
         # inverse gamma prior: alpha = df / 2, beta = scale / 2
         kw['sigma2_alpha'] = kw.pop('error_cov_df') / 2
         kw['sigma2_beta'] = kw.pop('error_cov_scale') / 2
-    if 'inv_sigma_mu2' not in sig.parameters:
+    if 'leaf_prior_cov_inv' not in sig.parameters:
         if 'sigma_mu2' in sig.parameters:
-            kw['sigma_mu2'] = 1 / kw.pop('inv_sigma_mu2')
+            kw['sigma_mu2'] = 1 / kw.pop('leaf_prior_cov_inv')
         else:
-            kw.pop('inv_sigma_mu2')
+            kw.pop('leaf_prior_cov_inv')
     if 'min_points_per_decision_node' not in sig.parameters:
         kw.pop('min_points_per_decision_node')
         kw.update(min_points_per_leaf=5)
@@ -186,7 +186,8 @@ def vmap_axes_for_state(state):
             'p_propose_grow',
             'min_points_per_decision_node',
             'min_points_per_leaf',
-            'inv_sigma_mu2',
+            'sigma_mu2',
+            'leaf_prior_cov_inv',
             'a',
             'b',
             'rho',

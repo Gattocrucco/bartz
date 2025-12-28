@@ -107,10 +107,11 @@ class Forest(Module):
     grow_acc_count
     prune_acc_count
         The number of grow/prune moves accepted during one full MCMC cycle.
-    inv_sigma_mu2
-        The inverse prior variance of a leaf, conditional on the tree structure.
     leaf_prior_cov_inv
         The prior precision matrix of a leaf, conditional on the tree structure.
+        For the univariate case (k=1), this is a scalar (the inverse variance).
+        The prior covariance of the sum of trees is
+        ``num_trees * leaf_prior_cov_inv^-1``.
     log_s
         The logarithm of the prior probability for choosing a variable to split
         along in a decision rule, conditional on the ancestors. Not normalized.
@@ -144,8 +145,7 @@ class Forest(Module):
     prune_prop_count: Int32[Array, '']
     grow_acc_count: Int32[Array, '']
     prune_acc_count: Int32[Array, '']
-    inv_sigma_mu2: Float32[Array, ''] | None
-    leaf_prior_cov_inv: Float32[Array, 'k k'] | None
+    leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'] | None
     log_s: Float32[Array, ' p'] | None
     theta: Float32[Array, ''] | None
     a: Float32[Array, ''] | None
@@ -208,6 +208,7 @@ def _init_kind_parameters(
     error_scale: Float32[Any, ' n'] | None,
     error_cov_df: Float32[Array, ''] | None,
     error_cov_scale: Float32[Array, ''] | Float32[Array, 'k k'] | None,
+    leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
 ):
     """Determine 'kind' and initialize kind-specific params."""
     if kind is None:
@@ -218,8 +219,6 @@ def _init_kind_parameters(
         else:
             kind = 'mv'
 
-    error_cov_inv = None
-
     if kind == 'binary':
         if (error_scale, error_cov_df, error_cov_scale) != (None, None, None):
             msg = (
@@ -227,18 +226,19 @@ def _init_kind_parameters(
                 'to `None` for binary regression.'
             )
             raise ValueError(msg)
+        error_cov_inv = None
     elif kind == 'uv':
         error_cov_df = jnp.asarray(error_cov_df)
         error_cov_scale = jnp.asarray(error_cov_scale)
-        if error_cov_scale.ndim != 0:
-            msg = 'error_cov_scale must be a scalar for univariate regression.'
+        if error_cov_scale.ndim != 0 or leaf_prior_cov_inv.ndim != 0:
+            msg = 'error_cov_scale and leaf_prior_cov_inv must be scalars for univariate regression.'
             raise ValueError(msg)
         # inverse gamma prior: alpha = df / 2, beta = scale / 2
         error_cov_inv = error_cov_df / error_cov_scale
     else:  # kind == 'mv'
         error_cov_scale = jnp.asarray(error_cov_scale)
-        if error_cov_scale.ndim != 2:
-            msg = 'error_cov_scale must be a matrix for multivariate regression.'
+        if error_cov_scale.ndim != 2 or leaf_prior_cov_inv.ndim != 2:
+            msg = 'error_cov_scale and leaf_prior_cov_inv must be matrices for multivariate regression.'
             raise ValueError(msg)
         error_cov_inv = error_cov_df * _inv_via_chol_with_gersh(error_cov_scale)
 
@@ -253,8 +253,7 @@ def init(
     max_split: UInt[Any, ' p'],
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
-    inv_sigma_mu2: float | Float32[Any, ''] | None,
-    leaf_prior_cov_inv: Float32[Array, 'k k'] | None = None,
+    leaf_prior_cov_inv: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
     error_cov_df: float | Float32[Any, ''] | None = None,
     error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
     error_scale: Float32[Any, ' n'] | None = None,
@@ -290,12 +289,12 @@ def init(
     p_nonterminal
         The probability of a nonterminal node at each depth. The maximum depth
         of trees is fixed by the length of this array.
-    inv_sigma_mu2
-        The inverse prior variance of a leaf, conditional on the tree structure.
-        The prior variance of the sum of trees is ``num_trees / inv_sigma_mu2``.
-        The prior mean of leaves is always zero.
     leaf_prior_cov_inv
         The prior precision matrix of a leaf, conditional on the tree structure.
+        For the univariate case (k=1), this is a scalar (the inverse variance).
+        The prior covariance of the sum of trees is
+        ``num_trees * leaf_prior_cov_inv^-1``. The prior mean of leaves is
+        always zero.
     error_cov_df
     error_cov_scale
         The df and scale parameters of the inverse Wishart prior on the error
@@ -382,8 +381,10 @@ def init(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
 
+    leaf_prior_cov_inv = jnp.asarray(leaf_prior_cov_inv)
+
     kind, error_cov_inv, error_cov_df, error_cov_scale = _init_kind_parameters(
-        kind, y, k, error_scale, error_cov_df, error_cov_scale
+        kind, y, k, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
     )
 
     max_split = jnp.asarray(max_split)
@@ -454,7 +455,6 @@ def init(
             count_batch_size=count_batch_size,
             log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
             log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
-            inv_sigma_mu2=jnp.asarray(inv_sigma_mu2),
             leaf_prior_cov_inv=leaf_prior_cov_inv,
             log_s=_asarray_or_none(log_s),
             theta=_asarray_or_none(theta),
@@ -1742,10 +1742,10 @@ def accept_moves_parallel_stage(
         )
     else:
         prelkv, prelk = precompute_likelihood_terms_uv(
-            bart.error_cov_inv, bart.forest.inv_sigma_mu2, move_precs
+            bart.error_cov_inv, bart.forest.leaf_prior_cov_inv, move_precs
         )
         prelf = precompute_leaf_terms_uv(
-            key, prec_trees, bart.error_cov_inv, bart.forest.inv_sigma_mu2
+            key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
         )
 
     return ParallelStageOut(
@@ -2088,7 +2088,7 @@ def adapt_leaf_trees_to_grow_indices(
 
 def precompute_likelihood_terms_uv(
     error_cov_inv: Float32[Array, ''],
-    inv_sigma_mu2: Float32[Array, ''],
+    leaf_prior_cov_inv: Float32[Array, ''],
     move_precs: Precs | Counts,
 ) -> tuple[PreLkV, PreLk]:
     """
@@ -2099,7 +2099,7 @@ def precompute_likelihood_terms_uv(
     error_cov_inv
         The inverse error variance, or the inverse global error variance factor
         if `prec_scale` is set.
-    inv_sigma_mu2
+    leaf_prior_cov_inv
         The inverse prior variance of each leaf.
     move_precs
         The likelihood precision scale in the leaves grown or pruned by the
@@ -2115,7 +2115,7 @@ def precompute_likelihood_terms_uv(
         all trees.
     """
     sigma2 = lax.reciprocal(error_cov_inv)
-    sigma_mu2 = lax.reciprocal(inv_sigma_mu2)
+    sigma_mu2 = lax.reciprocal(leaf_prior_cov_inv)
     sigma2_left = sigma2 + move_precs.left * sigma_mu2
     sigma2_right = sigma2 + move_precs.right * sigma_mu2
     sigma2_total = sigma2 + move_precs.total * sigma_mu2
@@ -2125,7 +2125,7 @@ def precompute_likelihood_terms_uv(
         sigma2_total=sigma2_total,
         sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
     )
-    return prelkv, PreLk(exp_factor=error_cov_inv / inv_sigma_mu2 / 2)
+    return prelkv, PreLk(exp_factor=error_cov_inv / leaf_prior_cov_inv / 2)
 
 
 @partial(jnp.vectorize, signature='(k,k)->(k,k)')
@@ -2219,7 +2219,7 @@ def precompute_leaf_terms_uv(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
     error_cov_inv: Float32[Array, ''],
-    inv_sigma_mu2: Float32[Array, ''],
+    leaf_prior_cov_inv: Float32[Array, ''],
     z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
     """
@@ -2234,7 +2234,7 @@ def precompute_leaf_terms_uv(
     error_cov_inv
         The inverse error variance, or the inverse global error variance factor if `prec_scale`
         is set.
-    inv_sigma_mu2
+    leaf_prior_cov_inv
         The inverse prior variance of each leaf.
     z
         Optional standard normal noise to use for sampling the centered leaves.
@@ -2245,7 +2245,7 @@ def precompute_leaf_terms_uv(
     Pre-computed terms for leaf sampling.
     """
     prec_lk = prec_trees * error_cov_inv
-    var_post = lax.reciprocal(prec_lk + inv_sigma_mu2)
+    var_post = lax.reciprocal(prec_lk + leaf_prior_cov_inv)
     if z is None:
         z = random.normal(key, prec_trees.shape, error_cov_inv.dtype)
     return PreLf(

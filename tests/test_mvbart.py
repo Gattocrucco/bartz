@@ -160,9 +160,9 @@ class TestPrecomputeTerms:
     def test_likelihood_equiv(self, keys):
         """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
         inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
-        inv_sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        leaf_prior_cov_inv_uv = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         error_cov_inv = jnp.array([[inv_sigma2]])
-        leaf_prior_cov_inv = jnp.array([[inv_sigma_mu2]])
+        leaf_prior_cov_inv = jnp.array([[leaf_prior_cov_inv_uv]])
 
         precs = Precs(left=jnp.array(3.0), right=jnp.array(4.0), total=jnp.array(7.0))
 
@@ -178,7 +178,7 @@ class TestPrecomputeTerms:
         )
 
         prelkv_uv, prelk_uv = precompute_likelihood_terms_uv(
-            inv_sigma2, inv_sigma_mu2, precs
+            inv_sigma2, leaf_prior_cov_inv_uv, precs
         )
         likelihood_uv = compute_likelihood_ratio_uv(
             total_resid.item(),
@@ -195,16 +195,16 @@ class TestPrecomputeTerms:
         """Check that precompute_leaf_terms and precompute_leaf_terms_mv agree when k = 1."""
         num_trees, num_leaves = 2, 3
         inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
-        inv_sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        leaf_prior_cov_inv_uv = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
 
         error_cov_inv = jnp.array([[inv_sigma2]])
-        leaf_prior_cov_inv = jnp.array([[inv_sigma_mu2]])
+        leaf_prior_cov_inv = jnp.array([[leaf_prior_cov_inv_uv]])
         prec_trees = random.uniform(keys.pop(), (num_trees, num_leaves)) * 5.0
         z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
         z_uv = z_mv.squeeze(axis=-1)
 
         result_uv = precompute_leaf_terms_uv(
-            keys.pop(), prec_trees, inv_sigma2, inv_sigma_mu2, z_uv
+            keys.pop(), prec_trees, inv_sigma2, leaf_prior_cov_inv_uv, z_uv
         )
         result_mv = precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv, z_mv
@@ -254,13 +254,14 @@ class TestMVBartIntegration:
             max_split=max_split,
             num_trees=10,
             p_nonterminal=p_nonterminal,
-            inv_sigma_mu2=1.0,
             resid_batch_size=None,
             count_batch_size=None,
             filter_splitless_vars=False,
         )
 
-        bart_uv = init(y=y, error_cov_df=6.0, error_cov_scale=4.0, **common)
+        bart_uv = init(
+            y=y, leaf_prior_cov_inv=1.0, error_cov_df=6.0, error_cov_scale=4.0, **common
+        )
 
         bart_mv = init(
             y=y_mv,
@@ -367,13 +368,19 @@ class TestMVBartSteps:
             max_split=max_split,
             num_trees=n_trees,
             p_nonterminal=jnp.array([0.9, 0.5]),
-            inv_sigma_mu2=jnp.float32(n_trees),
             resid_batch_size=None,
             count_batch_size=None,
             filter_splitless_vars=False,
         )
 
-        uv_state = init(y=y, error_cov_df=4.0, error_cov_scale=2.0, kind='uv', **params)
+        uv_state = init(
+            y=y,
+            leaf_prior_cov_inv=jnp.float32(n_trees),
+            error_cov_df=4.0,
+            error_cov_scale=2.0,
+            kind='uv',
+            **params,
+        )
         mv_state = init(
             y=y_mv,
             leaf_prior_cov_inv=n_trees * jnp.eye(1),
@@ -445,7 +452,6 @@ class TestMVBartSteps:
             max_split=max_split,
             num_trees=5,
             p_nonterminal=jnp.array([0.9, 0.5]),
-            inv_sigma_mu2=1.0,
             leaf_prior_cov_inv=jnp.eye(k),
             error_cov_df=jnp.array(10.0),
             error_cov_scale=jnp.eye(k),

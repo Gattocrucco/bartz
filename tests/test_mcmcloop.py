@@ -66,7 +66,7 @@ def init(p: int, n: int, ntree: int, **kwargs):
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
-        inv_sigma_mu2=1.0,
+        leaf_prior_cov_inv=1.0,
         error_cov_df=2,
         error_cov_scale=2,
         min_points_per_decision_node=10,
