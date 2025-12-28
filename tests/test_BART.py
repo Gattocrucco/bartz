@@ -42,7 +42,7 @@ import jax
 import numpy
 import polars as pl
 import pytest
-from jax import debug_nans, random, vmap
+from jax import debug_nans, lax, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
@@ -682,8 +682,8 @@ def test_scale_shift(kw):
 
     assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-6)
     assert_allclose(
-        bart1._mcmc_state.forest.sigma_mu2,
-        bart2._mcmc_state.forest.sigma_mu2 / scale**2,
+        bart1._mcmc_state.forest.inv_sigma_mu2,
+        bart2._mcmc_state.forest.inv_sigma_mu2 * scale**2,
         rtol=1e-6,
         atol=0,
     )
@@ -775,7 +775,9 @@ def test_no_datapoints(kw):
         tau_num = 1
         assert bart.sigest == 1
     assert_allclose(
-        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+        bart._mcmc_state.forest.inv_sigma_mu2,
+        (2**2 * kw['ntree']) / tau_num**2,
+        rtol=1e-6,
     )
 
 
@@ -801,7 +803,9 @@ def test_one_datapoint(kw):
         assert bart.sigest == 1
         assert bart.offset == kw['y_train'].item()
     assert_allclose(
-        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+        bart._mcmc_state.forest.inv_sigma_mu2,
+        (2**2 * kw['ntree']) / tau_num**2,
+        rtol=1e-6,
     )
 
 
@@ -914,7 +918,7 @@ def test_prior(keys, p, nsplits):
         kw['ntree'],
         bart._mcmc_state.forest.max_split,
         p_nonterminal,
-        jnp.sqrt(bart._mcmc_state.forest.sigma_mu2),
+        jnp.sqrt(lax.reciprocal(bart._mcmc_state.forest.inv_sigma_mu2)),
     )
     prior_trace = TraceWithOffset.from_trees_trace(prior_trees, bart.offset)
 

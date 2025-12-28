@@ -104,7 +104,7 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
-        sigma_mu2=1 / ntree,
+        inv_sigma_mu2=ntree,
         sigma2_alpha=1.0,
         sigma2_beta=1.0,
         min_points_per_decision_node=10,
@@ -113,8 +113,11 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
 
     # adapt arguments for old versions
     sig = signature(init)
-    if 'sigma_mu2' not in sig.parameters:
-        kw.pop('sigma_mu2')
+    if 'inv_sigma_mu2' not in sig.parameters:
+        if 'sigma_mu2' in sig.parameters:
+            kw['sigma_mu2'] = 1 / kw.pop('inv_sigma_mu2')
+        else:
+            kw.pop('inv_sigma_mu2')
     if 'min_points_per_decision_node' not in sig.parameters:
         kw.pop('min_points_per_decision_node')
         kw.update(min_points_per_leaf=5)
@@ -174,7 +177,7 @@ def vmap_axes_for_state(state):
             'p_propose_grow',
             'min_points_per_decision_node',
             'min_points_per_leaf',
-            'sigma_mu2',
+            'inv_sigma_mu2',
             'a',
             'b',
             'rho',

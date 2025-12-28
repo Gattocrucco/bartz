@@ -32,6 +32,7 @@ from typing import Any, Literal, Protocol
 import jax
 import jax.numpy as jnp
 from equinox import Module, field
+from jax import lax
 from jax.scipy.special import ndtr
 from jax.tree import map_with_path
 from jaxtyping import (
@@ -795,7 +796,7 @@ class mc_gbart(Module):
             max_split=max_split,
             num_trees=ntree,
             p_nonterminal=p_nonterminal,
-            sigma_mu2=jnp.square(sigma_mu),
+            inv_sigma_mu2=lax.reciprocal(jnp.square(sigma_mu)),
             sigma2_alpha=sigma2_alpha,
             sigma2_beta=sigma2_beta,
             min_points_per_decision_node=10,
@@ -917,7 +918,7 @@ class mc_gbart(Module):
                 '.forest.p_propose_grow',
                 '.forest.min_points_per_decision_node',
                 '.forest.min_points_per_leaf',
-                '.forest.sigma_mu2',
+                '.forest.inv_sigma_mu2',
                 '.forest.a',
                 '.forest.b',
                 '.forest.rho',

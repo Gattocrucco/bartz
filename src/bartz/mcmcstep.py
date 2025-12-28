@@ -107,8 +107,8 @@ class Forest(Module):
     grow_acc_count
     prune_acc_count
         The number of grow/prune moves accepted during one full MCMC cycle.
-    sigma_mu2
-        The prior variance of a leaf, conditional on the tree structure.
+    inv_sigma_mu2
+        The inverse prior variance of a leaf, conditional on the tree structure.
     leaf_prior_cov_inv
         The prior precision matrix of a leaf, conditional on the tree structure.
     log_s
@@ -144,7 +144,7 @@ class Forest(Module):
     prune_prop_count: Int32[Array, '']
     grow_acc_count: Int32[Array, '']
     prune_acc_count: Int32[Array, '']
-    sigma_mu2: Float32[Array, ''] | None
+    inv_sigma_mu2: Float32[Array, ''] | None
     leaf_prior_cov_inv: Float32[Array, 'k k'] | None
     log_s: Float32[Array, ' p'] | None
     theta: Float32[Array, ''] | None
@@ -254,7 +254,7 @@ def init(
     max_split: UInt[Any, ' p'],
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
-    sigma_mu2: float | Float32[Any, ''] | None,
+    inv_sigma_mu2: float | Float32[Any, ''] | None,
     leaf_prior_cov_inv: Float32[Array, 'k k'] | None = None,
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
@@ -293,10 +293,10 @@ def init(
     p_nonterminal
         The probability of a nonterminal node at each depth. The maximum depth
         of trees is fixed by the length of this array.
-    sigma_mu2
-        The prior variance of a leaf, conditional on the tree structure. The
-        prior variance of the sum of trees is ``num_trees * sigma_mu2``. The
-        prior mean of leaves is always zero.
+    inv_sigma_mu2
+        The inverse prior variance of a leaf, conditional on the tree structure.
+        The prior variance of the sum of trees is ``num_trees / inv_sigma_mu2``.
+        The prior mean of leaves is always zero.
     leaf_prior_cov_inv
         The prior precision matrix of a leaf, conditional on the tree structure.
     sigma2_alpha
@@ -468,7 +468,7 @@ def init(
             count_batch_size=count_batch_size,
             log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
             log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
-            sigma_mu2=jnp.asarray(sigma_mu2),
+            inv_sigma_mu2=jnp.asarray(inv_sigma_mu2),
             leaf_prior_cov_inv=leaf_prior_cov_inv,
             log_s=_asarray_or_none(log_s),
             theta=_asarray_or_none(theta),
@@ -1757,10 +1757,10 @@ def accept_moves_parallel_stage(
     else:
         assert bart.inv_sigma2 is not None
         prelkv, prelk = precompute_likelihood_terms_uv(
-            bart.inv_sigma2, bart.forest.sigma_mu2, move_precs
+            bart.inv_sigma2, bart.forest.inv_sigma_mu2, move_precs
         )
         prelf = precompute_leaf_terms_uv(
-            key, prec_trees, bart.inv_sigma2, bart.forest.sigma_mu2
+            key, prec_trees, bart.inv_sigma2, bart.forest.inv_sigma_mu2
         )
 
     return ParallelStageOut(
@@ -2103,7 +2103,7 @@ def adapt_leaf_trees_to_grow_indices(
 
 def precompute_likelihood_terms_uv(
     inv_sigma2: Float32[Array, ''],
-    sigma_mu2: Float32[Array, ''],
+    inv_sigma_mu2: Float32[Array, ''],
     move_precs: Precs | Counts,
 ) -> tuple[PreLkV, PreLk]:
     """
@@ -2114,8 +2114,8 @@ def precompute_likelihood_terms_uv(
     inv_sigma2
         The inverse error variance, or the inverse global error variance factor
         if `prec_scale` is set.
-    sigma_mu2
-        The prior variance of each leaf.
+    inv_sigma_mu2
+        The inverse prior variance of each leaf.
     move_precs
         The likelihood precision scale in the leaves grown or pruned by the
         moves, under keys 'left', 'right', and 'total' (left + right).
@@ -2130,6 +2130,7 @@ def precompute_likelihood_terms_uv(
         all trees.
     """
     sigma2 = lax.reciprocal(inv_sigma2)
+    sigma_mu2 = lax.reciprocal(inv_sigma_mu2)
     sigma2_left = sigma2 + move_precs.left * sigma_mu2
     sigma2_right = sigma2 + move_precs.right * sigma_mu2
     sigma2_total = sigma2 + move_precs.total * sigma_mu2
@@ -2139,7 +2140,7 @@ def precompute_likelihood_terms_uv(
         sigma2_total=sigma2_total,
         sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
     )
-    return prelkv, PreLk(exp_factor=sigma_mu2 * inv_sigma2 / 2)
+    return prelkv, PreLk(exp_factor=inv_sigma2 / inv_sigma_mu2 / 2)
 
 
 @partial(jnp.vectorize, signature='(k,k)->(k,k)')
@@ -2233,7 +2234,7 @@ def precompute_leaf_terms_uv(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
     inv_sigma2: Float32[Array, ''],
-    sigma_mu2: Float32[Array, ''],
+    inv_sigma_mu2: Float32[Array, ''],
     z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
     """
@@ -2248,8 +2249,8 @@ def precompute_leaf_terms_uv(
     inv_sigma2
         The inverse error variance, or the inverse global error variance factor if `prec_scale`
         is set.
-    sigma_mu2
-        The prior variance of each leaf.
+    inv_sigma_mu2
+        The inverse prior variance of each leaf.
     z
         Optional standard normal noise to use for sampling the centered leaves.
         This is intended for testing purposes only.
@@ -2259,8 +2260,7 @@ def precompute_leaf_terms_uv(
     Pre-computed terms for leaf sampling.
     """
     prec_lk = prec_trees * inv_sigma2
-    prec_prior = lax.reciprocal(sigma_mu2)
-    var_post = lax.reciprocal(prec_lk + prec_prior)
+    var_post = lax.reciprocal(prec_lk + inv_sigma_mu2)
     if z is None:
         z = random.normal(key, prec_trees.shape, inv_sigma2.dtype)
     return PreLf(
