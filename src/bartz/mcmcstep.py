@@ -485,28 +485,43 @@ def _asarray_or_none(x):
     return jnp.asarray(x)
 
 
+def _get_platform(x: Array):
+    """Get the platform of the device where `x` is located, or the default device if that's not possible."""
+    try:
+        device = x.devices().pop()
+    except jax.errors.ConcretizationTypeError:
+        device = get_default_device()
+    platform = device.platform
+    if platform not in ('cpu', 'gpu'):
+        msg = f'Unknown platform: {platform}'
+        raise KeyError(msg)
+    return platform
+
+
 def _choose_suffstat_batch_size(
-    resid_batch_size, count_batch_size, y, forest_size
-) -> tuple[int | None, ...]:
+    resid_batch_size: int | None | Literal['auto'],
+    count_batch_size: int | None | Literal['auto'],
+    y: Float32[Array, 'k n'] | Float32[Array, ' n'],
+    forest_size: int,
+) -> tuple[int | None, int | None]:
+    if y.ndim == 2:
+        k, n = y.shape
+    else:
+        k = 1
+        (n,) = y.shape
+    n = max(1, n)
+
     @cache
     def get_platform():
-        try:
-            device = y.devices().pop()
-        except jax.errors.ConcretizationTypeError:
-            device = get_default_device()
-        platform = device.platform
-        if platform not in ('cpu', 'gpu'):
-            msg = f'Unknown platform: {platform}'
-            raise KeyError(msg)
-        return platform
+        return _get_platform(y)
 
     if resid_batch_size == 'auto':
         platform = get_platform()
-        n = max(1, y.size)
         if platform == 'cpu':
             resid_batch_size = 2 ** round(math.log2(n / 6))  # n/6
         elif platform == 'gpu':
             resid_batch_size = 2 ** round((1 + math.log2(n)) / 3)  # n^1/3
+        resid_batch_size *= k
         resid_batch_size = max(1, resid_batch_size)
 
     if count_batch_size == 'auto':
@@ -514,9 +529,9 @@ def _choose_suffstat_batch_size(
         if platform == 'cpu':
             count_batch_size = None
         elif platform == 'gpu':
-            n = max(1, y.size)
             count_batch_size = 2 ** round(math.log2(n) / 2 - 2)  # n^1/2
             # /4 is good on V100, /2 on L4/T4, still haven't tried A100
+            count_batch_size *= k
             max_memory = 2**29
             itemsize = 4
             min_batch_size = math.ceil(forest_size * itemsize * n / max_memory)
