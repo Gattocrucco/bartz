@@ -265,8 +265,8 @@ class TestMVBartIntegration:
         bart_mv = init(
             y=y_mv,
             leaf_prior_cov_inv=jnp.array([[1.0]], dtype=jnp.float32),
-            error_cov_inv_df=jnp.array(6.0, dtype=jnp.float32),
-            error_cov_inv_scale=4.0 * jnp.eye(1, dtype=jnp.float32),
+            error_cov_df=jnp.array(6.0, dtype=jnp.float32),
+            error_cov_scale=4.0 * jnp.eye(1, dtype=jnp.float32),
             **common,
         )
 
@@ -322,8 +322,8 @@ class TestMVBartIntegration:
             inv_sigma2=1.0,
             error_cov_inv=None,
             prec_scale=None,
-            error_cov_inv_df=None,
-            error_cov_inv_scale=None,
+            error_cov_df=None,
+            error_cov_scale=None,
             forest=None,
         )
 
@@ -335,8 +335,8 @@ class TestMVBartIntegration:
             y=y[None, :],
             resid=resid[None, :],
             kind='mv',
-            error_cov_inv_df=jnp.array(df_prior_mv),
-            error_cov_inv_scale=jnp.array([[scale_prior_mv]]),
+            error_cov_df=jnp.array(df_prior_mv),
+            error_cov_scale=jnp.array([[scale_prior_mv]]),
             z=None,
             offset=0.0,
             inv_sigma2=None,
@@ -387,8 +387,8 @@ class TestMVBartSteps:
         mv_state = init(
             y=y_mv,
             leaf_prior_cov_inv=n_trees * jnp.eye(1),
-            error_cov_inv_df=jnp.array(4.0),
-            error_cov_inv_scale=2 * jnp.eye(1),
+            error_cov_df=jnp.array(4.0),
+            error_cov_scale=2 * jnp.eye(1),
             kind='mv',
             **params,
         )
@@ -457,8 +457,8 @@ class TestMVBartSteps:
             p_nonterminal=jnp.array([0.9, 0.5]),
             sigma_mu2=1.0,
             leaf_prior_cov_inv=jnp.eye(k),
-            error_cov_inv_df=jnp.array(10.0),
-            error_cov_inv_scale=jnp.eye(k),
+            error_cov_df=jnp.array(10.0),
+            error_cov_scale=jnp.eye(k),
             resid_batch_size=None,
             count_batch_size=None,
             kind='mv',

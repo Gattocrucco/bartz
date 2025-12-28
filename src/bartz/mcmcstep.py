@@ -181,8 +181,8 @@ class State(Module):
     sigma2_beta
         The shape and scale parameters of the inverse gamma prior on the noise
         variance. `None` in binary regression.
-    error_cov_inv_df
-    error_cov_inv_scale
+    error_cov_df
+    error_cov_scale
         The df and scale parameters of the inverse Wishart prior on the noise covariance matrix.
     kind
         Inidicator of regression type.
@@ -200,8 +200,8 @@ class State(Module):
     prec_scale: Float32[Array, ' n'] | None
     sigma2_alpha: Float32[Array, ''] | None
     sigma2_beta: Float32[Array, ''] | None
-    error_cov_inv_df: Float32[Array, ''] | None
-    error_cov_inv_scale: Float32[Array, 'k k'] | None
+    error_cov_df: Float32[Array, ''] | None
+    error_cov_scale: Float32[Array, 'k k'] | None
     kind: Literal['binary', 'uv', 'mv'] = field(static=True)
     forest: Forest
 
@@ -213,8 +213,8 @@ def _init_kind_parameters(
     error_scale: Float32[Any, ' n'] | None,
     sigma2_alpha: float | Float32[Any, ''] | None,
     sigma2_beta: float | Float32[Any, ''] | None,
-    error_cov_inv_df: Float32[Array, ''] | None,
-    error_cov_inv_scale: Float32[Array, 'k k'] | None,
+    error_cov_df: Float32[Array, ''] | None,
+    error_cov_scale: Float32[Array, 'k k'] | None,
 ):
     """Determine 'kind' and initialize kind-specific params."""
     if kind is None:
@@ -240,7 +240,7 @@ def _init_kind_parameters(
         sigma2_beta = jnp.asarray(sigma2_beta)
         inv_sigma2 = sigma2_alpha / sigma2_beta
     else:  # kind == 'mv'
-        error_cov_inv = error_cov_inv_scale * error_cov_inv_df
+        error_cov_inv = error_cov_scale * error_cov_df
 
     return kind, inv_sigma2, error_cov_inv, sigma2_alpha, sigma2_beta
 
@@ -257,8 +257,8 @@ def init(
     leaf_prior_cov_inv: Float32[Array, 'k k'] | None = None,
     sigma2_alpha: float | Float32[Any, ''] | None = None,
     sigma2_beta: float | Float32[Any, ''] | None = None,
-    error_cov_inv_df: Float32[Array, ''] | None = None,
-    error_cov_inv_scale: Float32[Array, 'k k'] | None = None,
+    error_cov_df: Float32[Array, ''] | None = None,
+    error_cov_scale: Float32[Array, 'k k'] | None = None,
     error_scale: Float32[Any, ' n'] | None = None,
     min_points_per_decision_node: int | Integer[Any, ''] | None = None,
     resid_batch_size: int | None | Literal['auto'] = 'auto',
@@ -302,8 +302,8 @@ def init(
     sigma2_beta
         The shape and scale parameters of the inverse gamma prior on the error
         variance. Leave unspecified for binary regression.
-    error_cov_inv_df
-    error_cov_inv_scale
+    error_cov_df
+    error_cov_scale
         The parameters of the inverse Wishart prior on the error covariance matrix.
     error_scale
         Each error is scaled by the corresponding factor in `error_scale`, so
@@ -392,8 +392,8 @@ def init(
         error_scale,
         sigma2_alpha,
         sigma2_beta,
-        error_cov_inv_df,
-        error_cov_inv_scale,
+        error_cov_df,
+        error_cov_scale,
     )
 
     max_split = jnp.asarray(max_split)
@@ -434,8 +434,8 @@ def init(
         ),
         sigma2_alpha=sigma2_alpha,
         sigma2_beta=sigma2_beta,
-        error_cov_inv_df=error_cov_inv_df,
-        error_cov_inv_scale=error_cov_inv_scale,
+        error_cov_df=error_cov_df,
+        error_cov_scale=error_cov_scale,
         kind=kind,
         forest=Forest(
             leaf_tree=leaf_tree,
@@ -2873,8 +2873,8 @@ def step_sigma2_prec(key: Key[Array, ''], bart: State) -> State:
     The new BART MCMC state with an updated `error_cov_inv` (precision).
     """
     n = bart.resid.shape[-1]
-    df_post = bart.error_cov_inv_df + n
-    scale_post = bart.error_cov_inv_scale + bart.resid @ bart.resid.T
+    df_post = bart.error_cov_df + n
+    scale_post = bart.error_cov_scale + bart.resid @ bart.resid.T
 
     prec = _sample_wishart_bartlett(key, df_post, scale_post)
     return replace(bart, error_cov_inv=prec)
