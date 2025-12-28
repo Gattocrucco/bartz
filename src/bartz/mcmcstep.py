@@ -1614,7 +1614,7 @@ class PreLf(Module):
     Parameters
     ----------
     mean_factor
-        The factor to be multiplied by the sum of the scaled residuals to
+        The factor to be right-multiplied by the sum of the scaled residuals to
         obtain the posterior mean.
     centered_leaves
         The mean-zero normal values to be added to the posterior mean to
@@ -2283,6 +2283,7 @@ def _precompute_leaf_terms_mv(
     mean_factor: Float32[Array, 'num_trees num_leaves k k'] = solve_triangular(
         L_prec, Y, trans='T', lower=True
     )
+    mean_factor = mean_factor.mT
     mean_factor_out: Float32[Array, 'num_trees k k num_leaves'] = jnp.moveaxis(
         mean_factor, 1, -1
     )
@@ -2535,7 +2536,7 @@ def accept_move_and_sample_leaves(
 
     # compute leaves posterior and sample leaves
     if resid.ndim > 1:
-        mean_post = jnp.einsum('ikl,kl->il', pt.prelf.mean_factor, resid_tree)
+        mean_post = jnp.einsum('kil,kl->il', pt.prelf.mean_factor, resid_tree)
     else:
         mean_post = resid_tree * pt.prelf.mean_factor
     leaf_tree = mean_post + pt.prelf.centered_leaves
