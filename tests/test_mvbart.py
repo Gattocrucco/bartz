@@ -159,9 +159,9 @@ class TestPrecomputeTerms:
 
     def test_likelihood_equiv(self, keys):
         """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
-        sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
-        error_cov_inv = jnp.array([[1.0 / sigma2]])
+        error_cov_inv = jnp.array([[inv_sigma2]])
         leaf_prior_cov_inv = jnp.array([[1.0 / sigma_mu2]])
 
         precs = Precs(left=jnp.array(3.0), right=jnp.array(4.0), total=jnp.array(7.0))
@@ -177,7 +177,9 @@ class TestPrecomputeTerms:
             total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
         )
 
-        prelkv_uv, prelk_uv = precompute_likelihood_terms_uv(sigma2, sigma_mu2, precs)
+        prelkv_uv, prelk_uv = precompute_likelihood_terms_uv(
+            inv_sigma2, sigma_mu2, precs
+        )
         likelihood_uv = compute_likelihood_ratio_uv(
             total_resid.item(),
             left_resid.item(),
@@ -192,17 +194,17 @@ class TestPrecomputeTerms:
     def test_leaf_terms_equiv(self, keys):
         """Check that precompute_leaf_terms and precompute_leaf_terms_mv agree when k = 1."""
         num_trees, num_leaves = 2, 3
-        sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
+        inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         sigma_mu2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
 
-        error_cov_inv = jnp.array([[1.0 / sigma2]])
+        error_cov_inv = jnp.array([[inv_sigma2]])
         leaf_prior_cov_inv = jnp.array([[1.0 / sigma_mu2]])
         prec_trees = random.uniform(keys.pop(), (num_trees, num_leaves)) * 5.0
         z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
         z_uv = z_mv.squeeze(axis=-1)
 
         result_uv = precompute_leaf_terms_uv(
-            keys.pop(), prec_trees, sigma2, sigma_mu2, z_uv
+            keys.pop(), prec_trees, inv_sigma2, sigma_mu2, z_uv
         )
         result_mv = precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv, z_mv
@@ -269,11 +271,11 @@ class TestMVBartIntegration:
         )
 
         assert bart_uv.kind == 'uv'
-        assert bart_uv.sigma2 is not None
+        assert bart_uv.inv_sigma2 is not None
         assert bart_uv.error_cov_inv is None
 
         assert bart_mv.kind == 'mv'
-        assert bart_mv.sigma2 is None
+        assert bart_mv.inv_sigma2 is None
         assert bart_mv.error_cov_inv is not None
 
         assert bart_uv.resid.ndim == 1
@@ -281,7 +283,7 @@ class TestMVBartIntegration:
         assert bart_mv.resid.shape[0] == 1
         assert bart_mv.resid.shape[1] == bart_uv.resid.shape[0]
 
-        assert jnp.ndim(bart_uv.sigma2) == 0
+        assert jnp.ndim(bart_uv.inv_sigma2) == 0
         assert bart_mv.error_cov_inv.shape == (1, 1)
 
         assert_array_equal(bart_uv.resid, bart_mv.resid.squeeze(0))
@@ -317,7 +319,7 @@ class TestMVBartIntegration:
             sigma2_beta=beta_prior_uv,
             z=None,
             offset=0.0,
-            sigma2=1.0,
+            inv_sigma2=1.0,
             error_cov_inv=None,
             prec_scale=None,
             error_cov_inv_df=None,
@@ -337,7 +339,7 @@ class TestMVBartIntegration:
             error_cov_inv_scale=jnp.array([[scale_prior_mv]]),
             z=None,
             offset=0.0,
-            sigma2=None,
+            inv_sigma2=None,
             error_cov_inv=jnp.eye(1),
             prec_scale=None,
             sigma2_alpha=None,
@@ -346,7 +348,7 @@ class TestMVBartIntegration:
         )
 
         def sample_uv(k):
-            return 1.0 / step_sigma(k, st_uv).sigma2
+            return step_sigma(k, st_uv).inv_sigma2
 
         def sample_mv(k):
             return step_sigma2_prec(k, st_mv).error_cov_inv[0, 0]
@@ -394,7 +396,7 @@ class TestMVBartSteps:
         mv_state = replace(
             mv_state,
             resid=uv_state.resid[None, :],
-            error_cov_inv=jnp.array([[1.0 / uv_state.sigma2]]),
+            error_cov_inv=jnp.array([[uv_state.inv_sigma2]]),
             forest=replace(
                 mv_state.forest,
                 var_tree=uv_state.forest.var_tree,

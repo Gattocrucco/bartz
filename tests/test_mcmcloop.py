@@ -88,7 +88,7 @@ class TestRunMcmc:
         assert_array_equal(final_state.forest.leaf_tree, main_trace.leaf_tree[-1])
         assert_array_equal(final_state.forest.var_tree, main_trace.var_tree[-1])
         assert_array_equal(final_state.forest.split_tree, main_trace.split_tree[-1])
-        assert_array_equal(final_state.sigma2, main_trace.sigma2[-1])
+        assert_array_equal(final_state.inv_sigma2, main_trace.inv_sigma2[-1])
 
     def test_zero_iterations(self, keys):
         """Check there's no error if the loop does not run."""
