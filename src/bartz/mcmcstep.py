@@ -2260,40 +2260,40 @@ def _precompute_leaf_terms_mv(
     leaf_prior_cov_inv: Float32[Array, 'k k'],
     z: Float32[Array, 'num_trees 2**d k'] | None = None,
 ) -> PreLf:
-    num_trees, num_leaves = prec_trees.shape
+    num_trees, tree_size = prec_trees.shape
     k = error_cov_inv.shape[0]
-    n_k: Float32[Array, 'num_trees num_leaves 1 1'] = prec_trees[..., None, None]
+    n_k: Float32[Array, 'num_trees tree_size 1 1'] = prec_trees[..., None, None]
 
     # Only broadcast the inverse of error covariance matrix to satisfy JAX's batching rules
     # for `lax.linalg.solve_triangular`, which does not support implicit broadcasting.
     error_cov_inv_batched = jnp.broadcast_to(
-        error_cov_inv, (num_trees, num_leaves, k, k)
+        error_cov_inv, (num_trees, tree_size, k, k)
     )
 
-    posterior_precision: Float32[Array, 'num_trees num_leaves k k'] = (
+    posterior_precision: Float32[Array, 'num_trees tree_size k k'] = (
         leaf_prior_cov_inv + n_k * error_cov_inv_batched
     )
 
-    L_prec: Float32[Array, 'num_trees num_leaves k k'] = _chol_with_gersh(
+    L_prec: Float32[Array, 'num_trees tree_size k k'] = _chol_with_gersh(
         posterior_precision
     )
-    Y: Float32[Array, 'num_trees num_leaves k k'] = solve_triangular(
+    Y: Float32[Array, 'num_trees tree_size k k'] = solve_triangular(
         L_prec, error_cov_inv_batched, lower=True
     )
-    mean_factor: Float32[Array, 'num_trees num_leaves k k'] = solve_triangular(
+    mean_factor: Float32[Array, 'num_trees tree_size k k'] = solve_triangular(
         L_prec, Y, trans='T', lower=True
     )
     mean_factor = mean_factor.mT
-    mean_factor_out: Float32[Array, 'num_trees k k num_leaves'] = jnp.moveaxis(
+    mean_factor_out: Float32[Array, 'num_trees k k tree_size'] = jnp.moveaxis(
         mean_factor, 1, -1
     )
 
     if z is None:
-        z = random.normal(key, (num_trees, num_leaves, k))
-    centered_leaves: Float32[Array, 'num_trees num_leaves k'] = solve_triangular(
+        z = random.normal(key, (num_trees, tree_size, k))
+    centered_leaves: Float32[Array, 'num_trees tree_size k'] = solve_triangular(
         L_prec, z, trans='T'
     )
-    centered_leaves_out: Float32[Array, 'num_trees k num_leaves'] = jnp.swapaxes(
+    centered_leaves_out: Float32[Array, 'num_trees k tree_size'] = jnp.swapaxes(
         centered_leaves, -1, -2
     )
 

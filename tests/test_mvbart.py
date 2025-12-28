@@ -146,16 +146,16 @@ class TestPrecomputeTerms:
 
     def test_shapes_leaf(self, keys, k):
         """Check that shapes of outputs are correct."""
-        num_trees, num_leaves = 3, 4
-        prec_trees = jnp.ones((num_trees, num_leaves))
+        num_trees, tree_size = 3, 4
+        prec_trees = jnp.ones((num_trees, tree_size))
         error_cov_inv = self.random_pd_matrix(keys.pop(), k)
         leaf_prior_cov_inv = self.random_pd_matrix(keys.pop(), k)
 
         result = _precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv
         )
-        assert result.mean_factor.shape == (num_trees, k, k, num_leaves)
-        assert result.centered_leaves.shape == (num_trees, k, num_leaves)
+        assert result.mean_factor.shape == (num_trees, k, k, tree_size)
+        assert result.centered_leaves.shape == (num_trees, k, tree_size)
 
     def test_likelihood_equiv(self, keys):
         """Check that _compute_likelihood_ratio_uv and _compute_likelihood_ratio_mv agree when k = 1."""
@@ -193,14 +193,14 @@ class TestPrecomputeTerms:
 
     def test_leaf_terms_equiv(self, keys):
         """Check that _precompute_leaf_terms_uv and _precompute_leaf_terms_mv agree when k = 1."""
-        num_trees, num_leaves = 2, 3
+        num_trees, tree_size = 2, 3
         inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         leaf_prior_cov_inv_uv = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
 
         error_cov_inv = jnp.array([[inv_sigma2]])
         leaf_prior_cov_inv = jnp.array([[leaf_prior_cov_inv_uv]])
-        prec_trees = random.uniform(keys.pop(), (num_trees, num_leaves)) * 5.0
-        z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
+        prec_trees = random.uniform(keys.pop(), (num_trees, tree_size)) * 5.0
+        z_mv = random.normal(keys.pop(), (num_trees, tree_size, 1))
         z_uv = z_mv.squeeze(axis=-1)
 
         result_uv = _precompute_leaf_terms_uv(
