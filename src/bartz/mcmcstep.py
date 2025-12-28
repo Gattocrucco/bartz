@@ -38,6 +38,7 @@ The entry points are:
 
 import math
 from dataclasses import replace
+from enum import Enum
 from functools import cache, partial
 from typing import Any, Literal
 
@@ -58,6 +59,14 @@ from bartz.jaxext import (
     truncated_normal_onesided,
     vmap_nodoc,
 )
+
+
+class Kind(str, Enum):
+    """Indicator of regression type."""
+
+    binary = 'binary'
+    uv = 'uv'
+    mv = 'mv'
 
 
 class Forest(Module):
@@ -197,12 +206,12 @@ class State(Module):
     prec_scale: Float32[Array, ' n'] | None
     error_cov_df: Float32[Array, ''] | None
     error_cov_scale: Float32[Array, ''] | Float32[Array, 'k k'] | None
-    kind: Literal['binary', 'uv', 'mv'] = field(static=True)
+    kind: Kind = field(static=True)
     forest: Forest
 
 
 def _init_kind_parameters(
-    kind: Literal['binary', 'uv', 'mv'] | None,
+    kind: Kind | str | None,
     y: Float32[Any, ' n'] | Bool[Any, ' n'],
     k: int | None,
     error_scale: Float32[Any, ' n'] | None,
@@ -268,7 +277,7 @@ def init(
     a: float | Float32[Any, ''] | None = None,
     b: float | Float32[Any, ''] | None = None,
     rho: float | Float32[Any, ''] | None = None,
-    kind: Literal['binary', 'uv', 'mv'] | None = None,
+    kind: Kind | str | None = None,
 ) -> State:
     """
     Make a BART posterior sampling MCMC initial state.
