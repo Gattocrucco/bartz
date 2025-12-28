@@ -35,17 +35,17 @@ from scipy.stats import chi2, ks_1samp, ks_2samp
 from bartz.mcmcstep import (
     Precs,
     State,
+    _compute_likelihood_ratio_mv,
+    _compute_likelihood_ratio_uv,
+    _precompute_leaf_terms_mv,
+    _precompute_leaf_terms_uv,
+    _precompute_likelihood_terms_mv,
+    _precompute_likelihood_terms_uv,
     _sample_wishart_bartlett,
-    compute_likelihood_ratio_mv,
-    compute_likelihood_ratio_uv,
+    _step_error_cov_inv_mv,
+    _step_error_cov_inv_uv,
     init,
-    precompute_leaf_terms_mv,
-    precompute_leaf_terms_uv,
-    precompute_likelihood_terms_mv,
-    precompute_likelihood_terms_uv,
     step,
-    step_error_cov_inv_mv,
-    step_error_cov_inv_uv,
     step_trees,
 )
 from tests.util import assert_close_matrices
@@ -132,7 +132,7 @@ class TestWishart:
 
 
 class TestPrecomputeTerms:
-    """Test precompute_likelihood_terms_mv and precompute_leaf_terms_mv correctness and stability."""
+    """Test _precompute_likelihood_terms_mv and _precompute_leaf_terms_mv correctness and stability."""
 
     @pytest.fixture(params=[1, 2, 5, 10])
     def k(self, request):
@@ -151,14 +151,14 @@ class TestPrecomputeTerms:
         error_cov_inv = self.random_pd_matrix(keys.pop(), k)
         leaf_prior_cov_inv = self.random_pd_matrix(keys.pop(), k)
 
-        result = precompute_leaf_terms_mv(
+        result = _precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv
         )
         assert result.mean_factor.shape == (num_trees, k, k, num_leaves)
         assert result.centered_leaves.shape == (num_trees, k, num_leaves)
 
     def test_likelihood_equiv(self, keys):
-        """Check that compute_likelihood_ratio and compute_likelihood_ratio_mv agree when k = 1."""
+        """Check that _compute_likelihood_ratio_uv and _compute_likelihood_ratio_mv agree when k = 1."""
         inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         leaf_prior_cov_inv_uv = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         error_cov_inv = jnp.array([[inv_sigma2]])
@@ -170,17 +170,17 @@ class TestPrecomputeTerms:
         left_resid = random.normal(keys.pop(), (1,))
         right_resid = random.normal(keys.pop(), (1,))
 
-        prelkv_mv, prelk_mv = precompute_likelihood_terms_mv(
+        prelkv_mv, prelk_mv = _precompute_likelihood_terms_mv(
             error_cov_inv, leaf_prior_cov_inv, precs
         )
-        likelihood_mv = compute_likelihood_ratio_mv(
+        likelihood_mv = _compute_likelihood_ratio_mv(
             total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
         )
 
-        prelkv_uv, prelk_uv = precompute_likelihood_terms_uv(
+        prelkv_uv, prelk_uv = _precompute_likelihood_terms_uv(
             inv_sigma2, leaf_prior_cov_inv_uv, precs
         )
-        likelihood_uv = compute_likelihood_ratio_uv(
+        likelihood_uv = _compute_likelihood_ratio_uv(
             total_resid.item(),
             left_resid.item(),
             right_resid.item(),
@@ -192,7 +192,7 @@ class TestPrecomputeTerms:
         assert_allclose(likelihood_mv, likelihood_uv, rtol=1e-6, atol=1e-6)
 
     def test_leaf_terms_equiv(self, keys):
-        """Check that precompute_leaf_terms and precompute_leaf_terms_mv agree when k = 1."""
+        """Check that _precompute_leaf_terms_uv and _precompute_leaf_terms_mv agree when k = 1."""
         num_trees, num_leaves = 2, 3
         inv_sigma2 = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
         leaf_prior_cov_inv_uv = random.uniform(keys.pop(), (), minval=0.1, maxval=5.0)
@@ -203,10 +203,10 @@ class TestPrecomputeTerms:
         z_mv = random.normal(keys.pop(), (num_trees, num_leaves, 1))
         z_uv = z_mv.squeeze(axis=-1)
 
-        result_uv = precompute_leaf_terms_uv(
+        result_uv = _precompute_leaf_terms_uv(
             keys.pop(), prec_trees, inv_sigma2, leaf_prior_cov_inv_uv, z_uv
         )
-        result_mv = precompute_leaf_terms_mv(
+        result_mv = _precompute_leaf_terms_mv(
             keys.pop(), prec_trees, error_cov_inv, leaf_prior_cov_inv, z_mv
         )
 
@@ -298,7 +298,7 @@ class TestMVBartIntegration:
 
     def test_step_sigma_distribution_match(self, keys, data):
         """
-        Test that step_error_cov_inv_uv and step_error_cov_inv_mv (k = 1) sample from the same posterior.
+        Test that _step_error_cov_inv_uv and _step_error_cov_inv_mv (k = 1) sample from the same posterior.
 
         UV: 1/sigma2 ~ Gamma(alpha_post, beta_post)
         MV: error_cov_inv ~ Wishart(df_post, scale_post)
@@ -339,10 +339,10 @@ class TestMVBartIntegration:
         )
 
         def sample_uv(k):
-            return step_error_cov_inv_uv(k, st_uv).error_cov_inv
+            return _step_error_cov_inv_uv(k, st_uv).error_cov_inv
 
         def sample_mv(k):
-            return step_error_cov_inv_mv(k, st_mv).error_cov_inv[0, 0]
+            return _step_error_cov_inv_mv(k, st_mv).error_cov_inv[0, 0]
 
         n_samples = 10000
         samples_uv = vmap(sample_uv)(keys.pop(n_samples))

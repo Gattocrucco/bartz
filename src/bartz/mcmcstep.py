@@ -541,13 +541,9 @@ def step(key: Key[Array, ''], bart: State) -> State:
         bart = replace(bart, error_cov_inv=None)
         return step_z(keys.pop(), bart)
 
-    elif bart.kind == 'mv':
+    else:  # continuous or multivariate regression
         bart = step_trees(keys.pop(), bart)
-        return step_error_cov_inv_mv(keys.pop(), bart)
-
-    else:  # continuous regression
-        bart = step_trees(keys.pop(), bart)
-        return step_error_cov_inv_uv(keys.pop(), bart)
+        return step_error_cov_inv(keys.pop(), bart)
 
 
 def step_trees(key: Key[Array, ''], bart: State) -> State:
@@ -1733,20 +1729,12 @@ def accept_moves_parallel_stage(
     )
 
     assert bart.error_cov_inv is not None
-    if bart.kind == 'mv':
-        prelkv, prelk = precompute_likelihood_terms_mv(
-            bart.error_cov_inv, bart.forest.leaf_prior_cov_inv, move_precs
-        )
-        prelf = precompute_leaf_terms_mv(
-            key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
-        )
-    else:
-        prelkv, prelk = precompute_likelihood_terms_uv(
-            bart.error_cov_inv, bart.forest.leaf_prior_cov_inv, move_precs
-        )
-        prelf = precompute_leaf_terms_uv(
-            key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
-        )
+    prelkv, prelk = precompute_likelihood_terms(
+        bart.error_cov_inv, bart.forest.leaf_prior_cov_inv, move_precs
+    )
+    prelf = precompute_leaf_terms(
+        key, prec_trees, bart.error_cov_inv, bart.forest.leaf_prior_cov_inv
+    )
 
     return ParallelStageOut(
         bart=bart,
@@ -2086,48 +2074,6 @@ def adapt_leaf_trees_to_grow_indices(
     )
 
 
-def precompute_likelihood_terms_uv(
-    error_cov_inv: Float32[Array, ''],
-    leaf_prior_cov_inv: Float32[Array, ''],
-    move_precs: Precs | Counts,
-) -> tuple[PreLkV, PreLk]:
-    """
-    Pre-compute terms used in the likelihood ratio of the acceptance step.
-
-    Parameters
-    ----------
-    error_cov_inv
-        The inverse error variance, or the inverse global error variance factor
-        if `prec_scale` is set.
-    leaf_prior_cov_inv
-        The inverse prior variance of each leaf.
-    move_precs
-        The likelihood precision scale in the leaves grown or pruned by the
-        moves, under keys 'left', 'right', and 'total' (left + right).
-
-    Returns
-    -------
-    prelkv : PreLkV
-        Dictionary with pre-computed terms of the likelihood ratio, one per
-        tree.
-    prelk : PreLk
-        Dictionary with pre-computed terms of the likelihood ratio, shared by
-        all trees.
-    """
-    sigma2 = lax.reciprocal(error_cov_inv)
-    sigma_mu2 = lax.reciprocal(leaf_prior_cov_inv)
-    sigma2_left = sigma2 + move_precs.left * sigma_mu2
-    sigma2_right = sigma2 + move_precs.right * sigma_mu2
-    sigma2_total = sigma2 + move_precs.total * sigma_mu2
-    prelkv = PreLkV(
-        sigma2_left=sigma2_left,
-        sigma2_right=sigma2_right,
-        sigma2_total=sigma2_total,
-        sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
-    )
-    return prelkv, PreLk(exp_factor=error_cov_inv / leaf_prior_cov_inv / 2)
-
-
 @partial(jnp.vectorize, signature='(k,k)->(k,k)')
 def _chol_with_gersh(mat: Float32[Array, '... k k']) -> Float32[Array, '... k k']:
     """Cholesky with Gershgorin stabilization, supports batching."""
@@ -2154,37 +2100,30 @@ def _logdet_from_chol(L):
     return 2.0 * jnp.sum(jnp.log(diags), axis=-1)
 
 
-def precompute_likelihood_terms_mv(
+def _precompute_likelihood_terms_uv(
+    error_cov_inv: Float32[Array, ''],
+    leaf_prior_cov_inv: Float32[Array, ''],
+    move_precs: Precs | Counts,
+) -> tuple[PreLkV, PreLk]:
+    sigma2 = lax.reciprocal(error_cov_inv)
+    sigma_mu2 = lax.reciprocal(leaf_prior_cov_inv)
+    sigma2_left = sigma2 + move_precs.left * sigma_mu2
+    sigma2_right = sigma2 + move_precs.right * sigma_mu2
+    sigma2_total = sigma2 + move_precs.total * sigma_mu2
+    prelkv = PreLkV(
+        sigma2_left=sigma2_left,
+        sigma2_right=sigma2_right,
+        sigma2_total=sigma2_total,
+        sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
+    )
+    return prelkv, PreLk(exp_factor=error_cov_inv / leaf_prior_cov_inv / 2)
+
+
+def _precompute_likelihood_terms_mv(
     error_cov_inv: Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, 'k k'],
     move_precs: Counts,
 ) -> tuple[PreLkV, PreLk]:
-    """
-    Pre-compute terms used in the likelihood ratio of the acceptance step.
-
-    This implementation assumes a homoskedastic error model (i.e., the residual
-    covariance is the same for all observations). Support for heteroskedasticity
-    is planed for future updates.
-
-    Parameters
-    ----------
-    error_cov_inv
-        The inverse of the error covariance matrix.
-    leaf_prior_cov_inv
-        The inverse of prior covariance matrix of each leaf.
-    move_precs
-        The likelihood precision scale in the leaves grown or pruned by the
-        moves, under keys 'left', 'right', and 'total' (left + right).
-
-    Returns
-    -------
-    prelkv : PreLkV
-        Dictionary with pre-computed terms of the likelihood ratio, one per
-        tree.
-    prelk : PreLk
-        Dictionary with pre-computed terms of the likelihood ratio, shared by
-        all trees.
-    """
     nL = move_precs.left[..., None, None]
     nR = move_precs.right[..., None, None]
     nT = move_precs.total[..., None, None]
@@ -2215,35 +2154,55 @@ def precompute_likelihood_terms_mv(
     return prelkv, PreLk(exp_factor=0.5)
 
 
-def precompute_leaf_terms_uv(
+def precompute_likelihood_terms(
+    error_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
+    leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
+    move_precs: Precs | Counts,
+) -> tuple[PreLkV, PreLk]:
+    """
+    Pre-compute terms used in the likelihood ratio of the acceptance step.
+
+    Handles both univariate and multivariate cases based on the shape of the
+    input arrays. The multivariate implementation assumes a homoskedastic error
+    model (i.e., the residual covariance is the same for all observations).
+
+    Parameters
+    ----------
+    error_cov_inv
+        The inverse error variance (univariate) or the inverse of the error
+        covariance matrix (multivariate). For univariate case, this is the
+        inverse global error variance factor if `prec_scale` is set.
+    leaf_prior_cov_inv
+        The inverse prior variance of each leaf (univariate) or the inverse of
+        prior covariance matrix of each leaf (multivariate).
+    move_precs
+        The likelihood precision scale in the leaves grown or pruned by the
+        moves, under keys 'left', 'right', and 'total' (left + right).
+
+    Returns
+    -------
+    prelkv : PreLkV
+        Pre-computed terms of the likelihood ratio, one per tree.
+    prelk : PreLk
+        Pre-computed terms of the likelihood ratio, shared by all trees.
+    """
+    if error_cov_inv.ndim == 2:
+        return _precompute_likelihood_terms_mv(
+            error_cov_inv, leaf_prior_cov_inv, move_precs
+        )
+    else:
+        return _precompute_likelihood_terms_uv(
+            error_cov_inv, leaf_prior_cov_inv, move_precs
+        )
+
+
+def _precompute_leaf_terms_uv(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
     error_cov_inv: Float32[Array, ''],
     leaf_prior_cov_inv: Float32[Array, ''],
     z: Float32[Array, 'num_trees 2**d'] | None = None,
 ) -> PreLf:
-    """
-    Pre-compute terms used to sample leaves from their posterior.
-
-    Parameters
-    ----------
-    key
-        A jax random key.
-    prec_trees
-        The likelihood precision scale in each potential or actual leaf node.
-    error_cov_inv
-        The inverse error variance, or the inverse global error variance factor if `prec_scale`
-        is set.
-    leaf_prior_cov_inv
-        The inverse prior variance of each leaf.
-    z
-        Optional standard normal noise to use for sampling the centered leaves.
-        This is intended for testing purposes only.
-
-    Returns
-    -------
-    Pre-computed terms for leaf sampling.
-    """
     prec_lk = prec_trees * error_cov_inv
     var_post = lax.reciprocal(prec_lk + leaf_prior_cov_inv)
     if z is None:
@@ -2262,35 +2221,13 @@ def precompute_leaf_terms_uv(
     )
 
 
-def precompute_leaf_terms_mv(
+def _precompute_leaf_terms_mv(
     key: Key[Array, ''],
     prec_trees: Float32[Array, 'num_trees 2**d'],
     error_cov_inv: Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, 'k k'],
-    z: Float32[Array, 'num_trees 2**d'] | None = None,
+    z: Float32[Array, 'num_trees 2**d k'] | None = None,
 ) -> PreLf:
-    """
-    Pre-compute terms used to sample leaves from their posterior.
-
-    Parameters
-    ----------
-    key
-        A jax random key.
-    prec_trees
-        The likelihood precision scale in each potential or actual leaf node.
-    error_cov_inv
-        The inverse of error covariance matrix, or the global error variance factor if `prec_scale`
-        is set.
-    leaf_prior_cov_inv
-        The inverse of prior variance of each leaf.
-    z
-        Optional standard normal noise to use for sampling the centered leaves.
-        This is intended for testing purposes only.
-
-    Returns
-    -------
-    Pre-computed terms for leaf sampling in multivariate case.
-    """
     num_trees, num_leaves = prec_trees.shape
     k = error_cov_inv.shape[0]
     n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
@@ -2317,6 +2254,52 @@ def precompute_leaf_terms_mv(
         mean_factor=mean_factor,  # Shape: [num_trees, k, k, num_leaves]
         centered_leaves=centered_leaves,  # Shape: [num_trees, k, num_leaves]
     )
+
+
+def precompute_leaf_terms(
+    key: Key[Array, ''],
+    prec_trees: Float32[Array, 'num_trees 2**d'],
+    error_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
+    leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
+    z: Float32[Array, 'num_trees 2**d']
+    | Float32[Array, 'num_trees 2**d k']
+    | None = None,
+) -> PreLf:
+    """
+    Pre-compute terms used to sample leaves from their posterior.
+
+    Handles both univariate and multivariate cases based on the shape of the
+    input arrays.
+
+    Parameters
+    ----------
+    key
+        A jax random key.
+    prec_trees
+        The likelihood precision scale in each potential or actual leaf node.
+    error_cov_inv
+        The inverse error variance (univariate) or the inverse of error
+        covariance matrix (multivariate). For univariate case, this is the
+        inverse global error variance factor if `prec_scale` is set.
+    leaf_prior_cov_inv
+        The inverse prior variance of each leaf (univariate) or the inverse of
+        prior covariance matrix of each leaf (multivariate).
+    z
+        Optional standard normal noise to use for sampling the centered leaves.
+        This is intended for testing purposes only.
+
+    Returns
+    -------
+    Pre-computed terms for leaf sampling.
+    """
+    if error_cov_inv.ndim == 2:
+        return _precompute_leaf_terms_mv(
+            key, prec_trees, error_cov_inv, leaf_prior_cov_inv, z
+        )
+    else:
+        return _precompute_leaf_terms_uv(
+            key, prec_trees, error_cov_inv, leaf_prior_cov_inv, z
+        )
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(0,))
@@ -2499,14 +2482,9 @@ def accept_move_and_sample_leaves(
     assert pt.move.node.dtype == jnp.int32
     resid_tree = resid_tree.at[..., pt.move.node].set(resid_total)
 
-    if resid.ndim > 1:
-        log_lk_ratio = compute_likelihood_ratio_mv(
-            resid_total, resid_left, resid_right, pt.prelkv, at.prelk
-        )
-    else:
-        log_lk_ratio = compute_likelihood_ratio_uv(
-            resid_total, resid_left, resid_right, pt.prelkv, at.prelk
-        )
+    log_lk_ratio = compute_likelihood_ratio(
+        resid_total, resid_left, resid_right, pt.prelkv, at.prelk
+    )
 
     # calculate accept/reject ratio
     log_ratio = pt.move.log_trans_prior_ratio + log_lk_ratio
@@ -2620,15 +2598,50 @@ def _aggregate_batched_onetree(
     )
 
 
-def compute_likelihood_ratio_uv(
+def _compute_likelihood_ratio_uv(
     total_resid: Float32[Array, ''],
     left_resid: Float32[Array, ''],
     right_resid: Float32[Array, ''],
     prelkv: PreLkV,
     prelk: PreLk,
 ) -> Float32[Array, '']:
+    exp_term = prelk.exp_factor * (
+        left_resid * left_resid / prelkv.sigma2_left
+        + right_resid * right_resid / prelkv.sigma2_right
+        - total_resid * total_resid / prelkv.sigma2_total
+    )
+    return prelkv.sqrt_term + exp_term
+
+
+def _compute_likelihood_ratio_mv(
+    total_resid: Float32[Array, ' k'],
+    left_resid: Float32[Array, ' k'],
+    right_resid: Float32[Array, ' k'],
+    prelkv: PreLkV,
+    prelk: PreLk,  # noqa: ARG001
+) -> Float32[Array, '']:
+    def _quadratic_form(r, cov):
+        return r @ cov @ r
+
+    qf_left = _quadratic_form(left_resid, prelkv.sigma2_left)
+    qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
+    qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
+    exp_term = 0.5 * (qf_left + qf_right - qf_total)
+    return prelkv.sqrt_term + exp_term
+
+
+def compute_likelihood_ratio(
+    total_resid: Float32[Array, ''] | Float32[Array, ' k'],
+    left_resid: Float32[Array, ''] | Float32[Array, ' k'],
+    right_resid: Float32[Array, ''] | Float32[Array, ' k'],
+    prelkv: PreLkV,
+    prelk: PreLk,
+) -> Float32[Array, '']:
     """
     Compute the likelihood ratio of a grow move.
+
+    Handles both univariate and multivariate cases based on the shape of the
+    residual arrays.
 
     Parameters
     ----------
@@ -2646,49 +2659,14 @@ def compute_likelihood_ratio_uv(
     -------
     The log-likelihood ratio log P(data | new tree) - log P(data | old tree).
     """
-    exp_term = prelk.exp_factor * (
-        left_resid * left_resid / prelkv.sigma2_left
-        + right_resid * right_resid / prelkv.sigma2_right
-        - total_resid * total_resid / prelkv.sigma2_total
-    )
-    return prelkv.sqrt_term + exp_term
-
-
-def compute_likelihood_ratio_mv(
-    total_resid: Float32[Array, ' k'],
-    left_resid: Float32[Array, ' k'],
-    right_resid: Float32[Array, ' k'],
-    prelkv: PreLkV,
-    prelk: PreLk,  # noqa: ARG001
-) -> Float32[Array, '']:
-    """
-    Compute the likelihood ratio of a grow move, for multivariate case.
-
-    Parameters
-    ----------
-    total_resid
-    left_resid
-    right_resid
-        The sum of the residuals (scaled by error precision scale) of the
-        datapoints falling in the nodes involved in the moves.
-    prelkv
-    prelk
-        The pre-computed terms of the likelihood ratio, see
-        `precompute_likelihood_terms_mv`.
-
-    Returns
-    -------
-    The log-likelihood ratio log P(data | new tree) - log P(data | old tree).
-    """
-
-    def _quadratic_form(r, cov):
-        return r @ cov @ r
-
-    qf_left = _quadratic_form(left_resid, prelkv.sigma2_left)
-    qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
-    qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
-    exp_term = 0.5 * (qf_left + qf_right - qf_total)
-    return prelkv.sqrt_term + exp_term
+    if total_resid.ndim > 0:
+        return _compute_likelihood_ratio_mv(
+            total_resid, left_resid, right_resid, prelkv, prelk
+        )
+    else:
+        return _compute_likelihood_ratio_uv(
+            total_resid, left_resid, right_resid, prelkv, prelk
+        )
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
@@ -2778,38 +2756,6 @@ def apply_moves_to_split_trees(
     )
 
 
-@partial(jit_and_block_if_profiling, donate_argnums=(1,))
-def step_error_cov_inv_uv(key: Key[Array, ''], bart: State) -> State:
-    """
-    MCMC-update the inverse error covariance (univariate case).
-
-    Parameters
-    ----------
-    key
-        A jax random key.
-    bart
-        A BART mcmc state.
-
-    Returns
-    -------
-    The new BART mcmc state, with an updated `error_cov_inv`.
-    """
-    resid = bart.resid
-    # inverse gamma prior: alpha = df / 2, beta = scale / 2
-    alpha = bart.error_cov_df / 2 + resid.size / 2
-    if bart.prec_scale is None:
-        scaled_resid = resid
-    else:
-        scaled_resid = resid * bart.prec_scale
-    norm2 = resid @ scaled_resid
-    beta = bart.error_cov_scale / 2 + norm2 / 2
-
-    sample = random.gamma(key, alpha)
-    # random.gamma seems to be slow at compiling, maybe cdf inversion would
-    # be better, but it's not implemented in jax
-    return replace(bart, error_cov_inv=sample / beta)
-
-
 @jax.jit
 def _sample_wishart_bartlett(
     key: Key[Array, ''], df: Integer[Array, ''], scale_inv: Float32[Array, 'k k']
@@ -2855,9 +2801,39 @@ def _sample_wishart_bartlett(
     return T @ T.T
 
 
-def step_error_cov_inv_mv(key: Key[Array, ''], bart: State) -> State:
+def _step_error_cov_inv_uv(key: Key[Array, ''], bart: State) -> State:
+    resid = bart.resid
+    # inverse gamma prior: alpha = df / 2, beta = scale / 2
+    alpha = bart.error_cov_df / 2 + resid.size / 2
+    if bart.prec_scale is None:
+        scaled_resid = resid
+    else:
+        scaled_resid = resid * bart.prec_scale
+    norm2 = resid @ scaled_resid
+    beta = bart.error_cov_scale / 2 + norm2 / 2
+
+    sample = random.gamma(key, alpha)
+    # random.gamma seems to be slow at compiling, maybe cdf inversion would
+    # be better, but it's not implemented in jax
+    return replace(bart, error_cov_inv=sample / beta)
+
+
+def _step_error_cov_inv_mv(key: Key[Array, ''], bart: State) -> State:
+    n = bart.resid.shape[-1]
+    df_post = bart.error_cov_df + n
+    scale_post = bart.error_cov_scale + bart.resid @ bart.resid.T
+
+    prec = _sample_wishart_bartlett(key, df_post, scale_post)
+    return replace(bart, error_cov_inv=prec)
+
+
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
+def step_error_cov_inv(key: Key[Array, ''], bart: State) -> State:
     """
-    MCMC-update the inverse error covariance matrix (multivariate case).
+    MCMC-update the inverse error covariance.
+
+    Handles both univariate and multivariate cases based on the BART state's
+    `kind` attribute.
 
     Parameters
     ----------
@@ -2868,14 +2844,12 @@ def step_error_cov_inv_mv(key: Key[Array, ''], bart: State) -> State:
 
     Returns
     -------
-    The new BART MCMC state with an updated `error_cov_inv`.
+    The new BART mcmc state, with an updated `error_cov_inv`.
     """
-    n = bart.resid.shape[-1]
-    df_post = bart.error_cov_df + n
-    scale_post = bart.error_cov_scale + bart.resid @ bart.resid.T
-
-    prec = _sample_wishart_bartlett(key, df_post, scale_post)
-    return replace(bart, error_cov_inv=prec)
+    if bart.kind == 'mv':
+        return _step_error_cov_inv_mv(key, bart)
+    else:
+        return _step_error_cov_inv_uv(key, bart)
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1,))
