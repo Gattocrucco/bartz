@@ -215,10 +215,16 @@ def _init_kind_parameters(
     y: Float32[Any, ' n'] | Float32[Any, 'k n'] | Bool[Any, ' n'],
     offset: Float32[Array, ''] | Float32[Array, ' k'],
     error_scale: Float32[Any, ' n'] | None,
-    error_cov_df: float | Float32[Any, ''],
-    error_cov_scale: float | Float32[Any, ''] | Float32[Any, 'k k'],
+    error_cov_df: float | Float32[Any, ''] | None,
+    error_cov_scale: float | Float32[Any, ''] | Float32[Any, 'k k'] | None,
     leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
-):
+) -> tuple[
+    Kind | str,
+    None | int,
+    None | Float32[Array, ''],
+    None | Float32[Array, ''],
+    None | Float32[Array, ''],
+]:
     """
     Determine 'kind' and initialize/validate kind-specific params.
 
@@ -244,7 +250,7 @@ def _init_kind_parameters(
     kind
         The regression kind.
     k
-        The number of output dimensions (None for binary/uv).
+        The number of output dimensions (None for uv).
     error_cov_inv
         The initialized error covariance inverse.
     error_cov_df
@@ -316,8 +322,8 @@ def init(
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
     leaf_prior_cov_inv: float | Float32[Any, ''] | Float32[Array, 'k k'],
-    error_cov_df: float | Float32[Any, ''],
-    error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'],
+    error_cov_df: float | Float32[Any, ''] | None = None,
+    error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
     error_scale: Float32[Any, ' n'] | None = None,
     min_points_per_decision_node: int | Integer[Any, ''] | None = None,
     resid_batch_size: int | None | Literal['auto'] = 'auto',
@@ -482,8 +488,8 @@ def init(
         prec_scale=(
             None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
         ),
-        error_cov_df=error_cov_df if kind != 'binary' else None,
-        error_cov_scale=error_cov_scale if kind != 'binary' else None,
+        error_cov_df=error_cov_df,
+        error_cov_scale=error_cov_scale,
         kind=kind,
         forest=Forest(
             leaf_tree=leaf_tree,

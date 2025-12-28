@@ -101,6 +101,7 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
     kw: dict = dict(
         X=X,
         y=y,
+        offset=0.0,
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
@@ -113,6 +114,8 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
 
     # adapt arguments for old versions
     sig = signature(init)
+    if 'offset' not in sig.parameters:
+        kw.pop('offset')
     if 'sigma2_alpha' in sig.parameters:
         # old version: convert error_cov_df/scale to sigma2_alpha/beta
         # inverse gamma prior: alpha = df / 2, beta = scale / 2
