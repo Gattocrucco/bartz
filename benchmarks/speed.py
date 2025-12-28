@@ -401,10 +401,10 @@ class TimeRunMcmcVsTraceLength:
         n_iters = min(self.params[0])
 
         def callback(*, bart, i_total, **_):
-            # sigma2 is one of the last things modified in the mcmc loop, so
+            # inv_sigma2 is one of the last things modified in the mcmc loop, so
             # using it as token ensures ordering, also it does not have n in the
             # dimensionality
-            token = bart.sigma2
+            token = bart.inv_sigma2
             stop = i_total + 1 == n_iters  # i_total is updated after callback
             token = error_if(token, stop, self.canary)
             jax.debug.print('{}', token)  # prevent dead code elimination
