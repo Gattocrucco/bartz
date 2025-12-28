@@ -2506,14 +2506,9 @@ def accept_move_and_sample_leaves(
 
     tree_size = pt.leaf_tree.shape[-1]  # 2**d
 
-    if resid.ndim > 1:
-        resid_tree = sum_resid_vec(  # [k, 2**d]
-            scaled_resid, pt.leaf_indices, tree_size, at.resid_batch_size
-        )
-    else:
-        resid_tree = sum_resid(
-            scaled_resid, pt.leaf_indices, pt.leaf_tree.size, at.resid_batch_size
-        )
+    resid_tree = sum_resid(
+        scaled_resid, pt.leaf_indices, tree_size, at.resid_batch_size
+    )
 
     # subtract starting tree from function
     resid_tree += pt.prec_tree * pt.leaf_tree
@@ -2559,20 +2554,25 @@ def accept_move_and_sample_leaves(
     return resid, leaf_tree, acc, to_prune, log_lk_ratio
 
 
+@partial(jnp.vectorize, excluded=(1, 2, 3), signature='(n)->(m)')
 def sum_resid(
-    scaled_resid: Float32[Array, ' n'],
+    scaled_resid: Float32[Array, ' n'] | Float32[Array, 'k n'],
     leaf_indices: UInt[Array, ' n'],
     tree_size: int,
     batch_size: int | None,
-) -> Float32[Array, ' {tree_size}']:
+) -> Float32[Array, ' {tree_size}'] | Float32[Array, 'k {tree_size}']:
     """
     Sum the residuals in each leaf.
+
+    Handles both univariate and multivariate cases based on the shape of the
+    input arrays.
 
     Parameters
     ----------
     scaled_resid
         The residuals (data minus forest value) multiplied by the error
-        precision scale.
+        precision scale. For multivariate case, shape is ``(k, n)`` where ``k``
+        is the number of outcome columns.
     leaf_indices
         The leaf indices of the tree (in which leaf each data point falls into).
     tree_size
@@ -2583,44 +2583,14 @@ def sum_resid(
 
     Returns
     -------
-    The sum of the residuals at data points in each leaf.
+    The sum of the residuals at data points in each leaf. For multivariate
+    case, returns per-leaf sums of residual vectors.
     """
     if batch_size is None:
         aggr_func = _aggregate_scatter
     else:
         aggr_func = partial(_aggregate_batched_onetree, batch_size=batch_size)
     return aggr_func(scaled_resid, leaf_indices, tree_size, jnp.float32)
-
-
-@partial(vmap_nodoc, in_axes=(0, None, None, None))
-def sum_resid_vec(
-    scaled_resid: Float32[Array, ' k n'],
-    leaf_indices: UInt[Array, ' n'],
-    tree_size: int,
-    batch_size: int | None,
-) -> Float32[Array, ' k {tree_size}']:
-    """
-    Sum the residuals in each leaf.
-
-    Parameters
-    ----------
-    scaled_resid
-        The residuals (data minus forest value) multiplied by the error
-        precision scale.
-    leaf_indices
-        The leaf indices of the tree (in which leaf each data point falls into).
-    tree_size
-        The size of the tree array (2 ** d).
-    batch_size
-        The data batch size for the aggregation. Batching increases numerical
-        accuracy and parallelism.
-
-    Returns
-    -------
-    Per-leaf sums of residual vectors; equivalent to applying `sum_resid` to
-    each of the ``k`` outcome columns.
-    """
-    return sum_resid(scaled_resid, leaf_indices, tree_size, batch_size)
 
 
 def _aggregate_batched_onetree(
