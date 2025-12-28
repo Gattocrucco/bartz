@@ -688,10 +688,10 @@ def test_scale_shift(kw):
         atol=0,
     )
     assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
-    assert_array_equal(bart1._mcmc_state.sigma2_alpha, bart2._mcmc_state.sigma2_alpha)
+    assert_array_equal(bart1._mcmc_state.error_cov_df, bart2._mcmc_state.error_cov_df)
     assert_allclose(
-        bart1._mcmc_state.sigma2_beta,
-        bart2._mcmc_state.sigma2_beta / scale**2,
+        bart1._mcmc_state.error_cov_scale,
+        bart2._mcmc_state.error_cov_scale / scale**2,
         rtol=1e-6,
     )
     assert_close_matrices(

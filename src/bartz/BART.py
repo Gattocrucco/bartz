@@ -456,13 +456,14 @@ class mc_gbart(Module):
         | None
     ):
         """The standard deviation of the error, including burn-in samples."""
-        if self._burnin_trace.inv_sigma2 is None:
+        if self._burnin_trace.error_cov_inv is None:
             return None
-        assert self._main_trace.inv_sigma2 is not None
+        assert self._main_trace.error_cov_inv is not None
         sigma = jnp.sqrt(
             jnp.reciprocal(
                 jnp.concatenate(
-                    [self._burnin_trace.inv_sigma2, self._main_trace.inv_sigma2], axis=1
+                    [self._burnin_trace.error_cov_inv, self._main_trace.error_cov_inv],
+                    axis=1,
                 )
             )
         )
@@ -781,11 +782,12 @@ class mc_gbart(Module):
         p_nonterminal = base / (1 + depth).astype(float) ** power
 
         if y_train.dtype == bool:
-            sigma2_alpha = None
-            sigma2_beta = None
+            error_cov_df = None
+            error_cov_scale = None
         else:
-            sigma2_alpha = sigdf / 2
-            sigma2_beta = lamda * sigma2_alpha
+            # inverse gamma prior: alpha = df / 2, beta = scale / 2
+            error_cov_df = sigdf
+            error_cov_scale = lamda * sigdf
 
         kw = dict(
             X=x_train,
@@ -797,8 +799,8 @@ class mc_gbart(Module):
             num_trees=ntree,
             p_nonterminal=p_nonterminal,
             inv_sigma_mu2=lax.reciprocal(jnp.square(sigma_mu)),
-            sigma2_alpha=sigma2_alpha,
-            sigma2_beta=sigma2_beta,
+            error_cov_df=error_cov_df,
+            error_cov_scale=error_cov_scale,
             min_points_per_decision_node=10,
             min_points_per_leaf=5,
             theta=theta,
@@ -910,8 +912,8 @@ class mc_gbart(Module):
                 '.y',
                 '.offset',
                 '.prec_scale',
-                '.sigma2_alpha',
-                '.sigma2_beta',
+                '.error_cov_df',
+                '.error_cov_scale',
                 '.forest.max_split',
                 '.forest.blocked_vars',
                 '.forest.p_nonterminal',

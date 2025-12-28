@@ -104,15 +104,20 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
-        inv_sigma_mu2=ntree,
-        sigma2_alpha=1.0,
-        sigma2_beta=1.0,
+        inv_sigma_mu2=jnp.float32(ntree),
+        error_cov_df=2.0,
+        error_cov_scale=2.0,
         min_points_per_decision_node=10,
         filter_splitless_vars=False,
     )
 
     # adapt arguments for old versions
     sig = signature(init)
+    if 'sigma2_alpha' in sig.parameters:
+        # old version: convert error_cov_df/scale to sigma2_alpha/beta
+        # inverse gamma prior: alpha = df / 2, beta = scale / 2
+        kw['sigma2_alpha'] = kw.pop('error_cov_df') / 2
+        kw['sigma2_beta'] = kw.pop('error_cov_scale') / 2
     if 'inv_sigma_mu2' not in sig.parameters:
         if 'sigma_mu2' in sig.parameters:
             kw['sigma_mu2'] = 1 / kw.pop('inv_sigma_mu2')
@@ -139,8 +144,10 @@ def simple_init(p: int, n: int, ntree: int, kind: Kind = 'plain', /, **kwargs): 
                 msg = 'binary not supported'
                 raise NotImplementedError(msg)
             kw['y'] = y > 0
-            kw.pop('sigma2_alpha')
-            kw.pop('sigma2_beta')
+            kw.pop('sigma2_alpha', None)
+            kw.pop('sigma2_beta', None)
+            kw.pop('error_cov_df', None)
+            kw.pop('error_cov_scale', None)
 
         case 'sparse':
             if not hasattr(mcmcstep, 'step_sparse'):
@@ -171,6 +178,8 @@ def vmap_axes_for_state(state):
             'prec_scale',
             'sigma2_alpha',
             'sigma2_beta',
+            'error_cov_df',
+            'error_cov_scale',
             'max_split',
             'blocked_vars',
             'p_nonterminal',
@@ -404,10 +413,13 @@ class TimeRunMcmcVsTraceLength:
         n_iters = min(self.params[0])
 
         def callback(*, bart, i_total, **_):
-            # inv_sigma2 is one of the last things modified in the mcmc loop, so
-            # using it as token ensures ordering, also it does not have n in the
-            # dimensionality
-            token = bart.inv_sigma2
+            # error_cov_inv (or sigma2 in old versions) is one of the last things
+            # modified in the mcmc loop, so using it as token ensures ordering,
+            # also it does not have n in the dimensionality
+            if hasattr(bart, 'sigma2'):
+                token = bart.sigma2
+            else:
+                token = bart.error_cov_inv
             stop = i_total + 1 == n_iters  # i_total is updated after callback
             token = error_if(token, stop, self.canary)
             jax.debug.print('{}', token)  # prevent dead code elimination

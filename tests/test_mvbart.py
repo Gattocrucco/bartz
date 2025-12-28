@@ -44,8 +44,8 @@ from bartz.mcmcstep import (
     precompute_likelihood_terms_mv,
     precompute_likelihood_terms_uv,
     step,
-    step_sigma,
-    step_sigma2_prec,
+    step_error_cov_inv_mv,
+    step_error_cov_inv_uv,
     step_trees,
 )
 from tests.util import assert_close_matrices
@@ -260,7 +260,7 @@ class TestMVBartIntegration:
             filter_splitless_vars=False,
         )
 
-        bart_uv = init(y=y, sigma2_alpha=3.0, sigma2_beta=2.0, **common)
+        bart_uv = init(y=y, error_cov_df=6.0, error_cov_scale=4.0, **common)
 
         bart_mv = init(
             y=y_mv,
@@ -271,11 +271,9 @@ class TestMVBartIntegration:
         )
 
         assert bart_uv.kind == 'uv'
-        assert bart_uv.inv_sigma2 is not None
-        assert bart_uv.error_cov_inv is None
+        assert bart_uv.error_cov_inv is not None
 
         assert bart_mv.kind == 'mv'
-        assert bart_mv.inv_sigma2 is None
         assert bart_mv.error_cov_inv is not None
 
         assert bart_uv.resid.ndim == 1
@@ -283,7 +281,7 @@ class TestMVBartIntegration:
         assert bart_mv.resid.shape[0] == 1
         assert bart_mv.resid.shape[1] == bart_uv.resid.shape[0]
 
-        assert jnp.ndim(bart_uv.inv_sigma2) == 0
+        assert jnp.ndim(bart_uv.error_cov_inv) == 0
         assert bart_mv.error_cov_inv.shape == (1, 1)
 
         assert_array_equal(bart_uv.resid, bart_mv.resid.squeeze(0))
@@ -299,7 +297,7 @@ class TestMVBartIntegration:
 
     def test_step_sigma_distribution_match(self, keys, data):
         """
-        Test that step_sigma and step_sigma2_prec (k = 1) sample from the same posterior.
+        Test that step_error_cov_inv_uv and step_error_cov_inv_mv (k = 1) sample from the same posterior.
 
         UV: 1/sigma2 ~ Gamma(alpha_post, beta_post)
         MV: error_cov_inv ~ Wishart(df_post, scale_post)
@@ -307,51 +305,43 @@ class TestMVBartIntegration:
         X, y, _ = data
         resid = random.normal(keys.pop(), (y.size,))
 
-        alpha_prior_uv = 10.0
-        beta_prior_uv = 5.0
+        # inverse gamma prior: alpha = df / 2, beta = scale / 2
+        df_prior = 20.0
+        scale_prior = 10.0
 
         st_uv = State(
             X=X,
             y=y,
             resid=resid,
             kind='uv',
-            sigma2_alpha=alpha_prior_uv,
-            sigma2_beta=beta_prior_uv,
+            error_cov_df=df_prior,
+            error_cov_scale=scale_prior,
             z=None,
             offset=0.0,
-            inv_sigma2=1.0,
-            error_cov_inv=None,
+            error_cov_inv=1.0,
             prec_scale=None,
-            error_cov_df=None,
-            error_cov_scale=None,
             forest=None,
         )
-
-        df_prior_mv = 2 * alpha_prior_uv
-        scale_prior_mv = 2 * beta_prior_uv
 
         st_mv = State(
             X=X,
             y=y[None, :],
             resid=resid[None, :],
             kind='mv',
-            error_cov_df=jnp.array(df_prior_mv),
-            error_cov_scale=jnp.array([[scale_prior_mv]]),
+            error_cov_df=jnp.array(df_prior),
+            error_cov_scale=jnp.array([[scale_prior]]),
             z=None,
             offset=0.0,
-            inv_sigma2=None,
             error_cov_inv=jnp.eye(1),
             prec_scale=None,
-            sigma2_alpha=None,
-            sigma2_beta=None,
             forest=None,
         )
 
         def sample_uv(k):
-            return step_sigma(k, st_uv).inv_sigma2
+            return step_error_cov_inv_uv(k, st_uv).error_cov_inv
 
         def sample_mv(k):
-            return step_sigma2_prec(k, st_mv).error_cov_inv[0, 0]
+            return step_error_cov_inv_mv(k, st_mv).error_cov_inv[0, 0]
 
         n_samples = 10000
         samples_uv = vmap(sample_uv)(keys.pop(n_samples))
@@ -377,13 +367,13 @@ class TestMVBartSteps:
             max_split=max_split,
             num_trees=n_trees,
             p_nonterminal=jnp.array([0.9, 0.5]),
-            inv_sigma_mu2=n_trees,
+            inv_sigma_mu2=jnp.float32(n_trees),
             resid_batch_size=None,
             count_batch_size=None,
             filter_splitless_vars=False,
         )
 
-        uv_state = init(y=y, sigma2_alpha=2.0, sigma2_beta=1.0, kind='uv', **params)
+        uv_state = init(y=y, error_cov_df=4.0, error_cov_scale=2.0, kind='uv', **params)
         mv_state = init(
             y=y_mv,
             leaf_prior_cov_inv=n_trees * jnp.eye(1),
@@ -396,7 +386,7 @@ class TestMVBartSteps:
         mv_state = replace(
             mv_state,
             resid=uv_state.resid[None, :],
-            error_cov_inv=jnp.array([[uv_state.inv_sigma2]]),
+            error_cov_inv=jnp.array([[uv_state.error_cov_inv]]),
             forest=replace(
                 mv_state.forest,
                 var_tree=uv_state.forest.var_tree,

@@ -67,8 +67,8 @@ def init(p: int, n: int, ntree: int, **kwargs):
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),
         inv_sigma_mu2=1.0,
-        sigma2_alpha=1,
-        sigma2_beta=1,
+        error_cov_df=2,
+        error_cov_scale=2,
         min_points_per_decision_node=10,
         filter_splitless_vars=False,
         **kwargs,
@@ -88,7 +88,7 @@ class TestRunMcmc:
         assert_array_equal(final_state.forest.leaf_tree, main_trace.leaf_tree[-1])
         assert_array_equal(final_state.forest.var_tree, main_trace.var_tree[-1])
         assert_array_equal(final_state.forest.split_tree, main_trace.split_tree[-1])
-        assert_array_equal(final_state.inv_sigma2, main_trace.inv_sigma2[-1])
+        assert_array_equal(final_state.error_cov_inv, main_trace.error_cov_inv[-1])
 
     def test_zero_iterations(self, keys):
         """Check there's no error if the loop does not run."""
