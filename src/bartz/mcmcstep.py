@@ -2118,9 +2118,9 @@ def _inv_via_chol_with_gersh(mat: Float32[Array, 'k k']) -> Float32[Array, 'k k'
     return L_inv.T @ L_inv
 
 
-def _logdet_from_chol(L):
-    """Compute logdet of A = L'L via Cholesky (sum of log of diag^2)."""
-    diags = jnp.diagonal(L, axis1=-2, axis2=-1)
+def _logdet_from_chol(L: Float32[Array, '... k k']) -> Float32[Array, '...']:
+    """Compute logdet of A = LL' via Cholesky (sum of log of diag^2)."""
+    diags: Float32[Array, '... k'] = jnp.diagonal(L, axis1=-2, axis2=-1)
     return 2.0 * jnp.sum(jnp.log(diags), axis=-1)
 
 
@@ -2148,24 +2148,32 @@ def _precompute_likelihood_terms_mv(
     leaf_prior_cov_inv: Float32[Array, 'k k'],
     move_precs: Counts,
 ) -> tuple[PreLkV, PreLk]:
-    nL = move_precs.left[..., None, None]
-    nR = move_precs.right[..., None, None]
-    nT = move_precs.total[..., None, None]
+    nL: UInt[Array, 'num_trees 1 1'] = move_precs.left[..., None, None]
+    nR: UInt[Array, 'num_trees 1 1'] = move_precs.right[..., None, None]
+    nT: UInt[Array, 'num_trees 1 1'] = move_precs.total[..., None, None]
 
-    L_left = _chol_with_gersh(error_cov_inv * nL + leaf_prior_cov_inv)
-    L_right = _chol_with_gersh(error_cov_inv * nR + leaf_prior_cov_inv)
-    L_total = _chol_with_gersh(error_cov_inv * nT + leaf_prior_cov_inv)
+    L_left: Float32[Array, 'num_trees k k'] = _chol_with_gersh(
+        error_cov_inv * nL + leaf_prior_cov_inv
+    )
+    L_right: Float32[Array, 'num_trees k k'] = _chol_with_gersh(
+        error_cov_inv * nR + leaf_prior_cov_inv
+    )
+    L_total: Float32[Array, 'num_trees k k'] = _chol_with_gersh(
+        error_cov_inv * nT + leaf_prior_cov_inv
+    )
 
-    sqrt_term = 0.5 * (
+    sqrt_term: Float32[Array, ' num_trees'] = 0.5 * (
         _logdet_from_chol(_chol_with_gersh(leaf_prior_cov_inv))
         + _logdet_from_chol(L_total)
         - _logdet_from_chol(L_left)
         - _logdet_from_chol(L_right)
     )
 
-    def _covariance_from_chol(L):
-        rhs = jnp.broadcast_to(error_cov_inv, L.shape)  # (num_trees, k, k)
-        Y = solve_triangular(L, rhs, lower=True)  # (num_trees, k, k)
+    def _covariance_from_chol(
+        L: Float32[Array, '*batch k k'],
+    ) -> Float32[Array, '*batch k k']:
+        rhs: Float32[Array, '*batch k k'] = jnp.broadcast_to(error_cov_inv, L.shape)
+        Y: Float32[Array, '*batch k k'] = solve_triangular(L, rhs, lower=True)
         return Y.mT @ Y
 
     prelkv = PreLkV(
@@ -2254,7 +2262,7 @@ def _precompute_leaf_terms_mv(
 ) -> PreLf:
     num_trees, num_leaves = prec_trees.shape
     k = error_cov_inv.shape[0]
-    n_k = prec_trees[..., None, None]  # Shape: [num_trees, num_leaves, 1, 1]
+    n_k: Float32[Array, 'num_trees num_leaves 1 1'] = prec_trees[..., None, None]
 
     # Only broadcast the inverse of error covariance matrix to satisfy JAX's batching rules
     # for `lax.linalg.solve_triangular`, which does not support implicit broadcasting.
@@ -2262,22 +2270,33 @@ def _precompute_leaf_terms_mv(
         error_cov_inv, (num_trees, num_leaves, k, k)
     )
 
-    posterior_precision = leaf_prior_cov_inv + n_k * error_cov_inv_batched
+    posterior_precision: Float32[Array, 'num_trees num_leaves k k'] = (
+        leaf_prior_cov_inv + n_k * error_cov_inv_batched
+    )
 
-    L_prec = _chol_with_gersh(posterior_precision)
-    Y = solve_triangular(L_prec, error_cov_inv_batched, lower=True)
-    mean_factor = solve_triangular(L_prec, Y, trans='T', lower=True)
-    mean_factor = jnp.moveaxis(mean_factor, 1, -1)
+    L_prec: Float32[Array, 'num_trees num_leaves k k'] = _chol_with_gersh(
+        posterior_precision
+    )
+    Y: Float32[Array, 'num_trees num_leaves k k'] = solve_triangular(
+        L_prec, error_cov_inv_batched, lower=True
+    )
+    mean_factor: Float32[Array, 'num_trees num_leaves k k'] = solve_triangular(
+        L_prec, Y, trans='T', lower=True
+    )
+    mean_factor_out: Float32[Array, 'num_trees k k num_leaves'] = jnp.moveaxis(
+        mean_factor, 1, -1
+    )
 
     if z is None:
         z = random.normal(key, (num_trees, num_leaves, k))
-    centered_leaves = solve_triangular(L_prec, z, trans='T')
-    centered_leaves = jnp.swapaxes(centered_leaves, -1, -2)
-
-    return PreLf(
-        mean_factor=mean_factor,  # Shape: [num_trees, k, k, num_leaves]
-        centered_leaves=centered_leaves,  # Shape: [num_trees, k, num_leaves]
+    centered_leaves: Float32[Array, 'num_trees num_leaves k'] = solve_triangular(
+        L_prec, z, trans='T'
     )
+    centered_leaves_out: Float32[Array, 'num_trees k num_leaves'] = jnp.swapaxes(
+        centered_leaves, -1, -2
+    )
+
+    return PreLf(mean_factor=mean_factor_out, centered_leaves=centered_leaves_out)
 
 
 def precompute_leaf_terms(
