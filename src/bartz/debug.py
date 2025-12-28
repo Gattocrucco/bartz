@@ -1303,8 +1303,8 @@ class debug_mc_gbart(mc_gbart):
             alpha = bart.sigma2_alpha + bart.resid.size / 2
             norm2 = jnp.einsum('ij,ij->i', bart.resid, bart.resid)
             beta = bart.sigma2_beta + norm2 / 2
-        sigma2 = beta / alpha
-        return jnp.sqrt(sigma2)
+        inv_sigma2 = alpha / beta
+        return jnp.sqrt(lax.reciprocal(inv_sigma2))
 
     def compare_resid(
         self,

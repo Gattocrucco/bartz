@@ -455,12 +455,14 @@ class mc_gbart(Module):
         | None
     ):
         """The standard deviation of the error, including burn-in samples."""
-        if self._burnin_trace.sigma2 is None:
+        if self._burnin_trace.inv_sigma2 is None:
             return None
-        assert self._main_trace.sigma2 is not None
+        assert self._main_trace.inv_sigma2 is not None
         sigma = jnp.sqrt(
-            jnp.concatenate(
-                [self._burnin_trace.sigma2, self._main_trace.sigma2], axis=1
+            jnp.reciprocal(
+                jnp.concatenate(
+                    [self._burnin_trace.inv_sigma2, self._main_trace.inv_sigma2], axis=1
+                )
             )
         )
         sigma = sigma.T

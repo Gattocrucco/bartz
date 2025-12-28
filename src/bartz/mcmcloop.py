@@ -53,7 +53,7 @@ from bartz.mcmcstep import State
 class BurninTrace(Module):
     """MCMC trace with only diagnostic values."""
 
-    sigma2: Float32[Array, '*trace_length'] | None
+    inv_sigma2: Float32[Array, '*trace_length'] | None
     theta: Float32[Array, '*trace_length'] | None
     grow_prop_count: Int32[Array, '*trace_length']
     grow_acc_count: Int32[Array, '*trace_length']
@@ -66,7 +66,7 @@ class BurninTrace(Module):
     def from_state(cls, state: State) -> 'BurninTrace':
         """Create a single-item burn-in trace from a MCMC state."""
         return cls(
-            sigma2=state.sigma2,
+            inv_sigma2=state.inv_sigma2,
             theta=state.forest.theta,
             grow_prop_count=state.forest.grow_prop_count,
             grow_acc_count=state.forest.grow_acc_count,
