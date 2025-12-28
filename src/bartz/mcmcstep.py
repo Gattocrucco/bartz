@@ -212,59 +212,112 @@ class State(Module):
 
 def _init_kind_parameters(
     kind: Kind | str | None,
-    y: Float32[Any, ' n'] | Bool[Any, ' n'],
-    k: int | None,
+    y: Float32[Any, ' n'] | Float32[Any, 'k n'] | Bool[Any, ' n'],
+    offset: Float32[Array, ''] | Float32[Array, ' k'],
     error_scale: Float32[Any, ' n'] | None,
-    error_cov_df: Float32[Array, ''] | None,
-    error_cov_scale: Float32[Array, ''] | Float32[Array, 'k k'] | None,
+    error_cov_df: float | Float32[Any, ''],
+    error_cov_scale: float | Float32[Any, ''] | Float32[Any, 'k k'],
     leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
 ):
-    """Determine 'kind' and initialize kind-specific params."""
+    """
+    Determine 'kind' and initialize/validate kind-specific params.
+
+    Parameters
+    ----------
+    kind
+        The regression kind, or None to infer from `y`.
+    y
+        The response variable.
+    offset
+        The offset to add to the predictions.
+    error_scale
+        Per-observation error scale (univariate only).
+    error_cov_df
+        The error covariance degrees of freedom.
+    error_cov_scale
+        The error covariance scale.
+    leaf_prior_cov_inv
+        The inverse of the leaf prior covariance.
+
+    Returns
+    -------
+    kind
+        The regression kind.
+    k
+        The number of output dimensions (None for binary/uv).
+    error_cov_inv
+        The initialized error covariance inverse.
+    error_cov_df
+        The error covariance degrees of freedom (as array).
+    error_cov_scale
+        The error covariance scale (as array).
+
+    Raises
+    ------
+    ValueError
+        If `kind` is 'binary' and `y` is multivariate.
+    """
+    is_binary_y = y.dtype == bool
+    k = None if y.ndim == 1 else y.shape[0]
+
+    # Infer kind if not specified
     if kind is None:
-        if y.dtype == bool:
+        if is_binary_y:
             kind = 'binary'
-        elif k == None:
+        elif k is None:
             kind = 'uv'
         else:
             kind = 'mv'
 
+    assert kind in ('binary', 'uv', 'mv')
+
+    # Binary vs continuous
     if kind == 'binary':
-        if (error_scale, error_cov_df, error_cov_scale) != (None, None, None):
-            msg = (
-                'error_scale, error_cov_df, and error_cov_scale must be set '
-                'to `None` for binary regression.'
-            )
+        if k is not None:
+            msg = 'Binary multivariate regression not supported, open an issue at https://github.com/Gattocrucco/bartz/issues if you need it.'
             raise ValueError(msg)
+        assert is_binary_y
+        assert error_scale is None
+        assert error_cov_df is None
+        assert error_cov_scale is None
         error_cov_inv = None
-    elif kind == 'uv':
+    else:
+        assert not is_binary_y
         error_cov_df = jnp.asarray(error_cov_df)
         error_cov_scale = jnp.asarray(error_cov_scale)
-        if error_cov_scale.ndim != 0 or leaf_prior_cov_inv.ndim != 0:
-            msg = 'error_cov_scale and leaf_prior_cov_inv must be scalars for univariate regression.'
-            raise ValueError(msg)
-        # inverse gamma prior: alpha = df / 2, beta = scale / 2
-        error_cov_inv = error_cov_df / error_cov_scale
-    else:  # kind == 'mv'
-        error_cov_scale = jnp.asarray(error_cov_scale)
-        if error_cov_scale.ndim != 2 or leaf_prior_cov_inv.ndim != 2:
-            msg = 'error_cov_scale and leaf_prior_cov_inv must be matrices for multivariate regression.'
-            raise ValueError(msg)
-        error_cov_inv = error_cov_df * _inv_via_chol_with_gersh(error_cov_scale)
 
-    return kind, error_cov_inv, error_cov_df, error_cov_scale
+    # Multivariate vs univariate
+    if kind == 'mv':
+        assert y.ndim == 2
+        assert y.shape[0] == k
+        assert leaf_prior_cov_inv.shape == (k, k)
+        assert offset.shape == (k,)
+        if kind != 'binary':
+            assert error_cov_scale.shape == (k, k)
+            error_cov_inv = error_cov_df * _inv_via_chol_with_gersh(error_cov_scale)
+    else:
+        assert y.ndim == 1
+        assert leaf_prior_cov_inv.ndim == 0
+        assert offset.ndim == 0
+        if kind != 'binary':
+            assert error_cov_scale.ndim == 0
+            # inverse gamma prior: alpha = df / 2, beta = scale / 2
+            error_cov_inv = error_cov_df / error_cov_scale
+
+    return kind, k, error_cov_inv, error_cov_df, error_cov_scale
 
 
 def init(
     *,
     X: UInt[Any, 'p n'],
     y: Float32[Any, ' n'] | Float32[Array, ' k n'] | Bool[Any, ' n'],
-    offset: float | Float32[Any, ''] | Float32[Any, ' k'] = 0.0,
+    offset: float | Float32[Any, ''] | Float32[Any, ' k'],
     max_split: UInt[Any, ' p'],
     num_trees: int,
     p_nonterminal: Float32[Any, ' d-1'],
-    leaf_prior_cov_inv: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
-    error_cov_df: float | Float32[Any, ''] | None = None,
-    error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
+    leaf_prior_cov_inv: float | Float32[Any, ''] | Float32[Array, 'k k'],
+    error_cov_df: float | Float32[Any, ''],
+    error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'],
     error_scale: Float32[Any, ' n'] | None = None,
     min_points_per_decision_node: int | Integer[Any, ''] | None = None,
     resid_batch_size: int | None | Literal['auto'] = 'auto',
@@ -288,7 +341,8 @@ def init(
         The predictors. Note this is trasposed compared to the usual convention.
     y
         The response. If the data type is `bool`, the regression model is binary
-        regression with probit.
+        regression with probit. If two-dimensional, the outcome is multivariate
+        with the first axis indicating the component.
     offset
         Constant shift added to the sum of trees. 0 if not specified.
     max_split
@@ -354,7 +408,7 @@ def init(
     rho
         Parameters of the prior on `theta`. Required only to sample `theta`.
     kind
-        Inidicator of regression type.
+        Inidicator of regression type. If not specified, it's inferred from `y`.
 
     Returns
     -------
@@ -381,20 +435,17 @@ def init(
         return grove.make_tree(max_depth, dtype)
 
     y = jnp.asarray(y)
-    n = y.shape[-1]
-    is_binary = y.dtype == bool
-    k = None if (is_binary or y.ndim == 1) else y.shape[0]
     offset = jnp.asarray(offset)
+    leaf_prior_cov_inv = jnp.asarray(leaf_prior_cov_inv)
 
     resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
 
-    leaf_prior_cov_inv = jnp.asarray(leaf_prior_cov_inv)
-
-    kind, error_cov_inv, error_cov_df, error_cov_scale = _init_kind_parameters(
-        kind, y, k, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
+    kind, k, error_cov_inv, error_cov_df, error_cov_scale = _init_kind_parameters(
+        kind, y, offset, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
     )
+    is_binary = kind == 'binary'
 
     max_split = jnp.asarray(max_split)
 
@@ -426,7 +477,7 @@ def init(
         y=y,
         z=jnp.full(y.shape, offset) if is_binary else None,
         offset=offset,
-        resid=jnp.zeros(y.shape) if is_binary else y - offset,
+        resid=jnp.zeros(y.shape) if is_binary else y - offset[..., None],
         error_cov_inv=error_cov_inv if kind != 'binary' else None,
         prec_scale=(
             None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
@@ -456,7 +507,7 @@ def init(
             p_nonterminal=p_nonterminal[grove.tree_depths(2**max_depth)],
             p_propose_grow=p_nonterminal[grove.tree_depths(2 ** (max_depth - 1))],
             leaf_indices=jnp.ones(
-                (num_trees, n), minimal_unsigned_dtype(2**max_depth - 1)
+                (num_trees, y.shape[-1]), minimal_unsigned_dtype(2**max_depth - 1)
             ),
             min_points_per_decision_node=_asarray_or_none(min_points_per_decision_node),
             min_points_per_leaf=_asarray_or_none(min_points_per_leaf),

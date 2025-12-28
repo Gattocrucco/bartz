@@ -63,6 +63,7 @@ def init(p: int, n: int, ntree: int, **kwargs):
     return mcmcstep.init(
         X=X,
         y=y,
+        offset=0.0,
         max_split=max_split,
         num_trees=ntree,
         p_nonterminal=make_p_nonterminal(6),

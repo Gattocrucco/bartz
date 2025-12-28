@@ -260,11 +260,17 @@ class TestMVBartIntegration:
         )
 
         bart_uv = init(
-            y=y, leaf_prior_cov_inv=1.0, error_cov_df=6.0, error_cov_scale=4.0, **common
+            y=y,
+            offset=0.0,
+            leaf_prior_cov_inv=1.0,
+            error_cov_df=6.0,
+            error_cov_scale=4.0,
+            **common,
         )
 
         bart_mv = init(
             y=y_mv,
+            offset=jnp.zeros(1),
             leaf_prior_cov_inv=jnp.array([[1.0]]),
             error_cov_df=jnp.array(6.0),
             error_cov_scale=4.0 * jnp.eye(1),
@@ -375,6 +381,7 @@ class TestMVBartSteps:
 
         uv_state = init(
             y=y,
+            offset=0.0,
             leaf_prior_cov_inv=jnp.float32(n_trees),
             error_cov_df=4.0,
             error_cov_scale=2.0,
@@ -383,6 +390,7 @@ class TestMVBartSteps:
         )
         mv_state = init(
             y=y_mv,
+            offset=jnp.zeros(1),
             leaf_prior_cov_inv=n_trees * jnp.eye(1),
             error_cov_df=jnp.array(4.0),
             error_cov_scale=2 * jnp.eye(1),
@@ -449,6 +457,7 @@ class TestMVBartSteps:
         mv_state = init(
             X=X,
             y=y,
+            offset=jnp.zeros(k),
             max_split=max_split,
             num_trees=5,
             p_nonterminal=jnp.array([0.9, 0.5]),
