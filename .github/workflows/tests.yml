@@ -146,6 +146,7 @@ jobs:
           uv pip install "jax[cuda$CUDA_VERSION]"
 
       - name: Run unit tests
+        timeout-minutes: 30
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
 
       - name: Save coverage information
