@@ -28,7 +28,7 @@ Development
 Initial setup
 -------------
 
-`Fork <https://github.com/Gattocrucco/bartz/fork>`_ the repository on Github, then clone the fork:
+`Fork <https://github.com/bartz-org/bartz/fork>`_ the repository on Github, then clone the fork:
 
 .. code-block:: shell
 

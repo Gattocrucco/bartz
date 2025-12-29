@@ -43,9 +43,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Gattocrucco/bartz"
+Homepage = "https://github.com/bartz-org/bartz"
 Documentation = "https://gattocrucco.github.io/bartz/docs-dev"
-Issues = "https://github.com/Gattocrucco/bartz/issues"
+Issues = "https://github.com/bartz-org/bartz/issues"
 
 [dependency-groups]
 only-local = [

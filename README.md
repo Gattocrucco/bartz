@@ -13,13 +13,13 @@ This Python module provides an implementation of BART that runs on GPU, to proce
 
 On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of) if n > 20,000, but using 1/20 of the memory. On GPU, the speed premium depends on sample size; it is convenient over CPU only for n > 10,000. The maximum speedup is currently 200x, on an Nvidia A100 and with at least 2,000,000 observations.
 
-[This Colab notebook](https://colab.research.google.com/github/Gattocrucco/bartz/blob/main/docs/examples/basic_simdata.ipynb) runs bartz with n = 100,000 observations, p = 1000 predictors, 10,000 trees, for 1000 MCMC iterations, in 6 minutes.
+[This Colab notebook](https://colab.research.google.com/github/bartz-org/bartz/blob/main/docs/examples/basic_simdata.ipynb) runs bartz with n = 100,000 observations, p = 1000 predictors, 10,000 trees, for 1000 MCMC iterations, in 6 minutes.
 
 ## Links
 
 - [Documentation (latest release)](https://gattocrucco.github.io/bartz/docs)
 - [Documentation (development version)](https://gattocrucco.github.io/bartz/docs-dev)
-- [Repository](https://github.com/Gattocrucco/bartz)
+- [Repository](https://github.com/bartz-org/bartz)
 - [Code coverage](https://gattocrucco.github.io/bartz/coverage)
 - [Benchmarks](https://gattocrucco.github.io/bartz/benchmarks)
 - [List of BART packages](https://gattocrucco.github.io/bartz/docs-dev/pkglist.html)
