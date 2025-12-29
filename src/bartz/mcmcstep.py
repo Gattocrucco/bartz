@@ -1659,9 +1659,8 @@ class PreLf(Module):
 
     These terms can be computed in parallel across trees.
 
-    Supports both scalar and multivariate models. In the scalara case, the arrays have
-    shape (num_trees, 2**d); In the multivariate case, mean_factor has shape (num_trees, k, k, 2**d) and
-    centered_leaves has shape (num_trees, k, 2**d).
+    For each tree and leaf, the terms are scalars in the univariate case, and
+    matrices/vectors in the multivariate case.
 
     Parameters
     ----------
