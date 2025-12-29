@@ -33,7 +33,7 @@ from numpy.testing import assert_allclose, assert_array_equal
 from scipy.stats import chi2, ks_1samp, ks_2samp
 
 from bartz.mcmcstep import (
-    Precs,
+    Counts,
     State,
     _compute_likelihood_ratio_mv,
     _compute_likelihood_ratio_uv,
@@ -164,17 +164,17 @@ class TestPrecomputeTerms:
         error_cov_inv = jnp.array([[inv_sigma2]])
         leaf_prior_cov_inv = jnp.array([[leaf_prior_cov_inv_uv]])
 
-        precs = Precs(left=jnp.array(3.0), right=jnp.array(4.0), total=jnp.array(7.0))
+        precs = Counts(left=jnp.array(3.0), right=jnp.array(4.0), total=jnp.array(7.0))
 
         total_resid = random.normal(keys.pop(), (1,))
         left_resid = random.normal(keys.pop(), (1,))
         right_resid = random.normal(keys.pop(), (1,))
 
-        prelkv_mv, prelk_mv = _precompute_likelihood_terms_mv(
+        prelkv_mv, _ = _precompute_likelihood_terms_mv(
             error_cov_inv, leaf_prior_cov_inv, precs
         )
         likelihood_mv = _compute_likelihood_ratio_mv(
-            total_resid, left_resid, right_resid, prelkv_mv, prelk_mv
+            total_resid, left_resid, right_resid, prelkv_mv
         )
 
         prelkv_uv, prelk_uv = _precompute_likelihood_terms_uv(
