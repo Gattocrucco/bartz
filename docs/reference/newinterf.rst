@@ -1,6 +1,6 @@
 .. bartz/docs/interface.rst
 ..
-.. Copyright (c) 2024-2025, The Bartz Contributors
+.. Copyright (c) 2025, The Bartz Contributors
 ..
 .. This file is part of bartz.
 ..
@@ -22,8 +22,7 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-BART3 Interface
+New interface
 ===============
 
-.. automodule:: bartz.BART
-    :members:
+.. autoclass:: bartz.Bart

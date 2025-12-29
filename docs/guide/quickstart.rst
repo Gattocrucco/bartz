@@ -36,7 +36,9 @@ Import and use the `bartz.BART.gbart` class:
     bart = gbart(X, y, ...)
     y_pred = bart.predict(X_test)
 
-The interface hews to the R package `BART <https://cran.r-project.org/package=BART>`_, with a few differences explained in the documentation of `bartz.BART.gbart`.
+The interface hews to the R package `BART3 <https://github.com/rsparapa/bnptools>`_, with a few differences explained in the documentation of `bartz.BART.gbart`. This interface has the longest ancestry, descending from the original BART implementation.
+
+There is also a new interface where new features are added, `bartz.Bart`. However it is unstable and continuously evolving.
 
 JAX
 ---
