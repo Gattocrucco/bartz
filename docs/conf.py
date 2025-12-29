@@ -150,7 +150,7 @@ html_theme_options = dict(
     github_button=True,
     github_type='star',
     github_repo='bartz',
-    github_user='Gattocrucco',
+    github_user='bartz-org',
     show_relbars=True,
 )
 
