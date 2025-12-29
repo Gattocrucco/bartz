@@ -44,7 +44,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/bartz-org/bartz"
-Documentation = "https://gattocrucco.github.io/bartz/docs-dev"
+Documentation = "https://bartz-org.github.io/bartz/docs-dev"
 Issues = "https://github.com/bartz-org/bartz/issues"
 
 [dependency-groups]

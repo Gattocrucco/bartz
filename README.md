@@ -17,12 +17,12 @@ On CPU, bartz runs at the speed of dbarts (the fastest implementation I know of)
 
 ## Links
 
-- [Documentation (latest release)](https://gattocrucco.github.io/bartz/docs)
-- [Documentation (development version)](https://gattocrucco.github.io/bartz/docs-dev)
+- [Documentation (latest release)](https://bartz-org.github.io/bartz/docs)
+- [Documentation (development version)](https://bartz-org.github.io/bartz/docs-dev)
 - [Repository](https://github.com/bartz-org/bartz)
-- [Code coverage](https://gattocrucco.github.io/bartz/coverage)
-- [Benchmarks](https://gattocrucco.github.io/bartz/benchmarks)
-- [List of BART packages](https://gattocrucco.github.io/bartz/docs-dev/pkglist.html)
+- [Code coverage](https://bartz-org.github.io/bartz/coverage)
+- [Benchmarks](https://bartz-org.github.io/bartz/benchmarks)
+- [List of BART packages](https://bartz-org.github.io/bartz/docs-dev/pkglist.html)
 
 ## Citing bartz
 
