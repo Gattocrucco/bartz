@@ -484,7 +484,7 @@ def init(
         z=jnp.full(y.shape, offset) if is_binary else None,
         offset=offset,
         resid=jnp.zeros(y.shape) if is_binary else y - offset[..., None],
-        error_cov_inv=error_cov_inv if kind != 'binary' else None,
+        error_cov_inv=error_cov_inv,
         prec_scale=(
             None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
         ),
@@ -1717,7 +1717,7 @@ class ParallelStageOut(Module):
     prec_trees: Float32[Array, 'num_trees 2**d'] | Int32[Array, 'num_trees 2**d']
     move_precs: Precs | Counts
     prelkv: PreLkV
-    prelk: PreLk
+    prelk: PreLk | None
     prelf: PreLf
 
 
@@ -2215,7 +2215,7 @@ def _precompute_likelihood_terms_mv(
     error_cov_inv: Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, 'k k'],
     move_precs: Counts,
-) -> tuple[PreLkV, PreLk]:
+) -> tuple[PreLkV, None]:
     nL: UInt[Array, 'num_trees 1 1'] = move_precs.left[..., None, None]
     nR: UInt[Array, 'num_trees 1 1'] = move_precs.right[..., None, None]
     nT: UInt[Array, 'num_trees 1 1'] = move_precs.total[..., None, None]
@@ -2251,14 +2251,14 @@ def _precompute_likelihood_terms_mv(
         sqrt_term=sqrt_term,
     )
 
-    return prelkv, PreLk(exp_factor=0.5)
+    return prelkv, None
 
 
 def precompute_likelihood_terms(
     error_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
     leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
     move_precs: Precs | Counts,
-) -> tuple[PreLkV, PreLk]:
+) -> tuple[PreLkV, PreLk | None]:
     """
     Pre-compute terms used in the likelihood ratio of the acceptance step.
 
@@ -2283,10 +2283,11 @@ def precompute_likelihood_terms(
     -------
     prelkv : PreLkV
         Pre-computed terms of the likelihood ratio, one per tree.
-    prelk : PreLk
+    prelk : PreLk | None
         Pre-computed terms of the likelihood ratio, shared by all trees.
     """
     if error_cov_inv.ndim == 2:
+        assert isinstance(move_precs, Counts)
         return _precompute_likelihood_terms_mv(
             error_cov_inv, leaf_prior_cov_inv, move_precs
         )
@@ -2494,7 +2495,7 @@ class SeqStageInAllTrees(Module):
     resid_batch_size: int | None = field(static=True)
     prec_scale: Float32[Array, ' n'] | None
     save_ratios: bool = field(static=True)
-    prelk: PreLk
+    prelk: PreLk | None
 
 
 class SeqStageInPerTree(Module):
@@ -2700,7 +2701,6 @@ def _compute_likelihood_ratio_mv(
     left_resid: Float32[Array, ' k'],
     right_resid: Float32[Array, ' k'],
     prelkv: PreLkV,
-    prelk: PreLk,  # noqa: ARG001
 ) -> Float32[Array, '']:
     def _quadratic_form(r, cov):
         return r @ cov @ r
@@ -2717,7 +2717,7 @@ def compute_likelihood_ratio(
     left_resid: Float32[Array, ''] | Float32[Array, ' k'],
     right_resid: Float32[Array, ''] | Float32[Array, ' k'],
     prelkv: PreLkV,
-    prelk: PreLk,
+    prelk: PreLk | None,
 ) -> Float32[Array, '']:
     """
     Compute the likelihood ratio of a grow move.
@@ -2743,9 +2743,10 @@ def compute_likelihood_ratio(
     """
     if total_resid.ndim > 0:
         return _compute_likelihood_ratio_mv(
-            total_resid, left_resid, right_resid, prelkv, prelk
+            total_resid, left_resid, right_resid, prelkv
         )
     else:
+        assert prelk is not None
         return _compute_likelihood_ratio_uv(
             total_resid, left_resid, right_resid, prelkv, prelk
         )
