@@ -1,4 +1,4 @@
-.. bartz/docs/grove.rst
+.. bartz/docs/reference/grove.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..

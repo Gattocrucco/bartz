@@ -1,4 +1,4 @@
-.. bartz/docs/interface.rst
+.. bartz/docs/reference/interface.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..

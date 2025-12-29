@@ -1,4 +1,4 @@
-.. bartz/docs/installation.rst
+.. bartz/docs/guide/installation.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..

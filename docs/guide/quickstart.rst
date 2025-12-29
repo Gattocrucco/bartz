@@ -1,4 +1,4 @@
-.. bartz/docs/quickstart.rst
+.. bartz/docs/guide/quickstart.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..

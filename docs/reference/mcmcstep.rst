@@ -1,4 +1,4 @@
-.. bartz/docs/mcmcstep.rst
+.. bartz/docs/reference/mcmcstep.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..
