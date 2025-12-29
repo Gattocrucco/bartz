@@ -188,7 +188,9 @@ class TestPrecomputeTerms:
             prelk_uv,
         )
 
-        assert_allclose(prelkv_mv.sqrt_term, prelkv_uv.sqrt_term, rtol=1e-6, atol=1e-6)
+        assert_allclose(
+            prelkv_mv.log_sqrt_term, prelkv_uv.log_sqrt_term, rtol=1e-6, atol=1e-6
+        )
         assert_allclose(likelihood_mv, likelihood_uv, rtol=1e-6, atol=1e-6)
 
     def test_leaf_terms_equiv(self, keys):

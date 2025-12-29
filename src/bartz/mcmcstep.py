@@ -1635,14 +1635,14 @@ class PreLkV(Module):
         grown or pruned by the moves.
         In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the parent node to the exponential term.
-    sqrt_term
-        The **logarithm** of the square root term of the likelihood ratio.
+    log_sqrt_term
+        The logarithm of the square root term of the likelihood ratio.
     """
 
     sigma2_left: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
     sigma2_right: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
     sigma2_total: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    sqrt_term: Float32[Array, ' num_trees']
+    log_sqrt_term: Float32[Array, ' num_trees']
 
 
 class PreLk(Module):
@@ -2206,7 +2206,7 @@ def _precompute_likelihood_terms_uv(
         sigma2_left=sigma2_left,
         sigma2_right=sigma2_right,
         sigma2_total=sigma2_total,
-        sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
+        log_sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
     )
     return prelkv, PreLk(exp_factor=error_cov_inv / leaf_prior_cov_inv / 2)
 
@@ -2230,7 +2230,7 @@ def _precompute_likelihood_terms_mv(
         error_cov_inv * nT + leaf_prior_cov_inv
     )
 
-    sqrt_term: Float32[Array, ' num_trees'] = 0.5 * (
+    log_sqrt_term: Float32[Array, ' num_trees'] = 0.5 * (
         _logdet_from_chol(_chol_with_gersh(leaf_prior_cov_inv))
         + _logdet_from_chol(L_total)
         - _logdet_from_chol(L_left)
@@ -2248,7 +2248,7 @@ def _precompute_likelihood_terms_mv(
         sigma2_left=_covariance_from_chol(L_left),
         sigma2_right=_covariance_from_chol(L_right),
         sigma2_total=_covariance_from_chol(L_total),
-        sqrt_term=sqrt_term,
+        log_sqrt_term=log_sqrt_term,
     )
 
     return prelkv, None
@@ -2693,7 +2693,7 @@ def _compute_likelihood_ratio_uv(
         + right_resid * right_resid / prelkv.sigma2_right
         - total_resid * total_resid / prelkv.sigma2_total
     )
-    return prelkv.sqrt_term + exp_term
+    return prelkv.log_sqrt_term + exp_term
 
 
 def _compute_likelihood_ratio_mv(
@@ -2709,7 +2709,7 @@ def _compute_likelihood_ratio_mv(
     qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
     qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
     exp_term = 0.5 * (qf_left + qf_right - qf_total)
-    return prelkv.sqrt_term + exp_term
+    return prelkv.log_sqrt_term + exp_term
 
 
 def compute_likelihood_ratio(
