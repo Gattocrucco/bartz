@@ -57,7 +57,7 @@ all:
 	@echo "- push and check CI completes (if it doesn't, go to previous step)"
 	@echo "- $$ make upload"
 	@echo "- publish github release (updates zenodo automatically)"
-	@echo "- if the online docs are not up-to-date, press 'run workflow' on https://github.com/Gattocrucco/bartz/actions/workflows/tests.yml, and try to understand why 'make upload' didn't do it"
+	@echo "- if the online docs are not up-to-date, press 'run workflow' on https://github.com/bartz-org/bartz/actions/workflows/tests.yml, and try to understand why 'make upload' didn't do it"
 
 
 .PHONY: setup
