@@ -2865,10 +2865,8 @@ def _sample_wishart_bartlett(
 
     off_diag_A = random.normal(keys.pop(), (k, k))
     A = jnp.tril(off_diag_A, -1) + jnp.diag(diag_A)
-    U = _chol_with_gersh(scale_inv[::-1, ::-1], absolute_eps=True)[::-1, ::-1]
-    # scale_inv = UU' with U upper triangular
-    T = solve_triangular(U, A, lower=False, trans='T')
-    # A is lower, U^-1 is upper, U^-T is lower, then T is lower as well
+    L = _chol_with_gersh(scale_inv, absolute_eps=True)
+    T = solve_triangular(L, A, lower=True, trans='T')
 
     return T @ T.T
 
