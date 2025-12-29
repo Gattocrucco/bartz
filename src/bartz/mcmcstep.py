@@ -1620,17 +1620,17 @@ class PreLkV(Module):
 
     Parameters
     ----------
-    sigma2_left
+    left
         In the scalar case, this is the noise variance in the left child of the leaves
         grown or pruned by the moves.
         In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the left child to the exponential term.
-    sigma2_right
+    right
         In the scalar case, this is the noise variance in the right child of the leaves
         grown or pruned by the moves.
         In the multivariate case, this is the intermediate matrix in the quadratic form
         representing the contribution of the right child to the exponential term.
-    sigma2_total
+    total
         In the scalar case, this is the noise variance in the total of the leaves
         grown or pruned by the moves.
         In the multivariate case, this is the intermediate matrix in the quadratic form
@@ -1639,9 +1639,9 @@ class PreLkV(Module):
         The logarithm of the square root term of the likelihood ratio.
     """
 
-    sigma2_left: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    sigma2_right: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    sigma2_total: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
+    left: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
+    right: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
+    total: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
     log_sqrt_term: Float32[Array, ' num_trees']
 
 
@@ -2199,14 +2199,14 @@ def _precompute_likelihood_terms_uv(
 ) -> tuple[PreLkV, PreLk]:
     sigma2 = lax.reciprocal(error_cov_inv)
     sigma_mu2 = lax.reciprocal(leaf_prior_cov_inv)
-    sigma2_left = sigma2 + move_precs.left * sigma_mu2
-    sigma2_right = sigma2 + move_precs.right * sigma_mu2
-    sigma2_total = sigma2 + move_precs.total * sigma_mu2
+    left = sigma2 + move_precs.left * sigma_mu2
+    right = sigma2 + move_precs.right * sigma_mu2
+    total = sigma2 + move_precs.total * sigma_mu2
     prelkv = PreLkV(
-        sigma2_left=sigma2_left,
-        sigma2_right=sigma2_right,
-        sigma2_total=sigma2_total,
-        log_sqrt_term=jnp.log(sigma2 * sigma2_total / (sigma2_left * sigma2_right)) / 2,
+        left=left,
+        right=right,
+        total=total,
+        log_sqrt_term=jnp.log(sigma2 * total / (left * right)) / 2,
     )
     return prelkv, PreLk(exp_factor=error_cov_inv / leaf_prior_cov_inv / 2)
 
@@ -2245,9 +2245,9 @@ def _precompute_likelihood_terms_mv(
         return Y.mT @ Y
 
     prelkv = PreLkV(
-        sigma2_left=_covariance_from_chol(L_left),
-        sigma2_right=_covariance_from_chol(L_right),
-        sigma2_total=_covariance_from_chol(L_total),
+        left=_covariance_from_chol(L_left),
+        right=_covariance_from_chol(L_right),
+        total=_covariance_from_chol(L_total),
         log_sqrt_term=log_sqrt_term,
     )
 
@@ -2689,9 +2689,9 @@ def _compute_likelihood_ratio_uv(
     prelk: PreLk,
 ) -> Float32[Array, '']:
     exp_term = prelk.exp_factor * (
-        left_resid * left_resid / prelkv.sigma2_left
-        + right_resid * right_resid / prelkv.sigma2_right
-        - total_resid * total_resid / prelkv.sigma2_total
+        left_resid * left_resid / prelkv.left
+        + right_resid * right_resid / prelkv.right
+        - total_resid * total_resid / prelkv.total
     )
     return prelkv.log_sqrt_term + exp_term
 
@@ -2705,9 +2705,9 @@ def _compute_likelihood_ratio_mv(
     def _quadratic_form(r, cov):
         return r @ cov @ r
 
-    qf_left = _quadratic_form(left_resid, prelkv.sigma2_left)
-    qf_right = _quadratic_form(right_resid, prelkv.sigma2_right)
-    qf_total = _quadratic_form(total_resid, prelkv.sigma2_total)
+    qf_left = _quadratic_form(left_resid, prelkv.left)
+    qf_right = _quadratic_form(right_resid, prelkv.right)
+    qf_total = _quadratic_form(total_resid, prelkv.total)
     exp_term = 0.5 * (qf_left + qf_right - qf_total)
     return prelkv.log_sqrt_term + exp_term
 
