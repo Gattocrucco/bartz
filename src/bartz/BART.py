@@ -426,7 +426,7 @@ class mc_gbart(Module):
         """
         return self._bart.yhat_train_mean
 
-    # Methods from Bart
+    # Public methods from Bart
 
     def predict(
         self, x_test: Real[Array, 'p m'] | DataFrame

@@ -735,7 +735,9 @@ class Bart(Module):
             return prepcovars.uniform_splits_from_matrix(x_train, numcut + 1)
 
     @staticmethod
-    def _bin_predictors(x, splits) -> UInt[Array, 'p n']:
+    def _bin_predictors(
+        x: Real[Array, 'p n'], splits: Real[Array, 'p max_num_splits']
+    ) -> UInt[Array, 'p n']:
         return prepcovars.bin_predictors(x, splits)
 
     @staticmethod

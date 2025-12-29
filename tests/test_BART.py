@@ -51,6 +51,7 @@ from jaxtyping import Array, Bool, Float, Float32, Int32, Key, Real, UInt
 from numpy.testing import assert_allclose, assert_array_equal
 
 from bartz import profile_mode
+from bartz._interface import Bart
 from bartz.debug import (
     TraceWithOffset,
     check_trace,
@@ -362,7 +363,7 @@ class TestWithCachedBart:
         assert_close_matrices(yhat_train, rbart.yhat_train, rtol=1e-6)
 
         # check yhat_test
-        Xt = bart._bin_predictors(kw['x_test'], bart._splits)
+        Xt = bart._bart._bin_predictors(kw['x_test'], bart._splits)
         yhat_test = evaluate_trace(trace, Xt)
         assert_close_matrices(yhat_test, rbart.yhat_test, rtol=1e-6)
 
@@ -980,7 +981,7 @@ def test_prior(keys, p, nsplits):
 
     # compare y
     X = random.randint(keys.pop(), (p, 30), 0, nsplits + 1)
-    yhat_mcmc = bart._predict(X)
+    yhat_mcmc = bart._bart._predict(X)
     yhat_prior = evaluate_trace(prior_trace, X)
     rhat_yhat = multivariate_rhat([yhat_mcmc, yhat_prior])
     assert rhat_yhat < 1.1
@@ -1348,33 +1349,35 @@ def test_split_key_multichain_equivalence(kw):
 def merge_barts(barts: Sequence[gbart]) -> mc_gbart:
     """Merge multiple single-chain gbart instances into a multichain mc_gbart."""
     out = object.__new__(mc_gbart)
+    bart = vars(out)['_bart'] = object.__new__(Bart)
+    ns = vars(bart)
 
-    vars(out)['_main_trace'] = tree_map(
+    ns['_main_trace'] = tree_map(
         lambda *x: jnp.concatenate(x), *(bart._main_trace for bart in barts)
     )
-    vars(out)['_burnin_trace'] = tree_map(
+    ns['_burnin_trace'] = tree_map(
         lambda *x: jnp.concatenate(x), *(bart._burnin_trace for bart in barts)
     )
     ref_bart = barts[0]
-    vars(out)['_mcmc_state'] = merge_mcmc_state(
+    ns['_mcmc_state'] = merge_mcmc_state(
         ref_bart._mcmc_state, *(bart._mcmc_state for bart in barts)
     )
-    vars(out)['_splits'] = ref_bart._splits
-    vars(out)['_x_train_fmt'] = ref_bart._x_train_fmt
-    vars(out)['ndpost'] = ref_bart.ndpost * len(barts)
-    vars(out)['offset'] = ref_bart.offset
-    vars(out)['sigest'] = ref_bart.sigest
+    ns['_splits'] = ref_bart._splits
+    ns['_x_train_fmt'] = ref_bart._x_train_fmt
+    ns['ndpost'] = ref_bart.ndpost * len(barts)
+    ns['offset'] = ref_bart.offset
+    ns['sigest'] = ref_bart.sigest
     if ref_bart.yhat_test is None:  # pragma: no cover
-        vars(out)['yhat_test'] = None
+        ns['yhat_test'] = None
     else:
-        vars(out)['yhat_test'] = jnp.concatenate([bart.yhat_test for bart in barts])
+        ns['yhat_test'] = jnp.concatenate([bart.yhat_test for bart in barts])
 
     return out
 
 
 def merge_mcmc_state(ref_state: State, *states: State):
     """Merge multi-chain MCMC states."""
-    state_axes = mc_gbart._vmap_axes_for_state(ref_state)
+    state_axes = Bart._vmap_axes_for_state(ref_state)
 
     def merge_state_variables(axis: int | None, ref_leaf, *leaves):
         if axis is None:
