@@ -44,7 +44,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -114,7 +114,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -149,7 +149,7 @@ jobs:
         run: make COVERAGE_SUFFIX=-${{ matrix.os }}${{ matrix.target-suffix }} tests${{ matrix.target-suffix }}
 
       - name: Save coverage information
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
           path: .coverage.tests-${{ matrix.os }}${{ matrix.target-suffix }}
@@ -161,7 +161,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           ref: ${{ startsWith(github.ref, 'refs/tags/') && 'main' || '' }}
           fetch-depth: 0 # this fetches the full history
@@ -183,7 +183,7 @@ jobs:
         run: make docs docs-latest
 
       - name: Save documentation
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: docs
           path: |
@@ -198,7 +198,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -206,7 +206,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
 
       - name: Get coverage files
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           pattern: coverage.*
           merge-multiple: true
@@ -227,7 +227,7 @@ jobs:
         run: make covreport
 
       - name: Save coverage report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: covreport
           path: _site/coverage
@@ -252,19 +252,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Get documentation and benchmarks
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: docs
           path: _site
 
       - name: Get coverage report
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: covreport
           path: _site/coverage
@@ -294,7 +294,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

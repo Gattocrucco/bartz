@@ -150,7 +150,7 @@ html_theme_options = dict(
     github_button=True,
     github_type='star',
     github_repo='bartz',
-    github_user='Gattocrucco',
+    github_user='bartz-org',
     show_relbars=True,
 )
 
@@ -223,7 +223,7 @@ def linkcode_resolve(domain, info):
     assert lineno
     linespec = f'#L{lineno}-L{lineno + len(source) - 1}'
 
-    prefix = 'https://github.com/Gattocrucco/bartz/blob'
+    prefix = 'https://github.com/bartz-org/bartz/blob'
     root = pathlib.Path(bartz.__file__).parent
     path = pathlib.Path(fn).relative_to(root).as_posix()
     return f'{prefix}/{commit}/src/bartz/{path}{linespec}'
