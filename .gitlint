@@ -6,3 +6,7 @@ line-length = 50
 
 [body-max-line-length]
 line-length = 72
+
+[ignore-by-author-name]
+regex=\[bot\]$
+ignore=all
