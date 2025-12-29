@@ -1614,27 +1614,22 @@ class PreLkV(Module):
 
     These terms can be computed in parallel across trees.
 
-    Supports both scalar and multivariate models. In the scalar case, variance
-    terms are 1D arrays of shape (num_trees,); In the multivariate case, they are
-    arrays of covariance matrices with shape (num_trees, k, k).
-
     Parameters
     ----------
     left
-        In the scalar case, this is the noise variance in the left child of the leaves
-        grown or pruned by the moves.
-        In the multivariate case, this is the intermediate matrix in the quadratic form
-        representing the contribution of the left child to the exponential term.
     right
-        In the scalar case, this is the noise variance in the right child of the leaves
-        grown or pruned by the moves.
-        In the multivariate case, this is the intermediate matrix in the quadratic form
-        representing the contribution of the right child to the exponential term.
     total
-        In the scalar case, this is the noise variance in the total of the leaves
-        grown or pruned by the moves.
-        In the multivariate case, this is the intermediate matrix in the quadratic form
-        representing the contribution of the parent node to the exponential term.
+        In the univariate case, this is the scalar term
+
+            ``1 / error_cov_inv + n_* / leaf_prior_cov_inv``
+
+        In the multivariate case, this is the matrix term
+
+            ``error_cov_inv @ inv(leaf_prior_cov_inv + n_* * error_cov_inv) @ error_cov_inv``
+
+        In both cases, ``n_*`` is n_left/right/total, the number of datapoints
+        respectively in the left child, right child, and parent node, or the
+        likelihood precision scale in the heteroskedastic case.
     log_sqrt_term
         The logarithm of the square root term of the likelihood ratio.
     """
