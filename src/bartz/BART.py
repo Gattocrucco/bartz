@@ -173,13 +173,9 @@ class mc_gbart(Module):
         for continuous regression and 10 for binary regression.
     printevery
         The number of iterations (including thinned-away ones) between each log
-        line. Set to `None` to disable logging.
-
-        `printevery` has a few unexpected side effects. On cpu, interrupting
-        with ^C halts the MCMC only on the next log. And the total number of
-        iterations is a multiple of `printevery`, so if ``nskip + keepevery *
-        ndpost`` is not a multiple of `printevery`, some of the last iterations
-        will not be saved.
+        line. Set to `None` to disable logging. ^C interrupts the MCMC only
+        every `printevery` iterations, so with logging disabled it's impossible
+        to kill the MCMC conveniently.
     mc_cores
         The number of independent MCMC chains.
     seed
