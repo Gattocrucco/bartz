@@ -2231,17 +2231,17 @@ def _precompute_likelihood_terms_mv(
         - _logdet_from_chol(L_right)
     )
 
-    def _covariance_from_chol(
-        L: Float32[Array, '*batch k k'],
-    ) -> Float32[Array, '*batch k k']:
-        rhs: Float32[Array, '*batch k k'] = jnp.broadcast_to(error_cov_inv, L.shape)
-        Y: Float32[Array, '*batch k k'] = solve_triangular(L, rhs, lower=True)
+    def _term_from_chol(
+        L: Float32[Array, 'num_trees k k'],
+    ) -> Float32[Array, 'num_trees k k']:
+        rhs: Float32[Array, 'num_trees k k'] = jnp.broadcast_to(error_cov_inv, L.shape)
+        Y: Float32[Array, 'num_trees k k'] = solve_triangular(L, rhs, lower=True)
         return Y.mT @ Y
 
     prelkv = PreLkV(
-        left=_covariance_from_chol(L_left),
-        right=_covariance_from_chol(L_right),
-        total=_covariance_from_chol(L_total),
+        left=_term_from_chol(L_left),
+        right=_term_from_chol(L_right),
+        total=_term_from_chol(L_total),
         log_sqrt_term=log_sqrt_term,
     )
 
@@ -2327,8 +2327,9 @@ def _precompute_leaf_terms_mv(
     k = error_cov_inv.shape[0]
     n_k: Float32[Array, 'num_trees tree_size 1 1'] = prec_trees[..., None, None]
 
-    # Only broadcast the inverse of error covariance matrix to satisfy JAX's batching rules
-    # for `lax.linalg.solve_triangular`, which does not support implicit broadcasting.
+    # Only broadcast the inverse of error covariance matrix to satisfy JAX's
+    # batching rules for `lax.linalg.solve_triangular`, which does not support
+    # implicit broadcasting.
     error_cov_inv_batched = jnp.broadcast_to(
         error_cov_inv, (num_trees, tree_size, k, k)
     )
@@ -2696,8 +2697,8 @@ def _compute_likelihood_ratio_mv(
     right_resid: Float32[Array, ' k'],
     prelkv: PreLkV,
 ) -> Float32[Array, '']:
-    def _quadratic_form(r, cov):
-        return r @ cov @ r
+    def _quadratic_form(r, mat):
+        return r @ mat @ r
 
     qf_left = _quadratic_form(left_resid, prelkv.left)
     qf_right = _quadratic_form(right_resid, prelkv.right)
