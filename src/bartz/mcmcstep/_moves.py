@@ -600,7 +600,7 @@ def randint_exclude(
     key
         A jax random key.
     sup
-        The exclusive upper bound of the range.
+        The exclusive upper bound of the range, must be >= 1.
     exclude
         The values to exclude from the range. Values greater than or equal to
         `sup` are ignored. Values can appear more than once.

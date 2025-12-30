@@ -26,14 +26,19 @@
 
 import pytest
 from jax import numpy as jnp
-from jax import vmap
+from jax import random, vmap
 from jax.random import bernoulli, clone, permutation, randint
 from jaxtyping import Array, Bool, Int32, Key
 from numpy.testing import assert_array_equal
 from scipy import stats
 
 from bartz.jaxext import minimal_unsigned_dtype, split
-from bartz.mcmcstep._moves import ancestor_variables, randint_masked, split_range
+from bartz.mcmcstep._moves import (
+    ancestor_variables,
+    randint_exclude,
+    randint_masked,
+    split_range,
+)
 from tests.util import manual_tree
 
 
@@ -227,6 +232,121 @@ class TestAncestorVariables:
         # Node 3: parent is 1 (var=3), one slot filled, one sentinel
         result = ancestor_variables(var_tree, max_split, jnp.int32(3))
         assert_array_equal(result, [max_split.size, 3])
+
+
+class TestRandintExclude:
+    """Test `mcmcstep._moves.randint_exclude`."""
+
+    def test_empty_exclude(self, keys):
+        """If exclude is empty, it's equivalent to randint(key, (), 0, sup)."""
+        key = keys.pop()
+        sup = 10_000
+        u1, num_allowed = randint_exclude(key, sup, jnp.array([], jnp.int32))
+        u2 = randint(clone(key), (), 0, sup)
+        assert num_allowed == sup
+        assert u1 == u2
+
+    def test_exclude_out_of_range_is_ignored(self, keys):
+        """Values >= sup are ignored for both u and num_allowed."""
+        key = keys.pop()
+        sup = 7
+        exclude = jnp.array([7, 8, 100, 7, 999])
+        u, num_allowed = randint_exclude(key, sup, exclude)
+        assert num_allowed == sup
+        assert 0 <= u < sup
+
+    def test_duplicate_excludes_ignored(self, keys):
+        """Duplicates should be de-duplicated (set semantics for allowed count)."""
+        sup = 10
+        exclude_with_dupes = jnp.array([1, 1, 1, 3, 3, 9])
+        exclude_unique = jnp.array([1, 3, 9])
+
+        key = keys.pop()
+        u1, n1 = randint_exclude(key, sup, exclude_with_dupes)
+        u2, n2 = randint_exclude(random.clone(key), sup, exclude_unique)
+        assert u1 == u2
+        assert n1 == n2 == (sup - 3)
+
+    def test_all_values_excluded_returns_sup(self, keys):
+        """If all values are excluded, u must be sup and num_allowed=0."""
+        for sup in range(1, 30, 5):
+            exclude = jnp.arange(sup)
+            u, num_allowed = randint_exclude(keys.pop(), sup, exclude)
+            assert num_allowed == 0
+            assert u == sup
+
+    def test_never_returns_excluded_values(self, keys):
+        """Across repeated sampling, u is always in [0,sup) and not excluded, unless num_allowed=0."""
+        sup = 20
+        reps = 200
+
+        # Use a fixed-length exclude array; include invalid values so masking paths are hit.
+        exclude = randint(keys.pop(), (reps, 30), 0, sup + 10)
+        randint_exclude_v = vmap(randint_exclude, in_axes=(0, None, 0))
+        keys_v = keys.pop(reps)
+        u, num_allowed = randint_exclude_v(keys_v, sup, exclude)
+        assert jnp.all(jnp.where(num_allowed == 0, u == sup, True))
+        assert jnp.all(jnp.where(num_allowed == 0, True, u >= 0))
+        assert jnp.all(jnp.where(num_allowed == 0, True, u < sup))
+        # "not in exclude" should be understood modulo "exclude values >= sup are ignored"
+        assert jnp.all(
+            jnp.where(
+                num_allowed == 0,
+                True,
+                ~jnp.any((exclude < sup) & (exclude == u[:, None]), axis=1),
+            )
+        )
+
+    def test_num_allowed_matches_count(self, keys):
+        """num_allowed must match sup - |unique(exclude ∩ [0,sup))|."""
+        sup = 50
+        reps = 50
+
+        exclude = randint(keys.pop(), (reps, 80), 0, sup + 25)  # includes some >= sup
+
+        randint_exclude_v = vmap(randint_exclude, in_axes=(0, None, 0))
+        keys_v = keys.pop(reps)
+        _, num_allowed = randint_exclude_v(keys_v, sup, exclude)
+
+        # Expected count computed via set semantics on valid excluded values.
+        # For each row, we replace invalid excluded values with `sup` (sentinel),
+        # then count how many unique values are < sup.
+        unique_v = vmap(
+            lambda e: jnp.unique(jnp.minimum(e, sup), size=e.size, fill_value=sup)
+        )
+        valid_excluded = unique_v(exclude)
+        expected_num_allowed = sup - jnp.sum(valid_excluded < sup, axis=1)
+
+        assert jnp.all(num_allowed == expected_num_allowed)
+
+    def test_correct_distribution_single_excluded(self, keys):
+        """
+        With one excluded value, u should be uniform over the remaining sup-1 values.
+
+        We map u into a compact index in [0, sup-1) and run a chi-square GOF test.
+        """
+        sup = 8
+        excluded = jnp.int32(3)
+        exclude = jnp.array([excluded])
+
+        n = 20_000
+        keys_v = keys.pop(n)
+        randint_exclude_v = vmap(randint_exclude, in_axes=(0, None, None))
+        u, num_allowed = randint_exclude_v(keys_v, sup, exclude)
+
+        assert jnp.all(num_allowed == (sup - 1))
+        assert jnp.all(u != excluded)
+        assert jnp.all((u >= 0) & (u < sup))
+
+        # Map allowed values to 0..sup-2 by "closing the gap" at excluded.
+        u_mapped = jnp.where(u < excluded, u, u - 1)
+        k = jnp.bincount(u_mapped, length=sup - 1)
+
+        # Chi-square GOF against uniform over sup-1 categories.
+        expected = n / (sup - 1)
+        chi2 = jnp.sum((k - expected) ** 2 / expected)
+        pvalue = stats.chi2.sf(chi2, sup - 2)
+        assert pvalue > 0.01
 
 
 class TestSplitRange:
