@@ -33,7 +33,7 @@ from numpy.testing import assert_array_equal
 from scipy import stats
 
 from bartz.jaxext import minimal_unsigned_dtype, split
-from bartz.mcmcstep._moves import ancestor_variables, randint_masked
+from bartz.mcmcstep._moves import ancestor_variables, randint_masked, split_range
 from tests.util import manual_tree
 
 
@@ -200,7 +200,7 @@ class TestAncestorVariables:
     def test_single_variable(self):
         """Check with only one variable (p=1)."""
         tree = manual_tree(
-            [[0.0], [0.0, 0.0], [0.0, 0.0, 0.0, 0.0]], [[0], [0, 0]], [[5], [3, 4]]
+            [[0.0], [0.0, 0.0], [0.0, 0.0, 0.0, 0.0]], [[0], [0, 0]], [[4], [3, 5]]
         )
         var_tree = tree.var_tree.astype(jnp.uint8)
         max_split = jnp.ones(1, minimal_unsigned_dtype(10))
@@ -227,3 +227,147 @@ class TestAncestorVariables:
         # Node 3: parent is 1 (var=3), one slot filled, one sentinel
         result = ancestor_variables(var_tree, max_split, jnp.int32(3))
         assert_array_equal(result, [max_split.size, 3])
+
+
+class TestSplitRange:
+    """Test `mcmcstep._moves.split_range`."""
+
+    @pytest.fixture
+    def max_split(self):
+        """Maximum split indices for 3 variables."""
+        # max_split[v] = maximum split index for variable v
+        # split_range returns [l, r) in *1-based* split indices, so initial r = 1 + max_split[v]
+        return jnp.array([10, 10, 10], dtype=jnp.uint8)
+
+    @pytest.fixture
+    def depth3_tree(self, max_split):
+        R"""
+        Small depth-3 tree (var_tree size 8 => nodes 1..7 exist).
+
+        Structure (heap indices):
+              1 (var=0, split=5)
+             / \
+            2   3 (var=1, split=7; var=0, split=8)
+           / \ / \
+          4  5 6  7 (leaves or internal, but valid node indices for queries)
+
+        This shape allows testing constraints from different ancestors (root + parent).
+        """
+        tree = manual_tree(
+            [[0.0], [0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0] * 8],
+            [[0], [1, 0], [0, 2, 2, 2]],
+            [[5], [7, 8], [1, 1, 1, 1]],
+        )
+        var_tree = tree.var_tree.astype(jnp.uint8)
+        split_tree = tree.split_tree.astype(jnp.uint8)
+        return var_tree, split_tree, max_split
+
+    def test_ref_var_out_of_bounds(self, depth3_tree):
+        """If ref_var is out of bounds, l=r=1."""
+        var_tree, split_tree, max_split = depth3_tree
+        l, r = split_range(
+            var_tree, split_tree, max_split, jnp.int32(2), jnp.int32(max_split.size)
+        )
+        assert l == 1
+        assert r == 1
+
+    def test_root_node_no_constraints(self, depth3_tree):
+        """Root has no ancestors => range should be the full [1, 1+max_split[var])."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # root is node_index=1, variable is var_tree[1]==0
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(1), jnp.int32(0))
+        assert l == 1
+        assert r == 1 + max_split[0]
+
+    def test_unrelated_variable_no_constraints(self, depth3_tree):
+        """If ancestors don't use ref_var, range should be full [1, 1+max_split[ref_var])."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # node 6 path: 1 -> 3 -> 6, ancestors vars are [0 at node 1, 0 at node 3]
+        # ref_var=2 never appears => no tightening
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(6), jnp.int32(2))
+        assert l == 1
+        assert r == 1 + max_split[2]
+
+    def test_left_child_sets_upper_bound(self, depth3_tree):
+        """For left subtree of an ancestor split on ref_var, r should be tightened to that split."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # node 2 is left child of root (root var=0, split=5)
+        # For ref_var=0, being in left subtree implies x < 5 => r=min(r, 5)
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(2), jnp.int32(0))
+        assert l == 1
+        assert r == 5
+
+    def test_right_child_sets_lower_bound(self, depth3_tree):
+        """For right subtree of an ancestor split on ref_var, l should be raised to that split+1."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # node 3 is right child of root (root var=0, split=5)
+        # For ref_var=0, being in right subtree implies x >= 5 => l becomes 5+1
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(3), jnp.int32(0))
+        assert l == 6
+        assert r == 1 + max_split[0]
+
+    def test_two_ancestors_combine_bounds(self, depth3_tree):
+        """Bounds from multiple ancestors on the same variable should combine (max lower, min upper)."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # node 6 path: 1 -> 3 -> 6
+        # ancestor 1: var=0 split=5, node 6 is in right subtree => l>=6
+        # ancestor 3: var=0 split=8, node 6 is in left subtree of node 3 => r<=8
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(6), jnp.int32(0))
+        assert l == 6
+        assert r == 8
+
+    def test_ref_var_constraints_from_parent_only(self, depth3_tree):
+        """If only a deeper ancestor matches ref_var, constraints should come only from those matches."""
+        var_tree, split_tree, max_split = depth3_tree
+
+        # node 4 path: 1 -> 2 -> 4
+        # root var=0 split=5 does not constrain ref_var=1
+        # parent node 2 var=1 split=7, node 4 is left child => r<=7
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(4), jnp.int32(1))
+        assert l == 1
+        assert r == 7
+
+    def test_no_allowed_splits_when_bounds_cross(self, max_split):
+        """
+        If constraints make the interval empty, l can become >= r.
+
+        (The function does not clamp; consumers should handle it.)
+        """
+        # Build a minimal tree where:
+        # - root splits var 0 at 8
+        # - node 3 (right child) splits var 0 at 3
+        # Query node 6 (left child of node 3):
+        # - from root (right subtree): l = 8+1 = 9
+        # - from node 3 (left subtree): r = 3
+        tree = manual_tree(
+            [[0.0], [0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0] * 8],
+            [[0], [2, 0], [0, 2, 2, 2]],
+            [[8], [1, 3], [1, 1, 1, 1]],
+            ignore_errors=['check_rule_consistency'],
+        )
+        var_tree = tree.var_tree.astype(jnp.uint8)
+        split_tree = tree.split_tree.astype(jnp.uint8)
+
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(6), jnp.int32(0))
+        assert l == 9
+        assert r == 3
+
+    def test_minimal_tree(self):
+        """Test the minimal tree."""
+        # We want the shortest possible `var_tree`/`split_tree` arrays that still
+        # represent a valid tree for the function:
+        # - tree_depth(var_tree)=1  -> max_num_ancestors=0
+        # - arrays therefore only need to include the unused 0 slot + root at index 1
+        #   (size 2, indices 0..1).
+        var_tree = jnp.array([0, 0], dtype=jnp.uint8)  # index 1 is root, var=0
+        split_tree = jnp.array([0, 0], dtype=jnp.uint8)
+        max_split = jnp.array([3], dtype=jnp.uint8)  # allow splits 1..3 (r should be 4)
+
+        l, r = split_range(var_tree, split_tree, max_split, jnp.int32(1), jnp.int32(0))
+        assert l == 1
+        assert r == 4

@@ -24,6 +24,8 @@
 
 """Functions intended to be shared across the test suite."""
 
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -32,12 +34,18 @@ from jax import numpy as jnp
 from jaxtyping import ArrayLike
 from scipy import linalg
 
-from bartz.debug import check_tree
+from bartz.debug import check_tree, describe_error
+from bartz.jaxext import minimal_unsigned_dtype
 from bartz.mcmcloop import TreesTrace
 
 
 def manual_tree(
-    leaf: list[list[float]], var: list[list[int]], split: list[list[int]]
+    leaf: list[list[float]],
+    var: list[list[int]],
+    split: list[list[int]],
+    /,
+    *,
+    ignore_errors: Sequence[str] = (),
 ) -> TreesTrace:
     """Facilitate the hardcoded definition of tree heaps."""
     assert len(leaf) == len(var) + 1 == len(split) + 1
@@ -55,13 +63,21 @@ def manual_tree(
         jnp.concatenate([jnp.zeros(1, int), *map(jnp.array, var)]),
         jnp.concatenate([jnp.zeros(1, int), *map(jnp.array, split)]),
     )
-    assert tree.leaf_tree.dtype == jnp.float32
-    assert tree.var_tree.dtype == jnp.int32
-    assert tree.split_tree.dtype == jnp.int32
 
     p = jnp.max(tree.var_tree) + 1
-    max_split = jnp.full(p, jnp.max(tree.split_tree), jnp.int32)
-    check_tree(tree, max_split)
+    var_type = minimal_unsigned_dtype(p - 1)
+    split_type = minimal_unsigned_dtype(jnp.max(tree.split_tree))
+    max_split = jnp.full(p, jnp.max(tree.split_tree), split_type)
+    tree = replace(
+        tree,
+        var_tree=tree.var_tree.astype(var_type),
+        split_tree=tree.split_tree.astype(split_type),
+    )
+
+    error = check_tree(tree, max_split)
+    descr = describe_error(error)
+    bad = any(d not in ignore_errors for d in descr)
+    assert not bad, descr
 
     return tree
 
