@@ -29,6 +29,7 @@ Reference
     :maxdepth: 1
 
     interface.rst
+    newinterf.rst
     grove.rst
     mcmcstep.rst
     mcmcloop.rst

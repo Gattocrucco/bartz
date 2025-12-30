@@ -1,4 +1,4 @@
-.. bartz/docs/prepcovars.rst
+.. bartz/docs/reference/prepcovars.rst
 ..
 .. Copyright (c) 2024-2025, The Bartz Contributors
 ..

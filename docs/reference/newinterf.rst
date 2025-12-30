@@ -1,6 +1,6 @@
-.. bartz/docs/reference/grove.rst
+.. bartz/docs/reference/newinterf.rst
 ..
-.. Copyright (c) 2024-2025, The Bartz Contributors
+.. Copyright (c) 2025, The Bartz Contributors
 ..
 .. This file is part of bartz.
 ..
@@ -22,8 +22,7 @@
 .. OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 .. SOFTWARE.
 
-Tree manipulation
-=================
+New interface
+===============
 
-.. automodule:: bartz.grove
-    :members:
+.. autoclass:: bartz.Bart

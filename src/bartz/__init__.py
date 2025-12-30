@@ -29,5 +29,6 @@ See the manual at https://bartz-org.github.io/bartz/docs
 """
 
 from bartz import BART, grove, jaxext, mcmcloop, mcmcstep, prepcovars  # noqa: F401
+from bartz._interface import Bart  # noqa: F401
 from bartz._profiler import profile_mode  # noqa: F401
 from bartz._version import __version__  # noqa: F401

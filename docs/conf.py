@@ -214,6 +214,8 @@ def linkcode_resolve(domain, info):
 
     if isinstance(obj, cached_property):
         obj = obj.func
+    elif isinstance(obj, property):
+        obj = obj.fget
     obj = inspect.unwrap(obj)
 
     fn = inspect.getsourcefile(obj)
