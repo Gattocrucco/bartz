@@ -41,7 +41,18 @@ from bartz.jaxext import get_default_device, minimal_unsigned_dtype
 
 
 class Kind(str, Enum):
-    """Indicator of regression type."""
+    """
+    Indicator of regression type.
+
+    Attributes
+    ----------
+    binary
+        Binary regression with probit link.
+    uv
+        Univariate continuous regression.
+    mv
+        Multivariate continuous regression.
+    """
 
     binary = 'binary'
     uv = 'uv'
