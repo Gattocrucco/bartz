@@ -540,20 +540,11 @@ def ancestor_variables(
     output array are filled with `p`.
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
+    index = node_index >> jnp.arange(max_num_ancestors, 0, -1)
+    var = var_tree[index]
     var_type = minimal_unsigned_dtype(max_split.size)
-    ancestor_vars = jnp.zeros(max_num_ancestors, var_type)
-    carry = ancestor_vars.size - 1, node_index, ancestor_vars
-
-    def loop(carry, _):
-        i, index, ancestor_vars = carry
-        index >>= 1
-        var = var_tree[index]
-        var = jnp.where(index, var, jnp.array(max_split.size, var_type))
-        ancestor_vars = ancestor_vars.at[i].set(var)
-        return (i - 1, index, ancestor_vars), None
-
-    (_, _, ancestor_vars), _ = lax.scan(loop, carry, None, ancestor_vars.size)
-    return ancestor_vars
+    p = jnp.array(max_split.size, var_type)
+    return jnp.where(index, var, p)
 
 
 def split_range(
