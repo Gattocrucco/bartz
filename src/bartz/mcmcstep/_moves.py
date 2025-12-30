@@ -28,8 +28,8 @@ from functools import partial
 
 import jax
 from equinox import Module
-from jax import lax, random
 from jax import numpy as jnp
+from jax import random
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, UInt
 
 from bartz import grove
@@ -619,17 +619,15 @@ def randint_exclude(
     """
     exclude, num_allowed = _process_exclude(sup, exclude)
     u = random.randint(key, (), 0, num_allowed)
-
-    def loop(u, i_excluded):
-        return jnp.where(i_excluded <= u, u + 1, u), None
-
-    u, _ = lax.scan(loop, u, exclude)
+    u_shifted = u + jnp.arange(exclude.size)
+    u_shifted = jnp.minimum(u_shifted, sup - 1)
+    u += jnp.sum(u_shifted >= exclude)
     return u, num_allowed
 
 
 def _process_exclude(sup, exclude):
     exclude = jnp.unique(exclude, size=exclude.size, fill_value=sup)
-    num_allowed = sup - jnp.count_nonzero(exclude < sup)
+    num_allowed = sup - jnp.sum(exclude < sup)
     return exclude, num_allowed
 
 
