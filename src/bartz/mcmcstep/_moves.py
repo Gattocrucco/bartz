@@ -575,22 +575,17 @@ def split_range(
     The range of allowed splits as [l, r). If `ref_var` is out of bounds, l=r=1.
     """
     max_num_ancestors = grove.tree_depth(var_tree) - 1
+    index = node_index >> jnp.arange(max_num_ancestors)
+    right_child = (index & 1).astype(bool)
+    index >>= 1
+    split = split_tree[index].astype(jnp.int32)
+    cond = (var_tree[index] == ref_var) & index.astype(bool)
+    l = jnp.max(split, initial=0, where=cond & right_child)
     initial_r = 1 + max_split.at[ref_var].get(mode='fill', fill_value=0).astype(
         jnp.int32
     )
-    carry = jnp.int32(0), initial_r, node_index
+    r = jnp.min(split, initial=initial_r, where=cond & ~right_child)
 
-    def loop(carry, _):
-        l, r, index = carry
-        right_child = (index & 1).astype(bool)
-        index >>= 1
-        split = split_tree[index]
-        cond = (var_tree[index] == ref_var) & index.astype(bool)
-        l = jnp.where(cond & right_child, jnp.maximum(l, split), l)
-        r = jnp.where(cond & ~right_child, jnp.minimum(r, split), r)
-        return (l, r, index), None
-
-    (l, r, _), _ = lax.scan(loop, carry, None, max_num_ancestors)
     return l + 1, r
 
 

@@ -262,6 +262,15 @@ class TestSplitRange:
         split_tree = tree.split_tree.astype(jnp.uint8)
         return var_tree, split_tree, max_split
 
+    def test_dtypes(self, depth3_tree):
+        """Check the output types."""
+        var_tree, split_tree, max_split = depth3_tree
+        l, r = split_range(
+            var_tree, split_tree, max_split, jnp.int32(2), jnp.int32(max_split.size)
+        )
+        assert l.dtype == jnp.int32
+        assert r.dtype == jnp.int32
+
     def test_ref_var_out_of_bounds(self, depth3_tree):
         """If ref_var is out of bounds, l=r=1."""
         var_tree, split_tree, max_split = depth3_tree
