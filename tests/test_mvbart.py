@@ -32,9 +32,9 @@ from jax import random, vmap
 from numpy.testing import assert_allclose, assert_array_equal
 from scipy.stats import chi2, ks_1samp, ks_2samp
 
-from bartz.mcmcstep import (
+from bartz.mcmcstep import State, init, step
+from bartz.mcmcstep._step import (
     Counts,
-    State,
     _compute_likelihood_ratio_mv,
     _compute_likelihood_ratio_uv,
     _precompute_leaf_terms_mv,
@@ -44,8 +44,6 @@ from bartz.mcmcstep import (
     _sample_wishart_bartlett,
     _step_error_cov_inv_mv,
     _step_error_cov_inv_uv,
-    init,
-    step,
     step_trees,
 )
 from tests.util import assert_close_matrices

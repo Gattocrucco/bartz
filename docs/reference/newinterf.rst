@@ -26,3 +26,4 @@ New interface
 ===============
 
 .. autoclass:: bartz.Bart
+    :members:

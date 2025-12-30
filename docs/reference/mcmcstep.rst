@@ -27,3 +27,4 @@ MCMC setup and step
 
 .. automodule:: bartz.mcmcstep
     :members:
+    :imported-members:

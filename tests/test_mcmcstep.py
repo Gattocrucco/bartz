@@ -31,7 +31,7 @@ from jaxtyping import Array, Bool, Int32, Key
 from scipy import stats
 
 from bartz.jaxext import split
-from bartz.mcmcstep import randint_masked
+from bartz.mcmcstep._moves import randint_masked
 
 
 def vmap_randint_masked(

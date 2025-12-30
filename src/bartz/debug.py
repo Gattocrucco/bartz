@@ -50,7 +50,7 @@ from bartz.grove import (
 from bartz.jaxext import minimal_unsigned_dtype, vmap_nodoc
 from bartz.jaxext import split as split_key
 from bartz.mcmcloop import TreesTrace
-from bartz.mcmcstep import randint_masked
+from bartz.mcmcstep._moves import randint_masked
 
 
 def format_tree(tree: TreeHeaps, *, print_all: bool = False) -> str:
