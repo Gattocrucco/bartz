@@ -42,7 +42,7 @@ import jax
 import numpy
 import polars as pl
 import pytest
-from jax import debug_nans, random, vmap
+from jax import debug_nans, lax, random, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import ndtr
@@ -682,16 +682,16 @@ def test_scale_shift(kw):
 
     assert_allclose(bart1.offset, (bart2.offset - offset) / scale, rtol=1e-6, atol=1e-6)
     assert_allclose(
-        bart1._mcmc_state.forest.sigma_mu2,
-        bart2._mcmc_state.forest.sigma_mu2 / scale**2,
+        bart1._mcmc_state.forest.leaf_prior_cov_inv,
+        bart2._mcmc_state.forest.leaf_prior_cov_inv * scale**2,
         rtol=1e-6,
         atol=0,
     )
     assert_allclose(bart1.sigest, bart2.sigest / scale, rtol=1e-6)
-    assert_array_equal(bart1._mcmc_state.sigma2_alpha, bart2._mcmc_state.sigma2_alpha)
+    assert_array_equal(bart1._mcmc_state.error_cov_df, bart2._mcmc_state.error_cov_df)
     assert_allclose(
-        bart1._mcmc_state.sigma2_beta,
-        bart2._mcmc_state.sigma2_beta / scale**2,
+        bart1._mcmc_state.error_cov_scale,
+        bart2._mcmc_state.error_cov_scale / scale**2,
         rtol=1e-6,
     )
     assert_close_matrices(
@@ -775,7 +775,9 @@ def test_no_datapoints(kw):
         tau_num = 1
         assert bart.sigest == 1
     assert_allclose(
-        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+        bart._mcmc_state.forest.leaf_prior_cov_inv,
+        (2**2 * kw['ntree']) / tau_num**2,
+        rtol=1e-6,
     )
 
 
@@ -801,7 +803,9 @@ def test_one_datapoint(kw):
         assert bart.sigest == 1
         assert bart.offset == kw['y_train'].item()
     assert_allclose(
-        bart._mcmc_state.forest.sigma_mu2, tau_num**2 / (2**2 * kw['ntree']), rtol=1e-6
+        bart._mcmc_state.forest.leaf_prior_cov_inv,
+        (2**2 * kw['ntree']) / tau_num**2,
+        rtol=1e-6,
     )
 
 
@@ -914,7 +918,7 @@ def test_prior(keys, p, nsplits):
         kw['ntree'],
         bart._mcmc_state.forest.max_split,
         p_nonterminal,
-        jnp.sqrt(bart._mcmc_state.forest.sigma_mu2),
+        jnp.sqrt(lax.reciprocal(bart._mcmc_state.forest.leaf_prior_cov_inv)),
     )
     prior_trace = TraceWithOffset.from_trees_trace(prior_trees, bart.offset)
 

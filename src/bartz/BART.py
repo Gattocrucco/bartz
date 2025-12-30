@@ -32,6 +32,7 @@ from typing import Any, Literal, Protocol
 import jax
 import jax.numpy as jnp
 from equinox import Module, field
+from jax import lax
 from jax.scipy.special import ndtr
 from jax.tree import map_with_path
 from jaxtyping import (
@@ -455,12 +456,15 @@ class mc_gbart(Module):
         | None
     ):
         """The standard deviation of the error, including burn-in samples."""
-        if self._burnin_trace.sigma2 is None:
+        if self._burnin_trace.error_cov_inv is None:
             return None
-        assert self._main_trace.sigma2 is not None
+        assert self._main_trace.error_cov_inv is not None
         sigma = jnp.sqrt(
-            jnp.concatenate(
-                [self._burnin_trace.sigma2, self._main_trace.sigma2], axis=1
+            jnp.reciprocal(
+                jnp.concatenate(
+                    [self._burnin_trace.error_cov_inv, self._main_trace.error_cov_inv],
+                    axis=1,
+                )
             )
         )
         sigma = sigma.T
@@ -778,11 +782,12 @@ class mc_gbart(Module):
         p_nonterminal = base / (1 + depth).astype(float) ** power
 
         if y_train.dtype == bool:
-            sigma2_alpha = None
-            sigma2_beta = None
+            error_cov_df = None
+            error_cov_scale = None
         else:
-            sigma2_alpha = sigdf / 2
-            sigma2_beta = lamda * sigma2_alpha
+            # inverse gamma prior: alpha = df / 2, beta = scale / 2
+            error_cov_df = sigdf
+            error_cov_scale = lamda * sigdf
 
         kw = dict(
             X=x_train,
@@ -793,9 +798,9 @@ class mc_gbart(Module):
             max_split=max_split,
             num_trees=ntree,
             p_nonterminal=p_nonterminal,
-            sigma_mu2=jnp.square(sigma_mu),
-            sigma2_alpha=sigma2_alpha,
-            sigma2_beta=sigma2_beta,
+            leaf_prior_cov_inv=lax.reciprocal(jnp.square(sigma_mu)),
+            error_cov_df=error_cov_df,
+            error_cov_scale=error_cov_scale,
             min_points_per_decision_node=10,
             min_points_per_leaf=5,
             theta=theta,
@@ -907,15 +912,15 @@ class mc_gbart(Module):
                 '.y',
                 '.offset',
                 '.prec_scale',
-                '.sigma2_alpha',
-                '.sigma2_beta',
+                '.error_cov_df',
+                '.error_cov_scale',
                 '.forest.max_split',
                 '.forest.blocked_vars',
                 '.forest.p_nonterminal',
                 '.forest.p_propose_grow',
                 '.forest.min_points_per_decision_node',
                 '.forest.min_points_per_leaf',
-                '.forest.sigma_mu2',
+                '.forest.leaf_prior_cov_inv',
                 '.forest.a',
                 '.forest.b',
                 '.forest.rho',

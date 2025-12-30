@@ -1294,17 +1294,18 @@ class debug_mc_gbart(mc_gbart):
         The harmonic mean 1/E[1/sigma^2] in the selected distribution.
         """
         bart = self._mcmc_state
-        assert bart.sigma2_alpha is not None
+        assert bart.error_cov_df is not None
         assert bart.z is None
+        # inverse gamma prior: alpha = df / 2, beta = scale / 2
         if prior:
-            alpha = bart.sigma2_alpha
-            beta = bart.sigma2_beta
+            alpha = bart.error_cov_df / 2
+            beta = bart.error_cov_scale / 2
         else:
-            alpha = bart.sigma2_alpha + bart.resid.size / 2
+            alpha = bart.error_cov_df / 2 + bart.resid.size / 2
             norm2 = jnp.einsum('ij,ij->i', bart.resid, bart.resid)
-            beta = bart.sigma2_beta + norm2 / 2
-        sigma2 = beta / alpha
-        return jnp.sqrt(sigma2)
+            beta = bart.error_cov_scale / 2 + norm2 / 2
+        error_cov_inv = alpha / beta
+        return jnp.sqrt(lax.reciprocal(error_cov_inv))
 
     def compare_resid(
         self,
