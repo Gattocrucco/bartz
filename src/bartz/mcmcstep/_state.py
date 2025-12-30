@@ -270,7 +270,7 @@ def _init_kind_parameters(
     # Binary vs continuous
     if kind == 'binary':
         if k is not None:
-            msg = 'Binary multivariate regression not supported, open an issue at https://github.com/Gattocrucco/bartz/issues if you need it.'
+            msg = 'Binary multivariate regression not supported, open an issue at https://github.com/bartz-org/bartz/issues if you need it.'
             raise ValueError(msg)
         assert is_binary_y
         assert error_scale is None
