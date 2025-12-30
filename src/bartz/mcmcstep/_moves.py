@@ -421,7 +421,7 @@ def categorical(
     """
     ecdf = jnp.cumsum(distr)
     u = random.uniform(key, (), ecdf.dtype, 0, ecdf[-1])
-    return jnp.searchsorted(ecdf, u, 'right'), ecdf[-1]
+    return jnp.searchsorted(ecdf, u, 'right', method='compare_all'), ecdf[-1]
 
 
 def choose_variable(
@@ -908,8 +908,9 @@ def randint_masked(key: Key[Array, ''], mask: Bool[Array, ' n']) -> Int32[Array,
 
     Notes
     -----
-    If all values in the mask are `False`, return `n`.
+    If all values in the mask are `False`, return `n`. This function is
+    optimized for small `n`.
     """
     ecdf = jnp.cumsum(mask)
     u = random.randint(key, (), 0, ecdf[-1])
-    return jnp.searchsorted(ecdf, u, 'right')
+    return jnp.searchsorted(ecdf, u, 'right', method='compare_all')
