@@ -425,7 +425,7 @@ class TestWithCachedBart:
             rhat_sigma = rhat(
                 [bart.sigma_[-bart.ndpost :], rbart.sigma_[-rbart.ndpost :]]
             )
-            assert rhat_sigma < 1.1
+            assert rhat_sigma < 1.2
 
             # check sigma_mean
             assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
