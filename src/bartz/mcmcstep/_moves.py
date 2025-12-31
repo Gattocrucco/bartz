@@ -130,11 +130,12 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     The proposed move for each tree.
     """
     num_trees = forest.leaf_tree.shape[0]
-    keys = split(key, 3)
+    keys = split(key, 2)
+    grow_keys, prune_keys = keys.pop((2, num_trees))
 
     # compute moves
     grow_moves = propose_grow_moves(
-        keys.pop(num_trees),
+        grow_keys,
         forest.var_tree,
         forest.split_tree,
         forest.affluence_tree,
@@ -145,7 +146,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
         forest.log_s,
     )
     prune_moves = propose_prune_moves(
-        keys.pop(num_trees),
+        prune_keys,
         forest.split_tree,
         grow_moves.affluence_tree,
         forest.p_nonterminal,
@@ -162,8 +163,7 @@ def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
 
     # compute children indices
     node = jnp.where(grow, grow_moves.node, prune_moves.node)
-    left = node << 1
-    right = left + 1
+    left, right = (node << 1) | jnp.arange(2)[:, None]
 
     return Moves(
         allowed=grow_moves.allowed | prune_moves.allowed,
@@ -293,13 +293,11 @@ def propose_grow_moves(
 
     # determine if the new leaves would have available decision rules; if the
     # move is blocked, these values may not make sense
-    left_growable = right_growable = num_available_var > 1
-    left_growable |= l < split_idx
-    right_growable |= split_idx + 1 < r
-    left = leaf_to_grow << 1
-    right = left + 1
-    affluence_tree = affluence_tree.at[left].set(left_growable)
-    affluence_tree = affluence_tree.at[right].set(right_growable)
+    leftright_growable = (num_available_var > 1) | jnp.stack(
+        [l < split_idx, split_idx + 1 < r]
+    )
+    leftright = (leaf_to_grow << 1) | jnp.arange(2)
+    affluence_tree = affluence_tree.at[leftright].set(leftright_growable)
 
     ratio = compute_partial_ratio(
         prob_choose, num_prunable, p_nonterminal, leaf_to_grow
