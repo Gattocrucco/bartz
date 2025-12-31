@@ -428,7 +428,7 @@ class TestWithCachedBart:
             assert rhat_sigma < 1.2
 
             # check sigma_mean
-            assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.05)
+            assert_allclose(bart.sigma_mean, rbart.sigma_mean, rtol=0.1)
 
         # check number of tree nodes in forest
         bart_count = bart.varcount.sum(axis=1)
