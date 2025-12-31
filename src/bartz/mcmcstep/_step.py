@@ -638,7 +638,7 @@ def complete_ratio(moves: Moves, p_nonterminal: Float32[Array, ' 2**d']) -> Move
     -------
     The updated moves, with `partial_ratio=None` and `log_trans_prior_ratio` set.
     """
-    # can the leaves can be grown?
+    # can the leaves be grown?
     num_trees, _ = moves.affluence_tree.shape
     tree_indices = jnp.arange(num_trees)
     left_growable = moves.affluence_tree.at[tree_indices, moves.left].get(
@@ -664,6 +664,7 @@ def complete_ratio(moves: Moves, p_nonterminal: Float32[Array, ' 2**d']) -> Move
     pt_right = 1 - p_nonterminal[moves.right] * right_growable
     pt_children = pt_left * pt_right
 
+    assert moves.partial_ratio is not None
     return replace(
         moves,
         log_trans_prior_ratio=jnp.log(moves.partial_ratio * pt_children * p_prune),
@@ -1322,6 +1323,7 @@ def apply_moves_to_leaf_indices(
     """
     mask = ~jnp.array(1, leaf_indices.dtype)  # ...1111111110
     is_child = (leaf_indices & mask) == moves.left
+    assert moves.to_prune is not None
     return jnp.where(
         is_child & moves.to_prune, moves.node.astype(leaf_indices.dtype), leaf_indices
     )

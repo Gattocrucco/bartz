@@ -80,7 +80,7 @@ class Moves(Module):
         become leaves if the move was accepted. This mark initially (out of
         `propose_moves`) takes into account if there would be available decision
         rules to grow the leaf, and whether there are enough datapoints in the
-        node is marked in `accept_moves_parallel_stage`.
+        node is instead checked later in `accept_moves_parallel_stage`.
     logu
         The logarithm of a uniform (0, 1] random variable to be used to
         accept the move. It's in (-oo, 0].
@@ -334,7 +334,7 @@ def choose_leaf(
         The splitting points of the tree.
     affluence_tree
         Whether a leaf has enough points that it could be split into two leaves
-        satisfying the `min_points_per_leaf` requirement.
+        satisfying the `min_points_per_decision_node` requirement.
     p_propose_grow
         The unnormalized probability of choosing a leaf to grow.
 
@@ -345,7 +345,7 @@ def choose_leaf(
         ``2 ** d``.
     num_growable : Int32[Array, '']
         The number of leaf nodes that can be grown, i.e., are nonterminal
-        and have at least twice `min_points_per_leaf`.
+        and have at least twice `min_points_per_decision_node`.
     prob_choose : Float32[Array, '']
         The (normalized) probability that this function had to choose that
         specific leaf, given the arguments.
@@ -781,6 +781,9 @@ class PruneMoves(Module):
         prior probability that the children of the node to prune are leaves.
         This ratio is inverted, and is meant to be inverted back in
         `accept_move_and_sample_leaves`.
+    affluence_tree
+        A partially updated `affluence_tree`, marking the node to prune as
+        growable.
     """
 
     allowed: Bool[Array, ' num_trees']
