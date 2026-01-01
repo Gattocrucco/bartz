@@ -1,6 +1,6 @@
 # bartz/src/bartz/mcmcstep/_state.py
 #
-# Copyright (c) 2024-2025, The Bartz Contributors
+# Copyright (c) 2024-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -25,19 +25,96 @@
 """Module defining the BART MCMC state and initialization."""
 
 import math
+from collections.abc import Callable
+from dataclasses import fields
 from enum import Enum
 from functools import cache, partial
-from typing import Any, Literal
+from inspect import signature
+from types import NoneType, UnionType
+from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
-import jax
 from equinox import Module, field
-from jax import lax
 from jax import numpy as jnp
+from jax import vmap
+from jax.errors import ConcretizationTypeError
 from jax.scipy.linalg import solve_triangular
-from jaxtyping import Array, Bool, Float32, Int32, Integer, UInt
+from jaxtyping import (
+    AbstractArray,
+    Array,
+    Bool,
+    Float32,
+    Int32,
+    Integer,
+    PyTree,
+    Shaped,
+    UInt,
+)
 
-from bartz import grove
-from bartz.jaxext import get_default_device, minimal_unsigned_dtype
+from bartz.grove import make_tree, tree_depths
+from bartz.jaxext import (
+    _split_shaped,
+    get_default_device,
+    is_key,
+    minimal_unsigned_dtype,
+)
+
+
+def _get_types(annotation) -> tuple:
+    """Return all types in an annotation, unpacking Unions."""
+    origin = get_origin(annotation)
+    if origin is Union or origin is UnionType:
+        return get_args(annotation)
+    else:
+        return (annotation,)
+
+
+class MultichainModule(Module):
+    """Module with support for automatically managing multiple MCMC chains.
+
+    Mark multichain fields by starting the array shape in the type hint with
+    '*chains '.
+    """
+
+    @classmethod
+    def chain_vmap_axes(cls) -> PyTree[int | None]:
+        """Return the argument for the `in_axes` or `out_axes` parameters of `jax.vmap` to map over chains."""
+        # for simplicity this method assumes that each field is either static,
+        # a MultichainModule, or Array | None.
+        args = []
+        for f in fields(cls):
+            if f.metadata.get('static', False):
+                args.append(None)
+            elif issubclass(f.type, MultichainModule):
+                axes = f.type.chain_vmap_axes()
+                args.append(axes)
+            else:
+                types = _get_types(f.type)
+                has_chains = []
+                for t in types:
+                    if issubclass(t, AbstractArray):
+                        has_chains.append(t.dim_str.startswith('*chains '))
+                    else:
+                        assert t is NoneType
+                assert all(has_chains) or not any(has_chains)
+                if any(has_chains):
+                    args.append(0)
+                else:
+                    args.append(None)
+        return cls(*args)
+
+    def num_chains(self) -> int | None:
+        """Return the number of chains, or `None` if not multichain."""
+        # this default implementation piggybacks on any MultichainModule found
+        # in the leaves, there must be a class in the hierarchy that overrides
+        # the method to return the number of chains.
+        for f in fields(self):
+            if issubclass(f.type, MultichainModule):
+                value = getattr(self, f.name)
+                try:
+                    return value.num_chains()
+                except NotImplementedError:
+                    continue
+        raise NotImplementedError
 
 
 class Kind(str, Enum):
@@ -59,7 +136,7 @@ class Kind(str, Enum):
     mv = 'mv'
 
 
-class Forest(Module):
+class Forest(MultichainModule):
     """
     Represents the MCMC state of a sum of trees.
 
@@ -125,34 +202,44 @@ class Forest(Module):
         See `step_theta`.
     """
 
-    leaf_tree: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k 2**d']
-    var_tree: UInt[Array, 'num_trees 2**(d-1)']
-    split_tree: UInt[Array, 'num_trees 2**(d-1)']
-    affluence_tree: Bool[Array, 'num_trees 2**(d-1)']
+    leaf_tree: (
+        Float32[Array, '*chains num_trees 2**d']
+        | Float32[Array, '*chains num_trees k 2**d']
+    )
+    var_tree: UInt[Array, '*chains num_trees 2**(d-1)']
+    split_tree: UInt[Array, '*chains num_trees 2**(d-1)']
+    affluence_tree: Bool[Array, '*chains num_trees 2**(d-1)']
     max_split: UInt[Array, ' p']
     blocked_vars: UInt[Array, ' k'] | None
     p_nonterminal: Float32[Array, ' 2**d']
     p_propose_grow: Float32[Array, ' 2**(d-1)']
-    leaf_indices: UInt[Array, 'num_trees n']
+    leaf_indices: UInt[Array, '*chains num_trees n']
     min_points_per_decision_node: Int32[Array, ''] | None
     min_points_per_leaf: Int32[Array, ''] | None
     resid_batch_size: int | None = field(static=True)
     count_batch_size: int | None = field(static=True)
-    log_trans_prior: Float32[Array, ' num_trees'] | None
-    log_likelihood: Float32[Array, ' num_trees'] | None
-    grow_prop_count: Int32[Array, '']
-    prune_prop_count: Int32[Array, '']
-    grow_acc_count: Int32[Array, '']
-    prune_acc_count: Int32[Array, '']
+    log_trans_prior: Float32[Array, '*chains num_trees'] | None
+    log_likelihood: Float32[Array, '*chains num_trees'] | None
+    grow_prop_count: Int32[Array, '*chains']
+    prune_prop_count: Int32[Array, '*chains']
+    grow_acc_count: Int32[Array, '*chains']
+    prune_acc_count: Int32[Array, '*chains']
     leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'] | None
-    log_s: Float32[Array, ' p'] | None
-    theta: Float32[Array, ''] | None
+    log_s: Float32[Array, '*chains p'] | None
+    theta: Float32[Array, '*chains'] | None
     a: Float32[Array, ''] | None
     b: Float32[Array, ''] | None
     rho: Float32[Array, ''] | None
 
+    def num_chains(self) -> int | None:
+        """Return the number of chains, or `None` if not multichain."""
+        if self.var_tree.ndim == 2:
+            return None
+        else:
+            return self.var_tree.shape[0]
 
-class State(Module):
+
+class State(MultichainModule):
     """
     Represents the MCMC state of BART.
 
@@ -189,10 +276,10 @@ class State(Module):
 
     X: UInt[Array, 'p n']
     y: Float32[Array, ' n'] | Float32[Array, ' k n'] | Bool[Array, ' n']
-    z: None | Float32[Array, ' n']
+    z: None | Float32[Array, '*chains n']
     offset: Float32[Array, ''] | Float32[Array, ' k']
-    resid: Float32[Array, ' n'] | Float32[Array, ' k n']
-    error_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'] | None
+    resid: Float32[Array, '*chains n'] | Float32[Array, '*chains k n']
+    error_cov_inv: Float32[Array, '*chains'] | Float32[Array, '*chains k k'] | None
     prec_scale: Float32[Array, ' n'] | None
     error_cov_df: Float32[Array, ''] | None
     error_cov_scale: Float32[Array, ''] | Float32[Array, 'k k'] | None
@@ -289,6 +376,7 @@ def _init_kind_parameters(
         assert leaf_prior_cov_inv.shape == (k, k)
         assert offset.shape == (k,)
         if kind != 'binary':
+            assert error_cov_scale is not None
             assert error_cov_scale.shape == (k, k)
             error_cov_inv = error_cov_df * _inv_via_chol_with_gersh(error_cov_scale)
     else:
@@ -327,6 +415,7 @@ def init(
     b: float | Float32[Any, ''] | None = None,
     rho: float | Float32[Any, ''] | None = None,
     kind: Kind | str | None = None,
+    num_chains: int | None = None,
 ) -> State:
     """
     Make a BART posterior sampling MCMC initial state.
@@ -405,6 +494,9 @@ def init(
         Parameters of the prior on `theta`. Required only to sample `theta`.
     kind
         Inidicator of regression type. If not specified, it's inferred from `y`.
+    num_chains
+        The number of independent MCMC chains to represent in the state. Single
+        chain with scalar values if not specified.
 
     Returns
     -------
@@ -426,10 +518,6 @@ def init(
     p_nonterminal = jnp.pad(p_nonterminal, (0, 1))
     max_depth = p_nonterminal.size
 
-    @partial(jax.vmap, in_axes=None, out_axes=0, axis_size=num_trees)
-    def make_forest(max_depth, dtype):
-        return grove.make_tree(max_depth, dtype)
-
     y = jnp.asarray(y)
     offset = jnp.asarray(offset)
     leaf_prior_cov_inv = jnp.asarray(leaf_prior_cov_inv)
@@ -444,10 +532,11 @@ def init(
     is_binary = kind == 'binary'
 
     max_split = jnp.asarray(max_split)
+    p, n = X.shape
 
     if filter_splitless_vars:
         (blocked_vars,) = jnp.nonzero(max_split == 0)
-        blocked_vars = blocked_vars.astype(minimal_unsigned_dtype(max_split.size))
+        blocked_vars = blocked_vars.astype(minimal_unsigned_dtype(p))
         # see `fully_used_variables` for the type cast
     else:
         blocked_vars = None
@@ -461,37 +550,48 @@ def init(
     if log_s is None and theta is not None:
         log_s = jnp.zeros(max_split.size)
 
-    if kind == 'mv':
-        leaf_tree = jax.vmap(
-            make_forest, in_axes=(None, None), out_axes=1, axis_size=k
-        )(max_depth, jnp.float32)
-    else:
-        leaf_tree = make_forest(max_depth, jnp.float32)
+    chain_shape = () if num_chains is None else (num_chains,)
+    resid_shape = chain_shape + y.shape
+    tree_shape = (*chain_shape, num_trees)
+    leaf_tree_shape = (*tree_shape, k) if kind == 'mv' else tree_shape
+    leaf_indices_shape = (*chain_shape, num_trees, n)
+
+    def add_chains(
+        x: Shaped[Array, '*shape'] | None,
+    ) -> Shaped[Array, '*chains *shape'] | None:
+        if x is None:
+            return None
+        else:
+            return jnp.broadcast_to(x, chain_shape + x.shape)
 
     return State(
         X=jnp.asarray(X),
         y=y,
-        z=jnp.full(y.shape, offset) if is_binary else None,
+        z=jnp.full(resid_shape, offset) if is_binary else None,
         offset=offset,
-        resid=jnp.zeros(y.shape) if is_binary else y - offset[..., None],
-        error_cov_inv=error_cov_inv,
+        resid=jnp.zeros(resid_shape)
+        if is_binary
+        else jnp.broadcast_to(y - offset[..., None], resid_shape),
+        error_cov_inv=add_chains(error_cov_inv),
         prec_scale=(
-            None if error_scale is None else lax.reciprocal(jnp.square(error_scale))
+            None if error_scale is None else jnp.reciprocal(jnp.square(error_scale))
         ),
         error_cov_df=error_cov_df,
         error_cov_scale=error_cov_scale,
-        kind=kind,
+        kind=Kind(kind),
         forest=Forest(
-            leaf_tree=leaf_tree,
-            var_tree=make_forest(max_depth - 1, minimal_unsigned_dtype(X.shape[0] - 1)),
-            split_tree=make_forest(max_depth - 1, max_split.dtype),
+            leaf_tree=make_tree(max_depth, jnp.float32, leaf_tree_shape),
+            var_tree=make_tree(
+                max_depth - 1, minimal_unsigned_dtype(p - 1), tree_shape
+            ),
+            split_tree=make_tree(max_depth - 1, max_split.dtype, tree_shape),
             affluence_tree=(
-                make_forest(max_depth - 1, bool)
-                .at[:, 1]
+                make_tree(max_depth - 1, bool, tree_shape)
+                .at[..., 1]
                 .set(
                     True
                     if min_points_per_decision_node is None
-                    else y.size >= min_points_per_decision_node
+                    else n >= min_points_per_decision_node
                 )
             ),
             blocked_vars=blocked_vars,
@@ -500,23 +600,27 @@ def init(
             grow_acc_count=jnp.zeros((), int),
             prune_prop_count=jnp.zeros((), int),
             prune_acc_count=jnp.zeros((), int),
-            p_nonterminal=p_nonterminal[grove.tree_depths(2**max_depth)],
-            p_propose_grow=p_nonterminal[grove.tree_depths(2 ** (max_depth - 1))],
+            p_nonterminal=p_nonterminal[tree_depths(2**max_depth)],
+            p_propose_grow=p_nonterminal[tree_depths(2 ** (max_depth - 1))],
             leaf_indices=jnp.ones(
-                (num_trees, y.shape[-1]), minimal_unsigned_dtype(2**max_depth - 1)
+                leaf_indices_shape, minimal_unsigned_dtype(2**max_depth - 1)
             ),
             min_points_per_decision_node=_asarray_or_none(min_points_per_decision_node),
             min_points_per_leaf=_asarray_or_none(min_points_per_leaf),
             resid_batch_size=resid_batch_size,
             count_batch_size=count_batch_size,
-            log_trans_prior=jnp.zeros(num_trees) if save_ratios else None,
-            log_likelihood=jnp.zeros(num_trees) if save_ratios else None,
+            log_trans_prior=jnp.zeros((*chain_shape, num_trees))
+            if save_ratios
+            else None,
+            log_likelihood=jnp.zeros((*chain_shape, num_trees))
+            if save_ratios
+            else None,
             leaf_prior_cov_inv=leaf_prior_cov_inv,
-            log_s=_asarray_or_none(log_s),
-            theta=_asarray_or_none(theta),
-            rho=_asarray_or_none(rho),
-            a=_asarray_or_none(a),
-            b=_asarray_or_none(b),
+            log_s=add_chains(_asarray_or_none(log_s)),
+            theta=add_chains(_asarray_or_none(theta)),
+            rho=add_chains(_asarray_or_none(rho)),
+            a=add_chains(_asarray_or_none(a)),
+            b=add_chains(_asarray_or_none(b)),
         ),
     )
 
@@ -536,7 +640,7 @@ def _get_platform(x: Array):
     """Get the platform of the device where `x` is located, or the default device if that's not possible."""
     try:
         device = x.devices().pop()
-    except jax.errors.ConcretizationTypeError:
+    except ConcretizationTypeError:
         device = get_default_device()
     platform = device.platform
     if platform not in ('cpu', 'gpu'):
@@ -617,3 +721,68 @@ def _inv_via_chol_with_gersh(mat: Float32[Array, 'k k']) -> Float32[Array, 'k k'
     I = jnp.eye(mat.shape[0], dtype=mat.dtype)
     L_inv = solve_triangular(L, I, lower=True)
     return L_inv.T @ L_inv
+
+
+T = TypeVar('T')
+
+
+def _get_mc_out_axes(fun: Callable) -> PyTree[int | None]:
+    """Get the `out_axes` argument for `jax.vmap` based on the return type of `fun`."""
+    sig = signature(fun)
+    rt = sig.return_annotation
+    if get_origin(rt) is tuple:
+        types = get_args(rt)
+        return tuple(
+            t.chain_vmap_axes() if issubclass(t, MultichainModule) else None
+            for t in types
+        )
+    else:
+        return rt.chain_vmap_axes() if issubclass(rt, MultichainModule) else None
+
+
+def _get_num_chains(args: tuple) -> int | None:
+    """Get the number of chains from the positional arguments."""
+    num_chains = [a.num_chains() for a in args if isinstance(a, MultichainModule)]
+    assert all(n == num_chains[0] for n in num_chains)
+    return num_chains[0]
+
+
+def _split_keys_in_args(args: tuple, num_chains: int) -> tuple:
+    """If the first argument is a random key, split it into `num_chains` keys."""
+    a = args[0]
+    if is_key(a):
+        a = _split_shaped(a, (num_chains,))
+    return (a, *args[1:])
+
+
+def _get_mc_in_axes(args: tuple) -> tuple[PyTree[int | None], ...]:
+    """Decide vmap axes for inputs."""
+    return tuple(
+        0
+        if is_key(a) and i == 0
+        else a.chain_vmap_axes()
+        if isinstance(a, MultichainModule)
+        else None
+        for i, a in enumerate(args)
+    )
+
+
+def vmap_chains(fun: Callable[..., T]) -> Callable[..., T]:
+    """Apply vmap on chain axes automatically if the inputs are multichain.
+
+    Makes restrictive simplifying assumptions on `fun`.
+    """
+
+    def auto_vmapped_fun(*args, **kwargs) -> T:
+        num_chains = _get_num_chains(args)
+        if num_chains is not None:
+            mc_out_axes = _get_mc_out_axes(fun)
+            args = _split_keys_in_args(args, num_chains)
+            mc_in_axes = _get_mc_in_axes(args)
+            partial_fun = partial(fun, **kwargs)
+            vmapped_fun = vmap(partial_fun, in_axes=mc_in_axes, out_axes=mc_out_axes)
+            return vmapped_fun(*args)
+        else:
+            return fun(*args, **kwargs)
+
+    return auto_vmapped_fun
