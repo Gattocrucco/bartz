@@ -1,6 +1,6 @@
 # bartz/src/bartz/mcmcstep/_step.py
 #
-# Copyright (c) 2024-2025, The Bartz Contributors
+# Copyright (c) 2024-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -39,7 +39,7 @@ from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import split, truncated_normal_onesided, vmap_nodoc
 from bartz.mcmcstep._moves import Moves, propose_moves
-from bartz.mcmcstep._state import State, chol_with_gersh
+from bartz.mcmcstep._state import MultichainModule, State, chol_with_gersh, vmap_chains
 
 
 @jit_if_not_profiling
@@ -119,7 +119,7 @@ def accept_moves_and_sample_leaves(
     return accept_moves_final_stage(bart, moves)
 
 
-class Counts(Module):
+class Counts(MultichainModule):
     """
     Number of datapoints in the nodes involved in proposed moves for each tree.
 
@@ -133,12 +133,12 @@ class Counts(Module):
         Number of datapoints in the parent (``= left + right``).
     """
 
-    left: UInt[Array, ' num_trees']
-    right: UInt[Array, ' num_trees']
-    total: UInt[Array, ' num_trees']
+    left: UInt[Array, '*chains num_trees']
+    right: UInt[Array, '*chains num_trees']
+    total: UInt[Array, '*chains num_trees']
 
 
-class Precs(Module):
+class Precs(MultichainModule):
     """
     Likelihood precision scale in the nodes involved in proposed moves for each tree.
 
@@ -155,12 +155,12 @@ class Precs(Module):
         Likelihood precision scale in the parent (``= left + right``).
     """
 
-    left: Float32[Array, ' num_trees']
-    right: Float32[Array, ' num_trees']
-    total: Float32[Array, ' num_trees']
+    left: Float32[Array, '*chains num_trees']
+    right: Float32[Array, '*chains num_trees']
+    total: Float32[Array, '*chains num_trees']
 
 
-class PreLkV(Module):
+class PreLkV(MultichainModule):
     """
     Non-sequential terms of the likelihood ratio for each tree.
 
@@ -186,13 +186,13 @@ class PreLkV(Module):
         The logarithm of the square root term of the likelihood ratio.
     """
 
-    left: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    right: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    total: Float32[Array, ' num_trees'] | Float32[Array, 'num_trees k k']
-    log_sqrt_term: Float32[Array, ' num_trees']
+    left: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    right: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    total: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    log_sqrt_term: Float32[Array, '*chains num_trees']
 
 
-class PreLk(Module):
+class PreLk(MultichainModule):
     """
     Non-sequential terms of the likelihood ratio shared by all trees.
 
@@ -205,7 +205,7 @@ class PreLk(Module):
     exp_factor: Float32[Array, '']
 
 
-class PreLf(Module):
+class PreLf(MultichainModule):
     """
     Pre-computed terms used to sample leaves from their posterior.
 
@@ -224,13 +224,17 @@ class PreLf(Module):
         obtain the posterior leaf samples.
     """
 
-    mean_factor: Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k k 2**d']
+    mean_factor: (
+        Float32[Array, '*chains num_trees 2**d']
+        | Float32[Array, '*chains num_trees k k 2**d']
+    )
     centered_leaves: (
-        Float32[Array, 'num_trees 2**d'] | Float32[Array, 'num_trees k 2**d']
+        Float32[Array, '*chains num_trees 2**d']
+        | Float32[Array, '*chains num_trees k 2**d']
     )
 
 
-class ParallelStageOut(Module):
+class ParallelStageOut(MultichainModule):
     """
     The output of `accept_moves_parallel_stage`.
 
@@ -260,7 +264,10 @@ class ParallelStageOut(Module):
 
     bart: State
     moves: Moves
-    prec_trees: Float32[Array, 'num_trees 2**d'] | Int32[Array, 'num_trees 2**d']
+    prec_trees: (
+        Float32[Array, '*chains num_trees 2**d']
+        | Int32[Array, '*chains num_trees 2**d']
+    )
     move_precs: Precs | Counts
     prelkv: PreLkV
     prelk: PreLk | None
@@ -268,6 +275,7 @@ class ParallelStageOut(Module):
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1, 2))
+@vmap_chains
 def accept_moves_parallel_stage(
     key: Key[Array, ''], bart: State, moves: Moves
 ) -> ParallelStageOut:
@@ -933,6 +941,7 @@ def precompute_leaf_terms(
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(0,))
+@vmap_chains
 def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
     """
     Accept/reject the moves one tree at a time.
@@ -1270,6 +1279,7 @@ def compute_likelihood_ratio(
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(0, 1))
+@vmap_chains
 def accept_moves_final_stage(bart: State, moves: Moves) -> State:
     """
     Post-process the mcmc state after accepting/rejecting the moves.
@@ -1421,6 +1431,7 @@ def _step_error_cov_inv_mv(key: Key[Array, ''], bart: State) -> State:
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@vmap_chains
 def step_error_cov_inv(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the inverse error covariance.
@@ -1446,6 +1457,7 @@ def step_error_cov_inv(key: Key[Array, ''], bart: State) -> State:
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@vmap_chains
 def step_z(key: Key[Array, ''], bart: State) -> State:
     """
     MCMC-update the latent variable for binary regression.
@@ -1469,6 +1481,7 @@ def step_z(key: Key[Array, ''], bart: State) -> State:
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@vmap_chains
 def step_s(key: Key[Array, ''], bart: State) -> State:
     """
     Update `log_s` using Dirichlet sampling.
@@ -1509,6 +1522,7 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
 
 
 @partial(jit_and_block_if_profiling, donate_argnums=(1,), static_argnames=('num_grid',))
+@vmap_chains
 def step_theta(key: Key[Array, ''], bart: State, *, num_grid: int = 1000) -> State:
     """
     Update `theta`.
