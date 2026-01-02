@@ -71,7 +71,7 @@ class TreeHeaps(Protocol):
 
 def make_tree(
     depth: int, dtype: DTypeLike, batch_shape: tuple[int, ...] = ()
-) -> Shaped[Array, '*{batch_shape} 2**{depth}']:
+) -> Shaped[Array, '*batch_shape 2**{depth}']:
     """
     Make an array to represent a binary tree.
 
