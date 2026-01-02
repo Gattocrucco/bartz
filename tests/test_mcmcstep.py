@@ -532,7 +532,6 @@ class TestMultichain:
         """Create a multichain `State` with `init` and check it has the right number of chains."""
         typechecking_init = jaxtyped(init, typechecker=beartype)
         state = typechecking_init(**init_kwargs, num_chains=num_chains)
-        assert state.num_chains() == num_chains
         assert state.forest.num_chains() == num_chains
 
     @pytest.mark.parametrize('num_chains', [None, 1, 4])
@@ -541,4 +540,4 @@ class TestMultichain:
         state = init(**init_kwargs, num_chains=num_chains)
         typechecking_step = jaxtyped(step, typechecker=beartype)
         new_state = typechecking_step(keys.pop(), state)
-        assert new_state.num_chains() == num_chains
+        assert new_state.forest.num_chains() == num_chains

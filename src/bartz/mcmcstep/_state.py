@@ -36,6 +36,7 @@ from jax import eval_shape, random, tree, vmap
 from jax import numpy as jnp
 from jax.errors import ConcretizationTypeError
 from jax.scipy.linalg import solve_triangular
+from jax.tree import flatten
 from jaxtyping import Array, Bool, Float32, Int32, Integer, PyTree, Shaped, UInt
 
 from bartz.grove import make_tree, tree_depths
@@ -56,47 +57,48 @@ def field(*, chains: bool = False, **kwargs):
     return eqx_field(metadata=metadata, **kwargs)
 
 
-class MultichainModule(Module):
-    """Module with support for automatically managing multiple MCMC chains.
+def chain_vmap_axes(x: PyTree[Module | Any]) -> PyTree[int | None]:
+    """Determine vmapping axes for chains.
 
-    Mark multichain fields with ``field(..., chains=True)``.
+    This function determines the argument to the `in_axes` or `out_axes`
+    paramter of `jax.vmap` to vmap over all and only the chain axes found in the
+    pytree `x.`
+
+    Parameters
+    ----------
+    x
+        A pytree. Subpytrees that are Module attributes marked with
+        ``field(..., chains=True)`` are considered to have a leading chain axis.
+
+    Returns
+    -------
+    A pytree prefix of `x` with 0 or None in the leaves.
     """
-
-    def chain_vmap_axes(self) -> PyTree[int | None]:
-        """Return the argument for the `in_axes` or `out_axes` parameters of `jax.vmap` to map over chains."""
+    if isinstance(x, Module):
         args = []
-        for f in fields(self):
-            x = getattr(self, f.name)
+        for f in fields(x):
+            v = getattr(x, f.name)
             if f.metadata.get('static', False):
-                args.append(x)
-            elif hasattr(x, 'chain_vmap_axes'):
-                args.append(x.chain_vmap_axes())
-            elif (
-                hasattr(x, 'shape')
-                and hasattr(x, 'dtype')
-                and f.metadata.get('chains', False)
-            ):
+                args.append(v)
+            elif f.metadata.get('chains', False):
                 args.append(0)
             else:
-                args.append(None)
+                args.append(chain_vmap_axes(v))
+        return x.__class__(*args)
 
-        return self.__class__(*args)
+    def is_leaf(x) -> bool:
+        return isinstance(x, Module)
 
-    def num_chains(self) -> int | None:
-        """Return the number of chains, or `None` if not multichain."""
-        # this default implementation piggybacks on any MultichainModule found
-        # in the leaves, there must be a class in the hierarchy that overrides
-        # the method to return the number of chains.
-        for v in vars(self).values():
-            if hasattr(v, 'num_chains'):
-                try:
-                    return v.num_chains()
-                except NotImplementedError:
-                    continue
-        raise NotImplementedError
+    def get_axes(x: Module | Any) -> PyTree[int | None]:
+        if isinstance(x, Module):
+            return chain_vmap_axes(x)
+        else:
+            return None
+
+    return tree.map(get_axes, x, is_leaf=is_leaf)
 
 
-class Forest(MultichainModule):
+class Forest(Module):
     """
     Represents the MCMC state of a sum of trees.
 
@@ -193,7 +195,7 @@ class Forest(MultichainModule):
             return self.var_tree.shape[0]
 
 
-class StepConfig(MultichainModule):
+class StepConfig(Module):
     """Options for the MCMC step.
 
     Parameters
@@ -208,7 +210,7 @@ class StepConfig(MultichainModule):
     count_batch_size: int | None = field(static=True)
 
 
-class State(MultichainModule):
+class State(Module):
     """
     Represents the MCMC state of BART.
 
@@ -670,40 +672,40 @@ def _inv_via_chol_with_gersh(mat: Float32[Array, 'k k']) -> Float32[Array, 'k k'
 
 def _get_num_chains(args: tuple) -> int | None:
     """Get the number of chains from the positional arguments."""
-    num_chains = [a.num_chains() for a in args if hasattr(a, 'num_chains')]
-    assert all(n == num_chains[0] for n in num_chains)
+
+    def is_leaf(x) -> bool:
+        return hasattr(x, 'num_chains') or x is None
+
+    notdefined = 'notdefined'
+
+    def get_num_chains(x) -> int | None | str:
+        if hasattr(x, 'num_chains'):
+            return x.num_chains()
+        else:
+            return notdefined
+
+    args_num_chains = tree.map(get_num_chains, args, is_leaf=is_leaf)
+    num_chains, _ = flatten(args_num_chains, is_leaf=lambda x: x is None)
+    num_chains = [c for c in num_chains if c is not notdefined]
+    assert all(c == num_chains[0] for c in num_chains)
     return num_chains[0]
 
 
 def _get_mc_in_axes(args: tuple) -> tuple[PyTree[int | None], ...]:
-    """Decide vmap axes for inputs."""
-    return tuple(
-        0
-        if is_key(a) and i == 0
-        else a.chain_vmap_axes()
-        if hasattr(a, 'chain_vmap_axes')
-        else None
-        for i, a in enumerate(args)
-    )
+    """Decide chain vmap axes for inputs."""
+    axes = chain_vmap_axes(args)
+    if is_key(args[0]):
+        axes = (0, *axes[1:])
+    return axes
 
 
 def _get_mc_out_axes(
     fun: Callable, args: tuple[Any], in_axes: PyTree[int | None]
 ) -> PyTree[int | None]:
-    """Get the `out_axes` argument for `jax.vmap` based on the return type of `fun`."""
+    """Decide chain vmap axes for outputs."""
     vmapped_fun = vmap(fun, in_axes=in_axes)
     out = eval_shape(vmapped_fun, *args)
-
-    def f(x: MultichainModule | Any) -> int | None:
-        if hasattr(x, 'chain_vmap_axes'):
-            return x.chain_vmap_axes()
-        else:
-            return None
-
-    def is_leaf(x: MultichainModule | Any) -> bool:
-        return hasattr(x, 'chain_vmap_axes')
-
-    return tree.map(f, out, is_leaf=is_leaf)
+    return chain_vmap_axes(out)
 
 
 def _split_keys_in_args(args: tuple, num_chains: int) -> tuple:

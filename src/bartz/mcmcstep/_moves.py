@@ -35,10 +35,10 @@ from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, UInt
 from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling
 from bartz.jaxext import minimal_unsigned_dtype, split, vmap_nodoc
-from bartz.mcmcstep._state import Forest, MultichainModule, field, vmap_chains
+from bartz.mcmcstep._state import Forest, field, vmap_chains
 
 
-class Moves(MultichainModule):
+class Moves(Module):
     """
     Moves proposed to modify each tree.
 
@@ -109,13 +109,6 @@ class Moves(MultichainModule):
     logu: Float32[Array, '*chains num_trees'] = field(chains=True)
     acc: None | Bool[Array, '*chains num_trees'] = field(chains=True)
     to_prune: None | Bool[Array, '*chains num_trees'] = field(chains=True)
-
-    def num_chains(self) -> int | None:
-        """Return the number of chains, or `None` if single-chain."""
-        if self.allowed.ndim == 2:
-            return self.allowed.shape[0]
-        else:
-            return None
 
 
 @jit_and_block_if_profiling

@@ -39,13 +39,7 @@ from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import split, truncated_normal_onesided, vmap_nodoc
 from bartz.mcmcstep._moves import Moves, propose_moves
-from bartz.mcmcstep._state import (
-    MultichainModule,
-    State,
-    chol_with_gersh,
-    field,
-    vmap_chains,
-)
+from bartz.mcmcstep._state import State, chol_with_gersh, field, vmap_chains
 
 
 @jit_if_not_profiling
@@ -125,7 +119,7 @@ def accept_moves_and_sample_leaves(
     return accept_moves_final_stage(bart, moves)
 
 
-class Counts(MultichainModule):
+class Counts(Module):
     """
     Number of datapoints in the nodes involved in proposed moves for each tree.
 
@@ -144,7 +138,7 @@ class Counts(MultichainModule):
     total: UInt[Array, '*chains num_trees'] = field(chains=True)
 
 
-class Precs(MultichainModule):
+class Precs(Module):
     """
     Likelihood precision scale in the nodes involved in proposed moves for each tree.
 
@@ -166,7 +160,7 @@ class Precs(MultichainModule):
     total: Float32[Array, '*chains num_trees'] = field(chains=True)
 
 
-class PreLkV(MultichainModule):
+class PreLkV(Module):
     """
     Non-sequential terms of the likelihood ratio for each tree.
 
@@ -204,7 +198,7 @@ class PreLkV(MultichainModule):
     log_sqrt_term: Float32[Array, '*chains num_trees'] = field(chains=True)
 
 
-class PreLk(MultichainModule):
+class PreLk(Module):
     """
     Non-sequential terms of the likelihood ratio shared by all trees.
 
@@ -217,7 +211,7 @@ class PreLk(MultichainModule):
     exp_factor: Float32[Array, '']
 
 
-class PreLf(MultichainModule):
+class PreLf(Module):
     """
     Pre-computed terms used to sample leaves from their posterior.
 
@@ -246,7 +240,7 @@ class PreLf(MultichainModule):
     ) = field(chains=True)
 
 
-class ParallelStageOut(MultichainModule):
+class ParallelStageOut(Module):
     """
     The output of `accept_moves_parallel_stage`.
 
