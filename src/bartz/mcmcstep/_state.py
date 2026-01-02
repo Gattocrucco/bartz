@@ -54,7 +54,7 @@ def field(*, chains: bool = False, **kwargs):
     return eqx_field(metadata=metadata, **kwargs)
 
 
-def chain_vmap_axes(x: PyTree[Module | Any, 'T']) -> PyTree[int | None, 'T...']:
+def chain_vmap_axes(x: PyTree[Module | Any, 'T']) -> PyTree[int | None, 'T ...']:
     """Determine vmapping axes for chains.
 
     This function determines the argument to the `in_axes` or `out_axes`
