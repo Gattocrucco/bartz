@@ -258,7 +258,7 @@ class State(Module):
 
 
 def _init_shape_shifting_parameters(
-    y: Float32[Any, ' n'] | Float32[Any, 'k n'] | Bool[Any, ' n'],
+    y: Float32[Array, ' n'] | Float32[Array, 'k n'] | Bool[Array, ' n'],
     offset: Float32[Array, ''] | Float32[Array, ' k'],
     error_scale: Float32[Any, ' n'] | None,
     error_cov_df: float | Float32[Any, ''] | None,
@@ -342,7 +342,7 @@ def _init_shape_shifting_parameters(
 def init(
     *,
     X: UInt[Any, 'p n'],
-    y: Float32[Any, ' n'] | Float32[Array, ' k n'] | Bool[Any, ' n'],
+    y: Float32[Any, ' n'] | Float32[Any, ' k n'] | Bool[Any, ' n'],
     offset: float | Float32[Any, ''] | Float32[Any, ' k'],
     max_split: UInt[Any, ' p'],
     num_trees: int,
