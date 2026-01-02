@@ -27,7 +27,6 @@
 import math
 from collections.abc import Callable
 from dataclasses import fields
-from enum import Enum
 from functools import cache, partial
 from inspect import isclass, signature
 from types import NoneType, UnionType
@@ -109,25 +108,6 @@ class MultichainModule(Module):
                 except NotImplementedError:
                     continue
         raise NotImplementedError
-
-
-class Kind(str, Enum):
-    """
-    Indicator of regression type.
-
-    Attributes
-    ----------
-    binary
-        Binary regression with probit link.
-    uv
-        Univariate continuous regression.
-    mv
-        Multivariate continuous regression.
-    """
-
-    binary = 'binary'
-    uv = 'uv'
-    mv = 'mv'
 
 
 class Forest(MultichainModule):
@@ -262,8 +242,6 @@ class State(MultichainModule):
         covariance. For the univariate case, the relationship to the inverse
         gamma prior parameters is ``alpha = df / 2``, ``beta = scale / 2``.
         `None` in binary regression.
-    kind
-        Inidicator of regression type.
     forest
         The sum of trees model.
     """
@@ -277,12 +255,10 @@ class State(MultichainModule):
     prec_scale: Float32[Array, ' n'] | None
     error_cov_df: Float32[Array, ''] | None
     error_cov_scale: Float32[Array, ''] | Float32[Array, 'k k'] | None
-    kind: Kind = field(static=True)
     forest: Forest
 
 
-def _init_kind_parameters(
-    kind: Kind | str | None,
+def _init_shape_shifting_parameters(
     y: Float32[Any, ' n'] | Float32[Any, 'k n'] | Bool[Any, ' n'],
     offset: Float32[Array, ''] | Float32[Array, ' k'],
     error_scale: Float32[Any, ' n'] | None,
@@ -290,21 +266,20 @@ def _init_kind_parameters(
     error_cov_scale: float | Float32[Any, ''] | Float32[Any, 'k k'] | None,
     leaf_prior_cov_inv: Float32[Array, ''] | Float32[Array, 'k k'],
 ) -> tuple[
-    Kind | str,
-    None | int,
+    bool,
+    tuple[()] | tuple[int],
     None | Float32[Array, ''],
     None | Float32[Array, ''],
     None | Float32[Array, ''],
 ]:
     """
-    Determine 'kind' and initialize/validate kind-specific params.
+    Check and initialize parameters that change array type/shape based on outcome kind.
 
     Parameters
     ----------
-    kind
-        The regression kind, or None to infer from `y`.
     y
-        The response variable.
+        The response variable; the outcome type is deduced from `y` and then
+        all other parameters are checked against it.
     offset
         The offset to add to the predictions.
     error_scale
@@ -318,10 +293,10 @@ def _init_kind_parameters(
 
     Returns
     -------
-    kind
-        The regression kind.
-    k
-        The number of output dimensions (None for uv).
+    is_binary
+        Whether the outcome is binary.
+    kshape
+        The outcome shape, empty for univariate, (k,) for multivariate.
     error_cov_inv
         The initialized error covariance inverse.
     error_cov_df
@@ -332,57 +307,37 @@ def _init_kind_parameters(
     Raises
     ------
     ValueError
-        If `kind` is 'binary' and `y` is multivariate.
+        If `y` is binary and multivariate.
     """
-    is_binary_y = y.dtype == bool
-    k = None if y.ndim == 1 else y.shape[0]
-
-    # Infer kind if not specified
-    if kind is None:
-        if is_binary_y:
-            kind = 'binary'
-        elif k is None:
-            kind = 'uv'
-        else:
-            kind = 'mv'
-
-    assert kind in ('binary', 'uv', 'mv')
+    # determine outcome kind, binary/continuous x univariate/multivariate
+    is_binary = y.dtype == bool
+    kshape = y.shape[:-1]
 
     # Binary vs continuous
-    if kind == 'binary':
-        if k is not None:
+    if is_binary:
+        if kshape:
             msg = 'Binary multivariate regression not supported, open an issue at https://github.com/bartz-org/bartz/issues if you need it.'
             raise ValueError(msg)
-        assert is_binary_y
         assert error_scale is None
         assert error_cov_df is None
         assert error_cov_scale is None
         error_cov_inv = None
     else:
-        assert not is_binary_y
         error_cov_df = jnp.asarray(error_cov_df)
         error_cov_scale = jnp.asarray(error_cov_scale)
+        assert error_cov_scale.shape == 2 * kshape
 
-    # Multivariate vs univariate
-    if kind == 'mv':
-        assert y.ndim == 2
-        assert y.shape[0] == k
-        assert leaf_prior_cov_inv.shape == (k, k)
-        assert offset.shape == (k,)
-        if kind != 'binary':
-            assert error_cov_scale is not None
-            assert error_cov_scale.shape == (k, k)
+        # Multivariate vs univariate
+        if kshape:
             error_cov_inv = error_cov_df * _inv_via_chol_with_gersh(error_cov_scale)
-    else:
-        assert y.ndim == 1
-        assert leaf_prior_cov_inv.ndim == 0
-        assert offset.ndim == 0
-        if kind != 'binary':
-            assert error_cov_scale.ndim == 0
+        else:
             # inverse gamma prior: alpha = df / 2, beta = scale / 2
             error_cov_inv = error_cov_df / error_cov_scale
 
-    return kind, k, error_cov_inv, error_cov_df, error_cov_scale
+    assert leaf_prior_cov_inv.shape == 2 * kshape
+    assert offset.shape == kshape
+
+    return is_binary, kshape, error_cov_inv, error_cov_df, error_cov_scale
 
 
 def init(
@@ -408,7 +363,6 @@ def init(
     a: float | Float32[Any, ''] | None = None,
     b: float | Float32[Any, ''] | None = None,
     rho: float | Float32[Any, ''] | None = None,
-    kind: Kind | str | None = None,
     num_chains: int | None = None,
 ) -> State:
     """
@@ -486,8 +440,6 @@ def init(
     b
     rho
         Parameters of the prior on `theta`. Required only to sample `theta`.
-    kind
-        Inidicator of regression type. If not specified, it's inferred from `y`.
     num_chains
         The number of independent MCMC chains to represent in the state. Single
         chain with scalar values if not specified.
@@ -520,10 +472,11 @@ def init(
         resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
     )
 
-    kind, k, error_cov_inv, error_cov_df, error_cov_scale = _init_kind_parameters(
-        kind, y, offset, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
+    is_binary, kshape, error_cov_inv, error_cov_df, error_cov_scale = (
+        _init_shape_shifting_parameters(
+            y, offset, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
+        )
     )
-    is_binary = kind == 'binary'
 
     max_split = jnp.asarray(max_split)
     p, n = X.shape
@@ -547,8 +500,6 @@ def init(
     chain_shape = () if num_chains is None else (num_chains,)
     resid_shape = chain_shape + y.shape
     tree_shape = (*chain_shape, num_trees)
-    leaf_tree_shape = (*tree_shape, k) if kind == 'mv' else tree_shape
-    leaf_indices_shape = (*chain_shape, num_trees, n)
 
     def add_chains(
         x: Shaped[Array, '*shape'] | None,
@@ -572,9 +523,8 @@ def init(
         ),
         error_cov_df=error_cov_df,
         error_cov_scale=error_cov_scale,
-        kind=Kind(kind),
         forest=Forest(
-            leaf_tree=make_tree(max_depth, jnp.float32, leaf_tree_shape),
+            leaf_tree=make_tree(max_depth, jnp.float32, tree_shape + kshape),
             var_tree=make_tree(
                 max_depth - 1, minimal_unsigned_dtype(p - 1), tree_shape
             ),
@@ -597,7 +547,7 @@ def init(
             p_nonterminal=p_nonterminal[tree_depths(2**max_depth)],
             p_propose_grow=p_nonterminal[tree_depths(2 ** (max_depth - 1))],
             leaf_indices=jnp.ones(
-                leaf_indices_shape, minimal_unsigned_dtype(2**max_depth - 1)
+                (*tree_shape, n), minimal_unsigned_dtype(2**max_depth - 1)
             ),
             min_points_per_decision_node=_asarray_or_none(min_points_per_decision_node),
             min_points_per_leaf=_asarray_or_none(min_points_per_leaf),

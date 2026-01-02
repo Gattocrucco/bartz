@@ -60,7 +60,7 @@ def step(key: Key[Array, ''], bart: State) -> State:
     """
     keys = split(key)
 
-    if bart.kind == 'binary':
+    if bart.y.dtype == bool:
         bart = replace(bart, error_cov_inv=jnp.float32(1))
         bart = step_trees(keys.pop(), bart)
         bart = replace(bart, error_cov_inv=None)
@@ -1450,7 +1450,8 @@ def step_error_cov_inv(key: Key[Array, ''], bart: State) -> State:
     -------
     The new BART mcmc state, with an updated `error_cov_inv`.
     """
-    if bart.kind == 'mv':
+    assert bart.error_cov_inv is not None
+    if bart.error_cov_inv.ndim == 2:
         return _step_error_cov_inv_mv(key, bart)
     else:
         return _step_error_cov_inv_uv(key, bart)
