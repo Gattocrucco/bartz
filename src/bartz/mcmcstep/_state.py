@@ -27,7 +27,7 @@
 import math
 from collections.abc import Callable
 from dataclasses import fields
-from functools import cache, partial
+from functools import partial
 from typing import Any, Literal, TypeVar
 
 from equinox import Module
@@ -45,10 +45,7 @@ from bartz.jaxext import get_default_device, is_key, minimal_unsigned_dtype
 
 def field(*, chains: bool = False, **kwargs):
     """Wrap `equinox.field` to add `chains` to mark multichain attributes."""
-    try:
-        metadata = dict(kwargs.pop('metadata'))  # safety copy
-    except KeyError:
-        metadata = {}
+    metadata = dict(kwargs.pop('metadata', {}))
     if 'chains' in metadata:
         msg = 'Cannot use metadata with `chains` already set.'
         raise ValueError(msg)
@@ -470,10 +467,6 @@ def init(
     offset = jnp.asarray(offset)
     leaf_prior_cov_inv = jnp.asarray(leaf_prior_cov_inv)
 
-    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
-        resid_batch_size, count_batch_size, y, 2**max_depth * num_trees
-    )
-
     is_binary, kshape, error_cov_inv, error_cov_df, error_cov_scale = (
         _init_shape_shifting_parameters(
             y, offset, error_scale, error_cov_df, error_cov_scale, leaf_prior_cov_inv
@@ -510,6 +503,10 @@ def init(
             return None
         else:
             return jnp.broadcast_to(x, chain_shape + x.shape)
+
+    resid_batch_size, count_batch_size = _choose_suffstat_batch_size(
+        resid_batch_size, count_batch_size, y, max_depth, num_trees, num_chains
+    )
 
     return State(
         X=jnp.asarray(X),
@@ -599,9 +596,12 @@ def _get_platform(x: Array):
 def _choose_suffstat_batch_size(
     resid_batch_size: int | None | Literal['auto'],
     count_batch_size: int | None | Literal['auto'],
-    y: Float32[Array, 'k n'] | Float32[Array, ' n'],
-    forest_size: int,
+    y: Float32[Any, ' n'] | Float32[Array, ' k n'] | Bool[Any, ' n'],
+    max_depth: int,
+    num_trees: int,
+    num_chains: int | None,
 ) -> tuple[int | None, int | None]:
+    # get number of outcomes and of datapoints, set to 1 if none
     if y.ndim == 2:
         k, n = y.shape
     else:
@@ -609,34 +609,40 @@ def _choose_suffstat_batch_size(
         (n,) = y.shape
     n = max(1, n)
 
-    @cache
-    def get_platform():
-        return _get_platform(y)
+    if num_chains is None:
+        num_chains = 1
+    batch_size = k * num_chains
+    unbatched_accum_bytes_times_batch_size = num_trees * 2**max_depth * 4 * n
+
+    platform = _get_platform(y)
 
     if resid_batch_size == 'auto':
-        platform = get_platform()
         if platform == 'cpu':
-            resid_batch_size = 2 ** round(math.log2(n / 6))  # n/6
+            rbs = 2 ** round(math.log2(n / 6))  # n/6
         elif platform == 'gpu':
-            resid_batch_size = 2 ** round((1 + math.log2(n)) / 3)  # n^1/3
-        resid_batch_size *= k
-        resid_batch_size = max(1, resid_batch_size)
+            rbs = 2 ** round((1 + math.log2(n)) / 3)  # n^1/3
+        rbs *= batch_size
+        rbs = max(1, rbs)
+    else:
+        rbs = resid_batch_size
 
-    if count_batch_size == 'auto':
-        platform = get_platform()
-        if platform == 'cpu':
-            count_batch_size = None
-        elif platform == 'gpu':
-            count_batch_size = 2 ** round(math.log2(n) / 2 - 2)  # n^1/2
-            # /4 is good on V100, /2 on L4/T4, still haven't tried A100
-            count_batch_size *= k
-            max_memory = 2**29
-            itemsize = 4
-            min_batch_size = math.ceil(forest_size * itemsize * n / max_memory)
-            count_batch_size = max(count_batch_size, min_batch_size)
-            count_batch_size = max(1, count_batch_size)
+    if count_batch_size != 'auto':
+        cbs = count_batch_size
+    elif platform == 'cpu':
+        cbs = None
+    elif platform == 'gpu':
+        cbs = 2 ** round(math.log2(n) / 2 - 2)  # n^1/2
+        # /4 is good on V100, /2 on L4/T4, still haven't tried A100
 
-    return resid_batch_size, count_batch_size
+        # ensure we don't exceed ~512MB of memory usage
+        max_memory = 2**29
+        min_batch_size = math.ceil(unbatched_accum_bytes_times_batch_size / max_memory)
+        cbs = max(cbs, min_batch_size)
+
+        cbs *= batch_size
+        cbs = max(1, cbs)
+
+    return rbs, cbs
 
 
 def chol_with_gersh(

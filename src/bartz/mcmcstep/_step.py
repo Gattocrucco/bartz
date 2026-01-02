@@ -460,7 +460,7 @@ def compute_count_trees(
 
 def count_datapoints_per_leaf(
     leaf_indices: UInt[Array, 'num_trees n'], tree_size: int, batch_size: int | None
-) -> Int32[Array, 'num_trees 2**(d-1)']:
+) -> Int32[Array, 'num_trees {tree_size}']:
     """
     Count the number of datapoints in each leaf.
 
@@ -504,9 +504,9 @@ def _aggregate_scatter(
 
 def _count_vec(
     leaf_indices: UInt[Array, 'num_trees n'], tree_size: int, batch_size: int
-) -> Int32[Array, 'num_trees 2**(d-1)']:
+) -> Int32[Array, 'num_trees {tree_size}']:
     return _aggregate_batched_alltrees(
-        1, leaf_indices, tree_size, jnp.uint32, batch_size
+        jnp.uint32(1), leaf_indices, tree_size, jnp.uint32, batch_size
     )
     # uint16 is super-slow on gpu, don't use it even if n < 2^16
 
