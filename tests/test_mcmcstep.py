@@ -1,6 +1,6 @@
 # bartz/tests/test_mcmcstep.py
 #
-# Copyright (c) 2025, The Bartz Contributors
+# Copyright (c) 2025-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -25,14 +25,16 @@
 """Test `bartz.mcmcstep`."""
 
 import pytest
+from beartype import beartype
 from jax import numpy as jnp
 from jax import random, vmap
 from jax.random import bernoulli, clone, permutation, randint
-from jaxtyping import Array, Bool, Int32, Key
+from jaxtyping import Array, Bool, Int32, Key, jaxtyped
 from numpy.testing import assert_array_equal
 from scipy import stats
 
 from bartz.jaxext import minimal_unsigned_dtype, split
+from bartz.mcmcstep import init, step
 from bartz.mcmcstep._moves import (
     ancestor_variables,
     randint_exclude,
@@ -500,3 +502,43 @@ class TestSplitRange:
         l, r = split_range(var_tree, split_tree, max_split, jnp.int32(1), jnp.int32(0))
         assert l == 1
         assert r == 4
+
+
+class TestMultichain:
+    """Basic tests of the multichain functionality."""
+
+    @pytest.fixture
+    def init_kwargs(self, keys: split) -> dict:
+        """Return arguments for `init`."""
+        p = 10
+        n = 100
+        k = 2
+        d = 6
+        numcut = 10
+        return dict(
+            X=random.randint(keys.pop(), (p, n), 0, numcut + 1, jnp.uint32),
+            y=random.normal(keys.pop(), (k, n)),
+            offset=random.normal(keys.pop(), (k,)),
+            max_split=jnp.full(p, numcut + 1, jnp.uint32),
+            num_trees=5,
+            p_nonterminal=jnp.ones(d - 1),
+            leaf_prior_cov_inv=jnp.eye(k),
+            error_cov_df=2.0,
+            error_cov_scale=2 * jnp.eye(k),
+        )
+
+    @pytest.mark.parametrize('num_chains', [None, 1, 4])
+    def test_num_chains(self, init_kwargs: dict, num_chains: int | None):
+        """Create a multichain `State` with `init` and check it has the right number of chains."""
+        typechecking_init = jaxtyped(init, typechecker=beartype)
+        state = typechecking_init(**init_kwargs, num_chains=num_chains)
+        assert state.num_chains() == num_chains
+        assert state.forest.num_chains() == num_chains
+
+    @pytest.mark.parametrize('num_chains', [None, 1, 4])
+    def test_step(self, init_kwargs: dict, num_chains: int | None, keys: split):
+        """Step a multichain state."""
+        state = init(**init_kwargs, num_chains=num_chains)
+        typechecking_step = jaxtyped(step, typechecker=beartype)
+        new_state = typechecking_step(keys.pop(), state)
+        assert new_state.num_chains() == num_chains

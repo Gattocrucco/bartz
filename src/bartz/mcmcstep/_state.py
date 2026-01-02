@@ -29,13 +29,13 @@ from collections.abc import Callable
 from dataclasses import fields
 from enum import Enum
 from functools import cache, partial
-from inspect import signature
+from inspect import isclass, signature
 from types import NoneType, UnionType
 from typing import Any, Literal, TypeVar, Union, get_args, get_origin
 
 from equinox import Module, field
 from jax import numpy as jnp
-from jax import vmap
+from jax import random, vmap
 from jax.errors import ConcretizationTypeError
 from jax.scipy.linalg import solve_triangular
 from jaxtyping import (
@@ -51,12 +51,7 @@ from jaxtyping import (
 )
 
 from bartz.grove import make_tree, tree_depths
-from bartz.jaxext import (
-    _split_shaped,
-    get_default_device,
-    is_key,
-    minimal_unsigned_dtype,
-)
+from bartz.jaxext import get_default_device, is_key, minimal_unsigned_dtype
 
 
 def _get_types(annotation) -> tuple:
@@ -84,7 +79,7 @@ class MultichainModule(Module):
         for f in fields(cls):
             if f.metadata.get('static', False):
                 args.append(None)
-            elif issubclass(f.type, MultichainModule):
+            elif isclass(f.type) and issubclass(f.type, MultichainModule):
                 axes = f.type.chain_vmap_axes()
                 args.append(axes)
             else:
@@ -107,11 +102,10 @@ class MultichainModule(Module):
         # this default implementation piggybacks on any MultichainModule found
         # in the leaves, there must be a class in the hierarchy that overrides
         # the method to return the number of chains.
-        for f in fields(self):
-            if issubclass(f.type, MultichainModule):
-                value = getattr(self, f.name)
+        for v in vars(self).values():
+            if isinstance(v, MultichainModule):
                 try:
-                    return value.num_chains()
+                    return v.num_chains()
                 except NotImplementedError:
                     continue
         raise NotImplementedError
@@ -398,7 +392,7 @@ def init(
     offset: float | Float32[Any, ''] | Float32[Any, ' k'],
     max_split: UInt[Any, ' p'],
     num_trees: int,
-    p_nonterminal: Float32[Any, ' d-1'],
+    p_nonterminal: Float32[Any, ' d_minus_1'],
     leaf_prior_cov_inv: float | Float32[Any, ''] | Float32[Array, 'k k'],
     error_cov_df: float | Float32[Any, ''] | None = None,
     error_cov_scale: float | Float32[Any, ''] | Float32[Array, 'k k'] | None = None,
@@ -751,7 +745,7 @@ def _split_keys_in_args(args: tuple, num_chains: int) -> tuple:
     """If the first argument is a random key, split it into `num_chains` keys."""
     a = args[0]
     if is_key(a):
-        a = _split_shaped(a, (num_chains,))
+        a = random.split(a, num_chains)
     return (a, *args[1:])
 
 

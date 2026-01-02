@@ -108,6 +108,13 @@ class Moves(MultichainModule):
     acc: None | Bool[Array, '*chains num_trees']
     to_prune: None | Bool[Array, '*chains num_trees']
 
+    def num_chains(self) -> int | None:
+        """Return the number of chains, or `None` if single-chain."""
+        if self.allowed.ndim == 2:
+            return self.allowed.shape[0]
+        else:
+            return None
+
 
 @jit_and_block_if_profiling
 @vmap_chains
