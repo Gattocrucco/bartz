@@ -28,7 +28,7 @@ from dataclasses import replace
 from functools import partial
 
 import jax
-from equinox import Module, field, tree_at
+from equinox import Module, tree_at
 from jax import lax, random
 from jax import numpy as jnp
 from jax.scipy.linalg import solve_triangular
@@ -39,7 +39,13 @@ from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
 from bartz.jaxext import split, truncated_normal_onesided, vmap_nodoc
 from bartz.mcmcstep._moves import Moves, propose_moves
-from bartz.mcmcstep._state import MultichainModule, State, chol_with_gersh, vmap_chains
+from bartz.mcmcstep._state import (
+    MultichainModule,
+    State,
+    chol_with_gersh,
+    field,
+    vmap_chains,
+)
 
 
 @jit_if_not_profiling
@@ -133,9 +139,9 @@ class Counts(MultichainModule):
         Number of datapoints in the parent (``= left + right``).
     """
 
-    left: UInt[Array, '*chains num_trees']
-    right: UInt[Array, '*chains num_trees']
-    total: UInt[Array, '*chains num_trees']
+    left: UInt[Array, '*chains num_trees'] = field(chains=True)
+    right: UInt[Array, '*chains num_trees'] = field(chains=True)
+    total: UInt[Array, '*chains num_trees'] = field(chains=True)
 
 
 class Precs(MultichainModule):
@@ -155,9 +161,9 @@ class Precs(MultichainModule):
         Likelihood precision scale in the parent (``= left + right``).
     """
 
-    left: Float32[Array, '*chains num_trees']
-    right: Float32[Array, '*chains num_trees']
-    total: Float32[Array, '*chains num_trees']
+    left: Float32[Array, '*chains num_trees'] = field(chains=True)
+    right: Float32[Array, '*chains num_trees'] = field(chains=True)
+    total: Float32[Array, '*chains num_trees'] = field(chains=True)
 
 
 class PreLkV(MultichainModule):
@@ -186,10 +192,16 @@ class PreLkV(MultichainModule):
         The logarithm of the square root term of the likelihood ratio.
     """
 
-    left: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
-    right: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
-    total: Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
-    log_sqrt_term: Float32[Array, '*chains num_trees']
+    left: (
+        Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    ) = field(chains=True)
+    right: (
+        Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    ) = field(chains=True)
+    total: (
+        Float32[Array, '*chains num_trees'] | Float32[Array, '*chains num_trees k k']
+    ) = field(chains=True)
+    log_sqrt_term: Float32[Array, '*chains num_trees'] = field(chains=True)
 
 
 class PreLk(MultichainModule):
@@ -227,11 +239,11 @@ class PreLf(MultichainModule):
     mean_factor: (
         Float32[Array, '*chains num_trees 2**d']
         | Float32[Array, '*chains num_trees k k 2**d']
-    )
+    ) = field(chains=True)
     centered_leaves: (
         Float32[Array, '*chains num_trees 2**d']
         | Float32[Array, '*chains num_trees k 2**d']
-    )
+    ) = field(chains=True)
 
 
 class ParallelStageOut(MultichainModule):
@@ -267,7 +279,7 @@ class ParallelStageOut(MultichainModule):
     prec_trees: (
         Float32[Array, '*chains num_trees 2**d']
         | Int32[Array, '*chains num_trees 2**d']
-    )
+    ) = field(chains=True)
     move_precs: Precs | Counts
     prelkv: PreLkV
     prelk: PreLk | None
@@ -313,7 +325,7 @@ def accept_moves_parallel_stage(
         or bart.prec_scale is None
     ):
         count_trees, move_counts = compute_count_trees(
-            bart.forest.leaf_indices, moves, bart.forest.count_batch_size
+            bart.forest.leaf_indices, moves, bart.config.count_batch_size
         )
 
     # mark which leaves & potential leaves have enough points to be grown
@@ -346,7 +358,7 @@ def accept_moves_parallel_stage(
             bart.prec_scale,
             bart.forest.leaf_indices,
             moves,
-            bart.forest.count_batch_size,
+            bart.config.count_batch_size,
         )
     assert move_precs is not None
 
@@ -967,7 +979,7 @@ def accept_moves_sequential_stage(pso: ParallelStageOut) -> tuple[State, Moves]:
             resid,
             SeqStageInAllTrees(
                 pso.bart.X,
-                pso.bart.forest.resid_batch_size,
+                pso.bart.config.resid_batch_size,
                 pso.bart.prec_scale,
                 pso.bart.forest.log_likelihood is not None,
                 pso.prelk,

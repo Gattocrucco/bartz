@@ -325,6 +325,7 @@ class TestMVBartIntegration:
             error_cov_inv=1.0,
             prec_scale=None,
             forest=None,
+            config=None,
         )
 
         st_mv = State(
@@ -338,6 +339,7 @@ class TestMVBartIntegration:
             error_cov_inv=jnp.eye(1),
             prec_scale=None,
             forest=None,
+            config=None,
         )
 
         def sample_uv(k):
