@@ -498,7 +498,7 @@ def init(
 
     def add_chains(
         x: Shaped[Array, '*shape'] | None,
-    ) -> Shaped[Array, '*chains *shape'] | None:
+    ) -> Shaped[Array, '*shape'] | Shaped[Array, ' num_chains *shape'] | None:
         if x is None:
             return None
         else:
