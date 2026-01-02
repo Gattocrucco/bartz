@@ -26,8 +26,8 @@
 
 import pytest
 from beartype import beartype
+from jax import debug_key_reuse, random, vmap
 from jax import numpy as jnp
-from jax import random, vmap
 from jax.random import bernoulli, clone, permutation, randint
 from jaxtyping import Array, Bool, Int32, Key, jaxtyped
 from numpy.testing import assert_array_equal
@@ -507,6 +507,11 @@ class TestSplitRange:
 class TestMultichain:
     """Basic tests of the multichain functionality."""
 
+    @pytest.fixture(params=[None, 0, 1, 4])
+    def num_chains(self, request) -> int | None:
+        """Return the number of chains."""
+        return request.param
+
     @pytest.fixture
     def init_kwargs(self, keys: split) -> dict:
         """Return arguments for `init`."""
@@ -515,29 +520,30 @@ class TestMultichain:
         k = 2
         d = 6
         numcut = 10
+        num_trees = 5
         return dict(
             X=random.randint(keys.pop(), (p, n), 0, numcut + 1, jnp.uint32),
             y=random.normal(keys.pop(), (k, n)),
             offset=random.normal(keys.pop(), (k,)),
             max_split=jnp.full(p, numcut + 1, jnp.uint32),
-            num_trees=5,
+            num_trees=num_trees,
             p_nonterminal=jnp.ones(d - 1),
-            leaf_prior_cov_inv=jnp.eye(k),
+            leaf_prior_cov_inv=jnp.eye(k) * num_trees,
             error_cov_df=2.0,
             error_cov_scale=2 * jnp.eye(k),
         )
 
-    @pytest.mark.parametrize('num_chains', [None, 1, 4])
     def test_num_chains(self, init_kwargs: dict, num_chains: int | None):
         """Create a multichain `State` with `init` and check it has the right number of chains."""
         typechecking_init = jaxtyped(init, typechecker=beartype)
         state = typechecking_init(**init_kwargs, num_chains=num_chains)
         assert state.forest.num_chains() == num_chains
 
-    @pytest.mark.parametrize('num_chains', [None, 1, 4])
     def test_step(self, init_kwargs: dict, num_chains: int | None, keys: split):
         """Step a multichain state."""
         state = init(**init_kwargs, num_chains=num_chains)
         typechecking_step = jaxtyped(step, typechecker=beartype)
-        new_state = typechecking_step(keys.pop(), state)
+        with debug_key_reuse(num_chains != 0):
+            # key reuse checks trigger with empty key array apparently
+            new_state = typechecking_step(keys.pop(), state)
         assert new_state.forest.num_chains() == num_chains

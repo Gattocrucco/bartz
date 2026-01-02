@@ -44,7 +44,7 @@ from bartz.jaxext import get_default_device, is_key, minimal_unsigned_dtype
 
 
 def field(*, chains: bool = False, **kwargs):
-    """Wrap `equinox.field` to add `chains` to mark multichain attributes."""
+    """Extend `equinox.field` to add `chains` to mark multichain attributes."""
     metadata = dict(kwargs.pop('metadata', {}))
     if 'chains' in metadata:
         msg = 'Cannot use metadata with `chains` already set.'
@@ -54,12 +54,12 @@ def field(*, chains: bool = False, **kwargs):
     return eqx_field(metadata=metadata, **kwargs)
 
 
-def chain_vmap_axes(x: PyTree[Module | Any]) -> PyTree[int | None]:
+def chain_vmap_axes(x: PyTree[Module | Any, 'T']) -> PyTree[int | None, 'T...']:
     """Determine vmapping axes for chains.
 
     This function determines the argument to the `in_axes` or `out_axes`
-    paramter of `jax.vmap` to vmap over all and only the chain axes found in the
-    pytree `x.`
+    parameter of `jax.vmap` to vmap over all and only the chain axes found in the
+    pytree `x`.
 
     Parameters
     ----------
@@ -706,7 +706,7 @@ def _get_mc_in_axes(args: tuple) -> tuple[PyTree[int | None], ...]:
 
 
 def _get_mc_out_axes(
-    fun: Callable, args: tuple[Any], in_axes: PyTree[int | None]
+    fun: Callable, args: tuple, in_axes: PyTree[int | None]
 ) -> PyTree[int | None]:
     """Decide chain vmap axes for outputs."""
     vmapped_fun = vmap(fun, in_axes=in_axes)
