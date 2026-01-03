@@ -186,6 +186,7 @@ class Forest(Module):
 
     def num_chains(self) -> int | None:
         """Return the number of chains, or `None` if not multichain."""
+        # maybe this should be replaced by chain_shape() -> () | (int,)
         if self.var_tree.ndim == 2:
             return None
         else:
@@ -646,16 +647,16 @@ def _choose_suffstat_batch_size(
 
 
 def chol_with_gersh(
-    mat: Float32[Array, '... k k'], absolute_eps: bool = False
-) -> Float32[Array, '... k k']:
+    mat: Float32[Array, '*batch_shape k k'], absolute_eps: bool = False
+) -> Float32[Array, '*batch_shape k k']:
     """Cholesky with Gershgorin stabilization, supports batching."""
     return _chol_with_gersh_impl(mat, absolute_eps)
 
 
 @partial(jnp.vectorize, signature='(k,k)->(k,k)', excluded=(1,))
 def _chol_with_gersh_impl(
-    mat: Float32[Array, '... k k'], absolute_eps: bool
-) -> Float32[Array, '... k k']:
+    mat: Float32[Array, '*batch_shape k k'], absolute_eps: bool
+) -> Float32[Array, '*batch_shape k k']:
     rho = jnp.max(jnp.sum(jnp.abs(mat), axis=1))
     eps = jnp.finfo(mat.dtype).eps
     u = mat.shape[0] * rho * eps
@@ -676,25 +677,18 @@ def _inv_via_chol_with_gersh(mat: Float32[Array, 'k k']) -> Float32[Array, 'k k'
     return L_inv.T @ L_inv
 
 
-def _get_num_chains(args: tuple) -> int | None:
-    """Get the number of chains from the positional arguments."""
+def get_num_chains(x: PyTree) -> int | None:
+    """Get the number of chains of a pytree.
 
-    def is_leaf(x) -> bool:
-        return hasattr(x, 'num_chains') or x is None
-
-    notdefined = 'notdefined'
-
-    def get_num_chains(x) -> int | None | str:
-        if hasattr(x, 'num_chains'):
-            return x.num_chains()
-        else:
-            return notdefined
-
-    args_num_chains = tree.map(get_num_chains, args, is_leaf=is_leaf)
-    num_chains, _ = flatten(args_num_chains, is_leaf=lambda x: x is None)
-    num_chains = [c for c in num_chains if c is not notdefined]
-    assert all(c == num_chains[0] for c in num_chains)
-    return num_chains[0]
+    Find all nodes in the structure that define 'num_chains()', stopping
+    traversal at nodes that define it. Check all values obtained invoking
+    `num_chains` are equal, then return it.
+    """
+    leaves, _ = flatten(x, is_leaf=lambda x: hasattr(x, 'num_chains'))
+    num_chains = [x.num_chains() for x in leaves if hasattr(x, 'num_chains')]
+    ref = num_chains[0]
+    assert all(c == ref for c in num_chains)
+    return ref
 
 
 def _get_mc_in_axes(args: tuple) -> tuple[PyTree[int | None], ...]:
@@ -732,7 +726,7 @@ def vmap_chains(fun: Callable[..., T]) -> Callable[..., T]:
     """
 
     def auto_vmapped_fun(*args, **kwargs) -> T:
-        num_chains = _get_num_chains(args)
+        num_chains = get_num_chains(args)
         if num_chains is not None:
             partial_fun = partial(fun, **kwargs)
             args = _split_keys_in_args(args, num_chains)
