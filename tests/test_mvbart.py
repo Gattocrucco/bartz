@@ -1,6 +1,6 @@
 # bartz/tests/test_mvbart.py
 #
-# Copyright (c) 2025, The Bartz Contributors
+# Copyright (c) 2025-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -249,7 +249,7 @@ class TestMVBartIntegration:
         y_mv = y[None, :]
         p_nonterminal = jnp.array([0.9, 0.5])
 
-        common = dict(
+        common: dict = dict(
             X=X,
             max_split=max_split,
             num_trees=10,
@@ -277,10 +277,8 @@ class TestMVBartIntegration:
             **common,
         )
 
-        assert bart_uv.kind == 'uv'
         assert bart_uv.error_cov_inv is not None
 
-        assert bart_mv.kind == 'mv'
         assert bart_mv.error_cov_inv is not None
 
         assert bart_uv.resid.ndim == 1
@@ -320,7 +318,6 @@ class TestMVBartIntegration:
             X=X,
             y=y,
             resid=resid,
-            kind='uv',
             error_cov_df=df_prior,
             error_cov_scale=scale_prior,
             z=None,
@@ -328,13 +325,13 @@ class TestMVBartIntegration:
             error_cov_inv=1.0,
             prec_scale=None,
             forest=None,
+            config=None,
         )
 
         st_mv = State(
             X=X,
             y=y[None, :],
             resid=resid[None, :],
-            kind='mv',
             error_cov_df=jnp.array(df_prior),
             error_cov_scale=jnp.array([[scale_prior]]),
             z=None,
@@ -342,6 +339,7 @@ class TestMVBartIntegration:
             error_cov_inv=jnp.eye(1),
             prec_scale=None,
             forest=None,
+            config=None,
         )
 
         def sample_uv(k):
@@ -369,7 +367,7 @@ class TestMVBartSteps:
         y_mv = y[None, :]
         n_trees = 100
 
-        params = dict(
+        params: dict = dict(
             X=X,
             max_split=max_split,
             num_trees=n_trees,
@@ -385,7 +383,6 @@ class TestMVBartSteps:
             leaf_prior_cov_inv=jnp.float32(n_trees),
             error_cov_df=4.0,
             error_cov_scale=2.0,
-            kind='uv',
             **params,
         )
         mv_state = init(
@@ -394,7 +391,6 @@ class TestMVBartSteps:
             leaf_prior_cov_inv=n_trees * jnp.eye(1),
             error_cov_df=jnp.array(4.0),
             error_cov_scale=2 * jnp.eye(1),
-            kind='mv',
             **params,
         )
 
@@ -466,7 +462,6 @@ class TestMVBartSteps:
             error_cov_scale=jnp.eye(k),
             resid_batch_size=None,
             count_batch_size=None,
-            kind='mv',
             filter_splitless_vars=False,
         )
 

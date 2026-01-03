@@ -1,6 +1,6 @@
 # bartz/src/bartz/mcmcstep/_moves.py
 #
-# Copyright (c) 2024-2025, The Bartz Contributors
+# Copyright (c) 2024-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -35,7 +35,7 @@ from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, UInt
 from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling
 from bartz.jaxext import minimal_unsigned_dtype, split, vmap_nodoc
-from bartz.mcmcstep._state import Forest
+from bartz.mcmcstep._state import Forest, field, vmap_chains
 
 
 class Moves(Module):
@@ -92,24 +92,27 @@ class Moves(Module):
         computed.
     """
 
-    allowed: Bool[Array, ' num_trees']
-    grow: Bool[Array, ' num_trees']
-    num_growable: UInt[Array, ' num_trees']
-    node: UInt[Array, ' num_trees']
-    left: UInt[Array, ' num_trees']
-    right: UInt[Array, ' num_trees']
-    partial_ratio: Float32[Array, ' num_trees'] | None
-    log_trans_prior_ratio: None | Float32[Array, ' num_trees']
-    grow_var: UInt[Array, ' num_trees']
-    grow_split: UInt[Array, ' num_trees']
-    var_tree: UInt[Array, 'num_trees 2**(d-1)']
-    affluence_tree: Bool[Array, 'num_trees 2**(d-1)']
-    logu: Float32[Array, ' num_trees']
-    acc: None | Bool[Array, ' num_trees']
-    to_prune: None | Bool[Array, ' num_trees']
+    allowed: Bool[Array, '*chains num_trees'] = field(chains=True)
+    grow: Bool[Array, '*chains num_trees'] = field(chains=True)
+    num_growable: UInt[Array, '*chains num_trees'] = field(chains=True)
+    node: UInt[Array, '*chains num_trees'] = field(chains=True)
+    left: UInt[Array, '*chains num_trees'] = field(chains=True)
+    right: UInt[Array, '*chains num_trees'] = field(chains=True)
+    partial_ratio: Float32[Array, '*chains num_trees'] | None = field(chains=True)
+    log_trans_prior_ratio: None | Float32[Array, '*chains num_trees'] = field(
+        chains=True
+    )
+    grow_var: UInt[Array, '*chains num_trees'] = field(chains=True)
+    grow_split: UInt[Array, '*chains num_trees'] = field(chains=True)
+    var_tree: UInt[Array, '*chains num_trees 2**(d-1)'] = field(chains=True)
+    affluence_tree: Bool[Array, '*chains num_trees 2**(d-1)'] = field(chains=True)
+    logu: Float32[Array, '*chains num_trees'] = field(chains=True)
+    acc: None | Bool[Array, '*chains num_trees'] = field(chains=True)
+    to_prune: None | Bool[Array, '*chains num_trees'] = field(chains=True)
 
 
-@jit_and_block_if_profiling
+@partial(jit_and_block_if_profiling, donate_argnums=(1,))
+@vmap_chains
 def propose_moves(key: Key[Array, ''], forest: Forest) -> Moves:
     """
     Propose moves for all the trees.
