@@ -1,6 +1,6 @@
 # bartz/tests/test_mcmcloop.py
 #
-# Copyright (c) 2025, The Bartz Contributors
+# Copyright (c) 2025-2026, The Bartz Contributors
 #
 # This file is part of bartz.
 #
@@ -26,20 +26,24 @@
 
 from functools import partial
 
+import pytest
 from equinox import filter_jit
+from jax import debug_key_reuse, vmap
 from jax import numpy as jnp
-from jax import vmap
 from jax.tree import map_with_path
 from jax.tree_util import tree_map
 from jaxtyping import Array, Float32, UInt8
 from numpy.testing import assert_array_equal
+from pytest import FixtureRequest  # noqa: PT013
 
-from bartz import mcmcloop, mcmcstep
+from bartz.jaxext import split
+from bartz.mcmcloop import run_mcmc
+from bartz.mcmcstep import State, init
 
 
 def gen_data(
     p: int, n: int
-) -> tuple[UInt8[Array, 'p n'], Float32[Array, ' n'], UInt8[Array, ' p']]:
+) -> tuple[UInt8[Array, '{p} {n}'], Float32[Array, ' {n}'], UInt8[Array, ' {p}']]:
     """Generate pretty nonsensical data."""
     X = jnp.arange(p * n, dtype=jnp.uint8).reshape(p, n)
     X = vmap(jnp.roll)(X, jnp.arange(p))
@@ -57,10 +61,10 @@ def make_p_nonterminal(maxdepth: int) -> Float32[Array, ' {maxdepth}-1']:
 
 
 @filter_jit
-def init(p: int, n: int, ntree: int, **kwargs):
+def simple_init(p: int, n: int, ntree: int, **kwargs) -> State:
     """Simplified version of `bartz.mcmcstep.init` with data pre-filled."""
     X, y, max_split = gen_data(p, n)
-    return mcmcstep.init(
+    return init(
         X=X,
         y=y,
         offset=0.0,
@@ -79,28 +83,41 @@ def init(p: int, n: int, ntree: int, **kwargs):
 class TestRunMcmc:
     """Test `mcmcloop.run_mcmc`."""
 
-    def test_final_state_overflow(self, keys):
+    @pytest.fixture(
+        params=[
+            dict(num_chains=None),
+            dict(num_chains=0),
+            dict(num_chains=1),
+            dict(num_chains=4),
+        ],
+        scope='class',
+    )
+    def initial_state(self, request: FixtureRequest) -> State:
+        """Prepare state for tests."""
+        return simple_init(10, 100, 20, **request.param)
+
+    def test_final_state_overflow(self, keys: split, initial_state: State):
         """Check that the final state is the one in the trace even if there's overflow."""
-        initial_state = init(10, 100, 20)
-        final_state, _, main_trace = mcmcloop.run_mcmc(
-            keys.pop(), initial_state, 10, inner_loop_length=9
-        )
+        with debug_key_reuse(initial_state.forest.num_chains() != 0):
+            final_state, _, main_trace = run_mcmc(
+                keys.pop(), initial_state, 10, inner_loop_length=9
+            )
 
         assert_array_equal(final_state.forest.leaf_tree, main_trace.leaf_tree[-1])
         assert_array_equal(final_state.forest.var_tree, main_trace.var_tree[-1])
         assert_array_equal(final_state.forest.split_tree, main_trace.split_tree[-1])
         assert_array_equal(final_state.error_cov_inv, main_trace.error_cov_inv[-1])
 
-    def test_zero_iterations(self, keys):
-        """Check there's no error if the loop does not run."""
-        initial_state = init(10, 100, 20)
-        final_state, burnin_trace, main_trace = mcmcloop.run_mcmc(
-            keys.pop(), initial_state, 0, n_burn=0
-        )
+    def test_zero_iterations(self, keys: split, initial_state: State):
+        """Check 0 iterations produces a noop."""
+        with debug_key_reuse(initial_state.forest.num_chains() != 0):
+            final_state, burnin_trace, main_trace = run_mcmc(
+                keys.pop(), initial_state, 0, n_burn=0
+            )
 
         tree_map(partial(assert_array_equal, strict=True), initial_state, final_state)
 
-        def assert_empty_trace(path, x):  # noqa: ARG001, for debugging
+        def assert_empty_trace(_path, x):
             assert x.shape[0] == 0
 
         map_with_path(assert_empty_trace, burnin_trace)

@@ -35,8 +35,8 @@ from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import gammaln, logsumexp
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, Shaped, UInt
 
-from bartz import grove
 from bartz._profiler import jit_and_block_if_profiling, jit_if_not_profiling
+from bartz.grove import var_histogram
 from bartz.jaxext import split, truncated_normal_onesided, vmap_nodoc
 from bartz.mcmcstep._moves import Moves, propose_moves
 from bartz.mcmcstep._state import State, chol_with_gersh, field, vmap_chains
@@ -1518,7 +1518,9 @@ def step_s(key: Key[Array, ''], bart: State) -> State:
 
     # histogram current variable usage
     p = bart.forest.max_split.size
-    varcount = grove.var_histogram(p, bart.forest.var_tree, bart.forest.split_tree)
+    varcount = var_histogram(
+        p, bart.forest.var_tree, bart.forest.split_tree, sum_batch_axis=-1
+    )
 
     # sample from Dirichlet posterior
     alpha = bart.forest.theta / p + varcount
