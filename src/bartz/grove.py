@@ -31,7 +31,11 @@ from typing import Protocol
 from jax import jit, lax, vmap
 from jax import numpy as jnp
 from jaxtyping import Array, Bool, DTypeLike, Float32, Int32, Shaped, UInt
-from numpy.lib.array_utils import normalize_axis_tuple
+
+try:
+    from numpy.lib.array_utils import normalize_axis_tuple  # numpy 2
+except ImportError:
+    from numpy.core.numeric import normalize_axis_tuple  # numpy 1
 
 from bartz.jaxext import minimal_unsigned_dtype, vmap_nodoc
 

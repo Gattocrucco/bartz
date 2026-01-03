@@ -36,7 +36,7 @@ from typing import Any, Protocol
 import jax
 import numpy
 from equinox import Module
-from jax import debug, jit, tree
+from jax import debug, eval_shape, jit, tree
 from jax import numpy as jnp
 from jax.nn import softmax
 from jaxtyping import Array, Bool, Float32, Int32, Integer, Key, PyTree, Shaped, UInt
@@ -51,22 +51,24 @@ from bartz._profiler import (
 from bartz.grove import TreeHeaps, evaluate_forest, forest_fill, var_histogram
 from bartz.jaxext import autobatch
 from bartz.mcmcstep import State
-from bartz.mcmcstep._state import get_num_chains
+from bartz.mcmcstep._state import chain_vmap_axes, field, get_num_chains
 
 
 class BurninTrace(Module):
     """MCMC trace with only diagnostic values."""
 
     error_cov_inv: (
-        Float32[Array, '*trace_shape'] | Float32[Array, '*trace_shape k k'] | None
-    )
-    theta: Float32[Array, '*trace_shape'] | None
-    grow_prop_count: Int32[Array, '*trace_shape']
-    grow_acc_count: Int32[Array, '*trace_shape']
-    prune_prop_count: Int32[Array, '*trace_shape']
-    prune_acc_count: Int32[Array, '*trace_shape']
-    log_likelihood: Float32[Array, '*trace_shape'] | None
-    log_trans_prior: Float32[Array, '*trace_shape'] | None
+        Float32[Array, '*chains_and_samples']
+        | Float32[Array, '*chains_and_samples k k']
+        | None
+    ) = field(chains=True)
+    theta: Float32[Array, '*chains_and_samples'] | None = field(chains=True)
+    grow_prop_count: Int32[Array, '*chains_and_samples'] = field(chains=True)
+    grow_acc_count: Int32[Array, '*chains_and_samples'] = field(chains=True)
+    prune_prop_count: Int32[Array, '*chains_and_samples'] = field(chains=True)
+    prune_acc_count: Int32[Array, '*chains_and_samples'] = field(chains=True)
+    log_likelihood: Float32[Array, '*chains_and_samples'] | None = field(chains=True)
+    log_trans_prior: Float32[Array, '*chains_and_samples'] | None = field(chains=True)
 
     @classmethod
     def from_state(cls, state: State) -> 'BurninTrace':
@@ -87,12 +89,13 @@ class MainTrace(BurninTrace):
     """MCMC trace with trees and diagnostic values."""
 
     leaf_tree: (
-        Float32[Array, '*trace_shape 2**d'] | Float32[Array, '*trace_shape k 2**d']
-    )
-    var_tree: UInt[Array, '*trace_shape 2**(d-1)']
-    split_tree: UInt[Array, '*trace_shape 2**(d-1)']
-    offset: Float32[Array, '*trace_shape'] | Float32[Array, '*trace_shape k']
-    varprob: Float32[Array, '*trace_shape p'] | None
+        Float32[Array, '*chains_and_samples 2**d']
+        | Float32[Array, '*chains_and_samples k 2**d']
+    ) = field(chains=True)
+    var_tree: UInt[Array, '*chains_and_samples 2**(d-1)'] = field(chains=True)
+    split_tree: UInt[Array, '*chains_and_samples 2**(d-1)'] = field(chains=True)
+    offset: Float32[Array, '*samples'] | Float32[Array, '*samples k']
+    varprob: Float32[Array, '*chains_and_samples p'] | None = field(chains=True)
 
     @classmethod
     def from_state(cls, state: State) -> 'MainTrace':
@@ -206,7 +209,11 @@ def run_mcmc(
     callback_state: CallbackState = None,
     burnin_extractor: Callable[[State], PyTree] = BurninTrace.from_state,
     main_extractor: Callable[[State], PyTree] = MainTrace.from_state,
-) -> tuple[State, PyTree[Shaped[Array, 'n_burn *']], PyTree[Shaped[Array, 'n_save *']]]:
+) -> tuple[
+    State,
+    PyTree[Shaped[Array, 'n_burn ...'] | Shaped[Array, 'num_chains n_burn ...']],
+    PyTree[Shaped[Array, 'n_save ...'] | Shaped[Array, 'num_chains n_save ...']],
+]:
     """
     Run the MCMC for the BART posterior.
 
@@ -299,7 +306,14 @@ def _empty_trace(
     length: int, bart: State, extractor: Callable[[State], PyTree]
 ) -> PyTree:
     num_chains = get_num_chains(bart)
-    out_axes = 0 if num_chains is None else 1
+    if num_chains is None:
+        out_axes = 0
+    else:
+        example_output = eval_shape(extractor, bart)
+        chain_axes = chain_vmap_axes(example_output)
+        out_axes = tree.map(
+            lambda a: 0 if a is None else 1, chain_axes, is_leaf=lambda a: a is None
+        )
     return jax.vmap(extractor, in_axes=None, out_axes=out_axes, axis_size=length)(bart)
 
 
